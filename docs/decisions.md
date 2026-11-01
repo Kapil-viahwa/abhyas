@@ -95,6 +95,7 @@ Added with the phase that introduced them; a dependency without a line here is a
 - `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-fastify` — the API framework on the fixed Fastify adapter.
 - `@nestjs/swagger` — generates the OpenAPI document served at `/api/docs` from the same decorators as the routes, so the document cannot drift from the code.
 - `fastify` — declared explicitly rather than relied on transitively, so `FastifyReply` types resolve under pnpm's strict node_modules layout.
+- `@fastify/static` — Swagger serves its UI from here when the adapter is Fastify; without it the API refuses to boot with `The "@fastify/static" package is missing`.
 - `@abhyas/shared` (workspace) — environment validation shared by API and worker, so neither can forget the production gate.
 - `@prisma/client`, `prisma` — typed data access plus the migration runner.
 - `ioredis` — Redis client used by the health check and by BullMQ's connection.
