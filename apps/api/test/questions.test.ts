@@ -72,9 +72,9 @@ describe('questions and media over HTTP', () => {
     await app.init();
     await waitUntilHealthy(app);
 
-    editorA = await makePerson('EDITOR', true);
-    editorB = await makePerson('EDITOR', true);
     admin = await makePerson('ADMIN', false);
+    editorA = await makePerson('EDITOR', true, admin.id);
+    editorB = await makePerson('EDITOR', true, admin.id);
 
     const category = await db.client.examCategory.create({
       data: { name: 'Banking', slug: `banking-${randomUUID().slice(0, 6)}`, createdBy: admin.id },
@@ -112,7 +112,11 @@ describe('questions and media over HTTP', () => {
     Object.assign(process.env, savedEnv);
   }, 60_000);
 
-  async function makePerson(roleCode: 'USER' | 'EDITOR' | 'ADMIN', withFlags: boolean): Promise<{ id: string; token: string }> {
+  async function makePerson(
+    roleCode: 'USER' | 'EDITOR' | 'ADMIN',
+    withFlags: boolean,
+    grantedBy?: string,
+  ): Promise<{ id: string; token: string }> {
     const role = await db.client.role.findUniqueOrThrow({ where: { code: roleCode }, select: { id: true } });
     const user = await db.client.user.create({
       data: {
@@ -129,7 +133,11 @@ describe('questions and media over HTTP', () => {
       const codes = ['content.read', 'content.write', 'tests.publish'];
       for (const code of codes) {
         const permission = await db.client.permission.findUniqueOrThrow({ where: { code }, select: { id: true } });
-        await db.client.userPermission.create({ data: { userId: user.id, permissionId: permission.id, grantedBy: user.id } });
+        // A person cannot grant themselves a permission (the database refuses it), so the
+        // fixture records the administrator who would have granted it in the real flow.
+        await db.client.userPermission.create({
+          data: { userId: user.id, permissionId: permission.id, grantedBy: grantedBy ?? null },
+        });
       }
     }
 

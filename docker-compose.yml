@@ -29,26 +29,23 @@ services:
       timeout: 5s
       retries: 20
 
-  # S3-compatible object storage for development and CI. The API creates the bucket at
-  # boot here; production points at an external service instead (decision 0038).
+  # S3-compatible object storage for development and CI only (decision 0038).
   #
-  # MinIO's own images are no longer pullable anonymously from CI: minio/minio does not
-  # exist on Docker Hub and quay.io/minio/minio answers "unauthorized" without a login.
-  # Bitnami's packaging of the same MinIO server is the substitute, documented in
-  # decision 0038 and listed as a known gap in PROGRESS.md.
-  minio:
-    image: bitnami/minio:latest
+  # MinIO's own images cannot be pulled anonymously from CI any more (minio/minio is not
+  # on Docker Hub; quay.io/minio/minio answers "unauthorized"), and Bitnami no longer
+  # publishes this image (its tag list is empty). Adobe S3Mock is the substitute: a
+  # maintained S3 API server for local testing, path-style only, which is exactly how
+  # the application talks to storage. Pinned by tag and by the manifest-list digest.
+  # It is never used in production; production boot refuses it by configuration.
+  s3mock:
+    image: adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
     environment:
-      MINIO_ROOT_USER: abhyas-dev
-      MINIO_ROOT_PASSWORD: abhyas-dev-secret
-      MINIO_DEFAULT_BUCKETS: abhyas-media
-      MINIO_SERVER_URL: http://minio:9000
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: abhyas-media
+      COM_ADOBE_TESTING_S3MOCK_STORE_REGION: us-east-1
     ports:
-      - '9000:9000'
-    volumes:
-      - miniodata:/bitnami/minio/data
+      - '9090:9090'
     healthcheck:
-      test: ['CMD', 'mc', 'ready', 'local']
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9090/favicon.ico']
       interval: 5s
       timeout: 5s
       retries: 20
@@ -94,7 +91,7 @@ services:
       WEB_URL: http://localhost:3000
       ALLOW_DEV_LOGIN: 'true'
       # Development object storage. The bucket is private and created at boot.
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: http://s3mock:9090
       S3_REGION: us-east-1
       S3_BUCKET: abhyas-media
       S3_ACCESS_KEY_ID: abhyas-dev
@@ -107,7 +104,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
+      s3mock:
         condition: service_healthy
     healthcheck:
       test:
@@ -168,7 +165,7 @@ services:
       EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
       # The import job stores images through the same private bucket as the API.
-      S3_ENDPOINT: http://minio:9000
+      S3_ENDPOINT: http://s3mock:9090
       S3_REGION: us-east-1
       S3_BUCKET: abhyas-media
       S3_ACCESS_KEY_ID: abhyas-dev
@@ -177,9 +174,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      minio:
+      s3mock:
         condition: service_healthy
 
 volumes:
   pgdata:
-  miniodata:

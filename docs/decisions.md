@@ -664,3 +664,61 @@ exactly one row in `import_jobs`.
 
 **Consequence:** the worker now owns a Prisma client and the same object-storage client as
 the API, and it generates the client from the API's schema so the two can never drift.
+
+
+## 0041 — Adobe S3Mock is the development and CI object store, pinned by tag and digest
+
+**Status:** accepted · **Phase:** 4
+
+Development and CI run `adobe/s3mock` at `5.2.3`, pinned again by its manifest-list
+digest (`sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`), on
+port 9090. It implements the S3 API the application uses — `CreateBucket`, `HeadBucket`,
+`PutObject`, `GetObject`, `DeleteObject`, `GetBucketLocation` and path-style addressing —
+and it accepts presigned URLs. The application still creates its own private bucket at
+boot, so the server starts empty.
+
+**Why this server:** MinIO's own images are not pullable anonymously from CI any more.
+`minio/minio` does not exist on Docker Hub, `quay.io/minio/minio` answers "unauthorized"
+without a login, and `bitnami/minio` publishes no tags at all (its Docker Hub tag list is
+empty). S3Mock is maintained by Adobe, ships a dateable release line, and its documented
+limitations are exactly the ones we do not rely on: it accepts presigned URLs without
+validating the signature (the API still signs and expires them, and only ever hands them
+to the person who uploaded the image), and it is path-style only (the application is
+configured with `S3_FORCE_PATH_STYLE=true`).
+
+**Consequence:** this image is a development and CI convenience and must never be
+deployed. Production requires an external S3-compatible service over https with its own
+credentials; `validateEnv` refuses an empty endpoint, a non-https endpoint, the in-memory
+store, the development credentials and a public bucket, and `docker-compose.prod.yml`
+requires every `S3_*` variable by name. `PROGRESS.md` records the substitution as a known
+gap.
+
+## 0042 — The `fast-xml-parser` override is temporary and must be removed
+
+**Status:** accepted · **Phase:** 4
+
+`@aws-sdk/client-s3` 3.699.0 depends on `fast-xml-parser` 4.4.1 through `@aws-sdk/core`,
+which carries four advisories at the time of writing (GHSA-m7jm-9gc2-mpf2, critical;
+GHSA-jmr7-xgp7-cmfj, GHSA-8gc5-j5rx-235r and GHSA-fj3w-jwp-x2g3). The audit gate is not
+lowered and no exception is added: `package.json` pins the transitive package to `4.5.5`,
+which is the version the advisories name as fixed, and the production audit passes.
+
+**Why an override and not a newer SDK:** the SDK line that depends on a fixed
+`fast-xml-parser` is newer than the two-week window the dependency rules require, and the
+SDK is only used for the S3 protocol. Pinning the one package keeps the SDK on a version
+whose behaviour has been running in CI for a while.
+
+**Consequence:** remove the `fast-xml-parser` override as soon as `@aws-sdk/client-s3`
+reaches a release that depends on `fast-xml-parser` >= 4.5.5 on its own. The override is
+listed with its reason in `package.json`'s `pnpm.overrides` block.
+
+## 0043 — `sharp` 0.35.5, and every dependency inside the two-week window
+
+**Status:** accepted · **Phase:** 4
+
+`sharp` was raised from 0.33.5 to 0.35.5 because three high advisories
+(GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w) are fixed only at
+0.35.5. The 0.35.5 release is older than the two-week window at the time this was applied,
+so it satisfies both rules at once; the smaller bumps that were not old enough were not
+taken. Every other new dependency is pinned to an exact version that was published at
+least two weeks before it was added, and the audit gate is unchanged.
