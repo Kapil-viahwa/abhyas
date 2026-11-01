@@ -71,8 +71,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   } else if (action === 'edit') {
     payload = editPayload(guard.form);
   } else if (action === 'move') {
-    const mine = wholeNumber(stringField(guard.form, 'sortOrder'));
-    const theirs = wholeNumber(stringField(guard.form, 'swapOrder'));
+    const mine = wholeNumber(stringField(guard.form, 'currentOrder'));
+    const theirs = wholeNumber(stringField(guard.form, 'neighbourOrder'));
     const swapId = stringField(guard.form, 'swapId').trim();
 
     if (mine === null || theirs === null || swapId === '') {

@@ -129,9 +129,12 @@ function MoveButton({
       <input type="hidden" name="type" value={type} />
       <input type="hidden" name="id" value={row.id} />
       <input type="hidden" name="action" value="move" />
-      <input type="hidden" name="sortOrder" value={row.sortOrder} />
+      {/* Named apart from the edit form's `sortOrder`: a row holds both forms, and one
+          page must never carry two fields with one name (a form submission takes the
+          first, and a selector cannot tell them apart). */}
+      <input type="hidden" name="currentOrder" value={row.sortOrder} />
       <input type="hidden" name="swapId" value={neighbour.id} />
-      <input type="hidden" name="swapOrder" value={neighbour.sortOrder} />
+      <input type="hidden" name="neighbourOrder" value={neighbour.sortOrder} />
       <button className={secondaryButtonClass} type="submit" aria-label={label} title={label}>
         {direction === 'up' ? 'Move up' : 'Move down'}
       </button>
@@ -174,7 +177,7 @@ function CatalogRow({ csrf, area, type, row, siblings, index, showDescription }:
 
       <details>
         <summary className="cursor-pointer text-xs text-sky-400">Edit</summary>
-        <form action="/api/catalog/update" method="post" className="mt-2 space-y-3">
+        <form action="/api/catalog/update" method="post" data-testid="edit-form" className="mt-2 space-y-3">
           <input type="hidden" name="csrfToken" value={csrf} />
           <input type="hidden" name="area" value={area} />
           <input type="hidden" name="type" value={type} />

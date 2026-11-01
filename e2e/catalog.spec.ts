@@ -202,10 +202,13 @@ test.describe.serial('the exam catalog', () => {
       await expect(page).toHaveURL(/created=1/);
 
       const row = page.locator(`[data-testid="catalog-row"][data-name="${name}"]`);
+      // The row holds an edit form and a move form per neighbour, so the order field is
+      // read through the form that owns it rather than by name across the whole row.
+      const editForm = row.getByTestId('edit-form');
 
       await row.locator('summary').first().click();
-      await row.locator('input[name="sortOrder"]').fill(order);
-      await row.getByRole('button', { name: 'Save changes' }).click();
+      await editForm.locator('input[name="sortOrder"]').fill(order);
+      await editForm.getByRole('button', { name: 'Save changes' }).click();
 
       await expect(page).toHaveURL(/updated=1/);
     }
