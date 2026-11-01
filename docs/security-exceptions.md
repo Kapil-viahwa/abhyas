@@ -2,7 +2,7 @@
 
 Every advisory that remains after the phase 0 upgrades, with its scope and why it is accepted. The audit gate itself is never lowered: `pnpm audit:ci` fails on any **high or critical advisory in a production dependency**, and reports the rest as warnings.
 
-Last verified: the `audit` job on commit `dd1c2fe` (see `PROGRESS.md` for the run).
+Last verified: the `audit` job in [run 41312145907](https://github.com/Kapil-viahwa/abhyas/actions/runs/41312145907) (commit `e108d7d`) — no blocking production advisories; every remaining finding is listed below with its scope.
 
 ## Production dependencies (moderate only — gate does not block, recorded for visibility)
 
