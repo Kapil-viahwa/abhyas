@@ -31,21 +31,24 @@ services:
 
   # S3-compatible object storage for development and CI. The API creates the bucket at
   # boot here; production points at an external service instead (decision 0038).
-  # MinIO publishes server images on quay.io, not Docker Hub. `latest` is deliberate for
-  # now: the dated release tags are not listable without an account, so pinning one by
-  # guess would break the stack. Replace with a dated tag once it is confirmed by hand.
+  #
+  # MinIO's own images are no longer pullable anonymously from CI: minio/minio does not
+  # exist on Docker Hub and quay.io/minio/minio answers "unauthorized" without a login.
+  # Bitnami's packaging of the same MinIO server is the substitute, documented in
+  # decision 0038 and listed as a known gap in PROGRESS.md.
   minio:
-    image: quay.io/minio/minio:latest
-    command: ['server', '/data', '--console-address', ':9001']
+    image: bitnami/minio:latest
     environment:
       MINIO_ROOT_USER: abhyas-dev
       MINIO_ROOT_PASSWORD: abhyas-dev-secret
+      MINIO_DEFAULT_BUCKETS: abhyas-media
+      MINIO_SERVER_URL: http://minio:9000
     ports:
       - '9000:9000'
     volumes:
-      - miniodata:/data
+      - miniodata:/bitnami/minio/data
     healthcheck:
-      test: ['CMD-SHELL', 'curl -fsS http://127.0.0.1:9000/minio/health/live || exit 1']
+      test: ['CMD', 'mc', 'ready', 'local']
       interval: 5s
       timeout: 5s
       retries: 20
