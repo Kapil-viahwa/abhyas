@@ -84,6 +84,19 @@ The home page at http://localhost:3000 renders the API's `/health` result, and t
 OpenAPI document is at http://localhost:3001/api/docs in development and CI. It is not mounted
 when `NODE_ENV=production`: in production both `/api/docs` and `/api/docs-json` answer 404.
 
+## Accounts and sessions
+
+Register at http://localhost:3000/register, then open the verification link the API prints
+(the console outbox — `docker compose logs api`). Sign in at `/login`, and the account page
+at `/account` shows the active sessions, lets you end one or all the others, change the
+password and deactivate the account.
+
+The browser never holds a token. The web app talks to the API server-side only, and the
+two opaque tokens live in httpOnly `SameSite=Lax` cookies; every write is a form post
+guarded by an `Origin` check and a double-submit CSRF value. An expired access cookie is
+refreshed silently on the server. `TURNSTILE_SITE_KEY` is required in production and must
+not be a Cloudflare test key; development and CI use the test key.
+
 Local commands (each one is what CI runs):
 
 ```bash

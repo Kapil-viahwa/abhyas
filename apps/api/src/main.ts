@@ -24,7 +24,7 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   // Development and CI only: in production the OpenAPI UI and document are not
-  // mounted at all, so /api/docs and /api/docs-json answer 404 (decision 0027).
+  // mounted at all, so /api/docs and /api/docs-json answer 404 (decision 0028).
   const docsMounted = configureApiDocs(app, config.NODE_ENV);
 
   await app.listen(config.PORT, '0.0.0.0');

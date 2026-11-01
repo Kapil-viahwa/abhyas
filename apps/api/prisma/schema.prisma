@@ -151,6 +151,8 @@ model Session {
   accessTokenHash  String?   @unique(map: "sessions_access_token_hash_key") @map("access_token_hash")
   accessExpiresAt  DateTime? @map("access_expires_at") @db.Timestamptz(6)
   issuedAt         DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
+  /// Stamped on every authenticated request, so the account page can show activity.
+  lastUsedAt       DateTime  @default(now()) @map("last_used_at") @db.Timestamptz(6)
   expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
   rotatedAt        DateTime? @map("rotated_at") @db.Timestamptz(6)
   revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)

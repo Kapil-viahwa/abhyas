@@ -29,6 +29,25 @@ services:
       timeout: 5s
       retries: 20
 
+  # One-shot migrations, as the owner role. Kept out of `up` by a profile so the
+  # stack still starts with one command; run it explicitly once Postgres is up:
+  #   docker compose run --rm migrate
+  # The API itself never migrates and connects as the application role.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    profiles: ['tools']
+    command:
+      ['sh', '-c', 'cd /repo/apps/api && node node_modules/prisma/build/index.js migrate deploy']
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://abhyas:abhyas@postgres:5432/abhyas
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
   api:
     build:
       context: .
@@ -73,6 +92,10 @@ services:
     environment:
       NODE_ENV: development
       API_INTERNAL_URL: http://api:3001
+      # Public base URL of this app: the origin trusted for cookies and form posts.
+      WEB_URL: http://localhost:3000
+      # Cloudflare's always-pass test site key; production refuses it.
+      TURNSTILE_SITE_KEY: 1x0000000000000000000000000000000AA
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
       - '3000:3000'

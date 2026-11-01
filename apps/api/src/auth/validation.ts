@@ -114,7 +114,12 @@ export function parseRegisterBody(body: unknown): RegisterInput {
 export interface LoginInput {
   readonly email: string;
   readonly password: string;
-  readonly turnstileToken: string;
+  /**
+   * Optional, and only enforced once the account has too many recent failures. The
+   * sign-in form sends it every time; an API client that skipped it is asked for it
+   * when the throttle demands one (see AuthService.login).
+   */
+  readonly turnstileToken?: string | undefined;
 }
 
 export function parseLoginBody(body: unknown): LoginInput {
@@ -130,7 +135,107 @@ export function parseLoginBody(body: unknown): LoginInput {
   return {
     email: parseEmail(record.email),
     password,
+    turnstileToken: parseOptionalTurnstileToken(record.turnstileToken),
+  };
+}
+
+/** An empty or absent token means "none offered", never "empty string is fine". */
+function parseOptionalTurnstileToken(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return undefined;
+  }
+  return value.trim();
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Path ids are checked before they reach the database, so a typo is a 400, not a 500. */
+export function parseUuid(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !UUID_PATTERN.test(value.trim())) {
+    throw new BadRequestException(`Enter a valid ${label}`);
+  }
+  return value.trim();
+}
+
+export function parseRefreshBody(body: unknown): string {
+  const token = asRecord(body).refreshToken;
+  if (typeof token !== 'string' || token.trim() === '') {
+    throw new BadRequestException('A refresh token is required');
+  }
+  return token.trim();
+}
+
+export interface ForgotPasswordInput {
+  readonly email: string;
+  readonly turnstileToken: string;
+}
+
+export function parseForgotPasswordBody(body: unknown): ForgotPasswordInput {
+  const record = asRecord(body);
+
+  return {
+    email: parseEmail(record.email),
     turnstileToken: parseTurnstileToken(record.turnstileToken),
   };
+}
+
+export interface ChangePasswordInput {
+  readonly currentPassword: string;
+  readonly newPassword: string;
+}
+
+export function parseChangePasswordBody(body: unknown): ChangePasswordInput {
+  const record = asRecord(body);
+  const currentPassword = record.currentPassword;
+
+  if (typeof currentPassword !== 'string' || currentPassword === '') {
+    throw new BadRequestException('Enter your current password');
+  }
+
+  return { currentPassword, newPassword: parsePassword(record.newPassword) };
+}
+
+export interface ResetPasswordInput {
+  readonly token: string;
+  readonly newPassword: string;
+}
+
+export function parseResetPasswordBody(body: unknown): ResetPasswordInput {
+  const record = asRecord(body);
+
+  // The same token reader the verification link uses: one shape for one kind of
+  // single-use email link.
+  return { token: parseEmailToken(record), newPassword: parsePassword(record.newPassword) };
+}
+
+export interface DeactivateInput {
+  readonly password: string;
+}
+
+export function parseDeactivateBody(body: unknown): DeactivateInput {
+  const password = asRecord(body).password;
+
+  if (typeof password !== 'string' || password === '') {
+    throw new BadRequestException('Enter your password');
+  }
+
+  return { password };
+}
+
+const ROLE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,31}$/;
+
+export function parseRoleChangeBody(body: unknown): string {
+  const code = asRecord(body).roleCode;
+
+  if (typeof code !== 'string') {
+    throw new BadRequestException('Choose a role');
+  }
+
+  const normalised = code.trim().toUpperCase();
+  if (!ROLE_CODE_PATTERN.test(normalised)) {
+    throw new BadRequestException('Choose a role');
+  }
+
+  return normalised;
 }
 

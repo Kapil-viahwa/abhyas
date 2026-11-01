@@ -16,7 +16,7 @@ flowchart TB
     playwright["Playwright (CI)"]
   end
 
-  subgraph edge["Edge — phase 5"]
+  subgraph edge["Edge — hardening phase"]
     nginx["Nginx<br/>TLS, static assets, rate limiting"]
   end
 
@@ -29,7 +29,7 @@ flowchart TB
   subgraph state["State"]
     pg[("PostgreSQL 16<br/>Prisma + hand-written SQL migrations")]
     redis[("Redis 7<br/>queues, rate limits, cache")]
-    s3[("S3-compatible storage<br/>question media — phase 5")]
+    s3[("S3-compatible storage<br/>question media — phase 4")]
   end
 
   student --> nginx
@@ -74,7 +74,7 @@ flowchart LR
     tests["TestsModule<br/>tests, sections, publishing — phase 3"]
     attempts["AttemptsModule<br/>attempts, timer, scoring — phase 4"]
     coins["CoinsModule<br/>ledger, wallet, daily bonus — phase 4"]
-    storage["StorageModule<br/>uploads, signed URLs — phase 5"]
+    storage["StorageModule<br/>uploads, signed URLs — phase 4"]
     jobs["JobsModule<br/>queue producers"]
   end
 

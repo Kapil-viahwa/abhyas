@@ -88,7 +88,9 @@ without changing their role; those are always granted by an `ADMIN` and are audi
 | Deny-by-default guard: every route declares `@Public`, `@Authenticated` or `@RequirePermissions`, and a test enumerates every handler and fails on an undeclared one | 2a | Done |
 | Permissions resolved from the database per request, never from a token | 2a | Done |
 | The matrix proven end to end over HTTP: 401 without a token, 403 for a `USER` and an `EDITOR` on a `users.read` route, 200 for an `ADMIN` | 2a | Done |
-| Refresh tokens, session list and revoke, password change and reset, deactivation | 2b | Not yet |
-| Web screens, cookies and CSRF protection | 2b | Not yet |
+| Refresh tokens, session list and revoke, password change and reset, deactivation | 2b | Done (API) |
+| `USER_REVOKED` and `last_used_at` on sessions, so the account page can show activity | 2b | Done, by migration |
+| Role change behind `roles.write`, revoking every session of the user whose role changed | 2b | Done |
+| Web screens, cookies and CSRF protection: server-side refresh, httpOnly cookies, an `Origin` check plus a double-submit value on every write, and security headers | 2b | Done |
 | Object-level rules per resource | with the resource (phases 3–4) | Not yet |
 
