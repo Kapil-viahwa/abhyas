@@ -1,8 +1,23 @@
 import { Body, Controller, HttpCode, Inject, Post, Req } from '@nestjs/common';
-import { ApiAcceptedResponse, ApiBadRequestResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiAcceptedResponse,
+  ApiBadRequestResponse,
+  ApiForbiddenResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+  ApiUnauthorizedResponse,
+} from '@nestjs/swagger';
 
-import { Public } from './access';
-import { AuthService, type RegisterResult, type RequestMetadata, type VerifyEmailResult } from './auth.service';
+import { Authenticated, CurrentUser, Public, type AuthenticatedUser } from './access';
+import {
+  AuthService,
+  type LoginResult,
+  type LogoutResult,
+  type RegisterResult,
+  type RequestMetadata,
+  type VerifyEmailResult,
+} from './auth.service';
 
 /** What the controller needs from the request, without importing a server type. */
 interface RequestLike {
@@ -42,5 +57,27 @@ export class AuthController {
   @ApiBadRequestResponse({ description: 'The token is unknown, already used or expired' })
   async verifyEmail(@Body() body: unknown, @Req() request: RequestLike): Promise<VerifyEmailResult> {
     return this.auth.verifyEmail(body, requestMeta(request));
+  }
+
+  @Public()
+  @Post('login')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Exchange an email and password for an opaque session token' })
+  @ApiOkResponse({ description: 'The access token, the refresh token and who signed in' })
+  @ApiBadRequestResponse({ description: 'The body or the human verification failed' })
+  @ApiUnauthorizedResponse({ description: 'The same body for an unknown address and a wrong password' })
+  @ApiForbiddenResponse({ description: 'The account is deactivated, or its email is not verified' })
+  async login(@Body() body: unknown, @Req() request: RequestLike): Promise<LoginResult> {
+    return this.auth.login(body, requestMeta(request));
+  }
+
+  @Authenticated()
+  @Post('logout')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Revoke the session behind this access token, immediately' })
+  @ApiOkResponse({ description: 'The session no longer exists' })
+  @ApiUnauthorizedResponse({ description: 'The token was already revoked or expired' })
+  async logout(@CurrentUser() user: AuthenticatedUser, @Req() request: RequestLike): Promise<LogoutResult> {
+    return this.auth.logout(user, requestMeta(request));
   }
 }

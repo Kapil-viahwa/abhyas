@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
+import { configureApiDocs } from '../src/config/api-docs';
 import { capturedOutbox } from '../src/infra/email-sender';
 import { TURNSTILE_TEST_TOKEN } from '../src/infra/turnstile-verifier';
 
@@ -319,14 +320,21 @@ describe('auth over HTTP', () => {
     }, 60_000);
 
     it('does not mount the OpenAPI document and still serves health', async () => {
-      const docs = await productionApp?.inject({ method: 'GET', url: '/api/docs-json' });
-      expect(docs?.statusCode).toBe(404);
+      expect(productionApp).toBeDefined();
+      const target = productionApp as NestFastifyApplication;
 
-      const ui = await productionApp?.inject({ method: 'GET', url: '/api/docs' });
-      expect(ui?.statusCode).toBe(404);
+      // The call the real bootstrap makes. It returns false in production and mounts
+      // nothing, so the two 404s below prove the absence, not an unauthenticated path.
+      expect(configureApiDocs(target, 'production')).toBe(false);
 
-      const health = await productionApp?.inject({ method: 'GET', url: '/health' });
-      expect(health?.statusCode).toBe(200);
+      const docs = await target.inject({ method: 'GET', url: '/api/docs-json' });
+      expect(docs.statusCode).toBe(404);
+
+      const ui = await target.inject({ method: 'GET', url: '/api/docs' });
+      expect(ui.statusCode).toBe(404);
+
+      const health = await target.inject({ method: 'GET', url: '/health' });
+      expect(health.statusCode).toBe(200);
     });
   });
 });
