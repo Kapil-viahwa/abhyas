@@ -34,7 +34,8 @@
     "overrides": {
       "postcss": "^8.5.18",
       "js-yaml": "^4.3.2",
-      "lodash": "^4.17.24"
+      "lodash": "^4.17.24",
+      "fastify": "^5.12.5"
     }
   }
 }

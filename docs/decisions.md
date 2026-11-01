@@ -114,6 +114,14 @@ The home page is a server component that reads `API_INTERNAL_URL`; no API base U
 
 **Why:** these three arrive transitively from packages that pin exact versions — `next@15` pins `postcss@8.4.31`, and `@nestjs/swagger@7` pinned `js-yaml@4.1.0` and `lodash@4.17.21` — so no direct upgrade removes them. Each override moves only a patch/minor within the same major, with an upstream advisory confirming the target version is patched. Overrides are reviewed when the parent package catches up, and removed then.
 
+## 0014 — pnpm override for fastify
+
+**Status:** accepted · **Phase:** 0
+
+`pnpm.overrides` forces `fastify` to `^5.12.5`.
+
+**Why:** `apps/api` declares `fastify@^5.12.5` directly, but `@nestjs/platform-fastify@11.2.8` keeps its own nested `fastify@5.11.3`, and the audit attributes four high advisories to that copy (header validation bypasses, all fixed in `<5.12.2`). An override is the only way to move a copy the parent package pins itself.
+
 ---
 
 ## Dependency reasons
