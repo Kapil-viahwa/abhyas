@@ -122,7 +122,7 @@ The home page is a server component that reads `API_INTERNAL_URL`; no API base U
 
 **Why:** `apps/api` declares `fastify@^5.12.5` directly, but `@nestjs/platform-fastify@11.2.8` keeps its own nested `fastify@5.11.3`, and the audit attributes four high advisories to that copy (header validation bypasses, all fixed in `<5.12.2`). An override is the only way to move a copy the parent package pins itself.
 
-## 0014 — UUID primary keys and UTC `timestamptz` everywhere
+## 0015 — UUID primary keys and UTC `timestamptz` everywhere
 
 **Status:** accepted · **Phase:** 1
 
@@ -130,7 +130,7 @@ Every table added from phase 1 on uses `uuid` primary keys defaulting to `gen_ra
 
 **Why:** sequential integer ids leak volume and invite enumeration; UUIDs can be generated before insert, which keeps multi-statement writes simple. UTC storage plus an explicit business-date column means "first login of the day" is a property of the database, not of whichever server answered the request.
 
-## 0015 — Identity fields are normalised by the database, not by callers
+## 0016 — Identity fields are normalised by the database, not by callers
 
 **Status:** accepted · **Phase:** 1
 
@@ -140,7 +140,7 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Trade-off:** a trigger is invisible in the ORM's model, so it is documented in `docs/data-model.md` and proven by `apps/api/test/identity.test.ts`.
 
-## 0016 — The audit log is append-only by trigger *and* by revoked privileges
+## 0017 — The audit log is append-only by trigger *and* by revoked privileges
 
 **Status:** accepted · **Phase:** 1
 
@@ -148,7 +148,7 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Why:** a trigger protects against application bugs, including a superuser's mistake; revoked privileges protect against a future application role being over-granted and quietly rewriting history. Both are tested: the trigger path as the owner, the privilege path with `SET ROLE abhyas_app`. The role is created idempotently inside the migration so a fresh database and an existing one converge.
 
-## 0017 — Settings store their type and their bounds in the row
+## 0018 — Settings store their type and their bounds in the row
 
 **Status:** accepted · **Phase:** 1
 
@@ -156,7 +156,7 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Why:** the coin rules are settings (signup bonus, daily bonus, per-attempt cost), and "the admin can edit the attempt cost" must not become "the platform can be configured into an invalid state". Bounds live next to the value they bound so the API can read them back and the database refuses a bad write regardless of the code path.
 
-## 0018 — Role→permission mapping is designed now, implemented in phase 2
+## 0019 — Role→permission mapping is designed now, implemented in phase 2
 
 **Status:** accepted · **Phase:** 1
 
@@ -164,7 +164,7 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Why:** the phase brief fixes the phase 1 table set. Shipping a join table that no guard reads would be untested surface area; the matrix in `docs/permissions.md` is the contract that phase 2 implements.
 
-## 0019 — The admin seed has no default password and refuses production without explicit opt-in
+## 0020 — The admin seed has no default password and refuses production without explicit opt-in
 
 **Status:** accepted · **Phase:** 1
 
@@ -172,7 +172,7 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Why:** a seed with a default password is how "temporary" admin accounts become permanent back doors. Requiring the confirmation flag in production means the seeder cannot create an admin by accident there, while development still works with two obvious variables. The run is idempotent: it does nothing if any admin already exists, and it writes an `IDENTITY_ADMIN_SEEDED` audit row when it does create one.
 
-## 0020 — Database test files run sequentially
+## 0021 — Database test files run sequentially
 
 **Status:** accepted · **Phase:** 1
 
@@ -211,7 +211,7 @@ Added with the phase that introduced them; a dependency without a line here is a
 
 ---
 
-## 0021 — Argon2id through `@node-rs/argon2`, one module for the API and the seed
+## 0022 — Argon2id through `@node-rs/argon2`, one module for the API and the seed
 
 **Status:** accepted · **Phase:** 2a
 
@@ -228,7 +228,7 @@ binaries for the platforms this project builds on (linux-x64-gnu, darwin-arm64),
 and CI need no toolchain. scrypt is acceptable but weaker against GPU attack for the same cost, and
 the phase 1 seed already had to hand-roll its parameter encoding.
 
-## 0022 — Two database roles: owner for migrations, `abhyas_app` for the API
+## 0023 — Two database roles: owner for migrations, `abhyas_app` for the API
 
 **Status:** accepted · **Phase:** 2a
 
@@ -248,7 +248,7 @@ Production creates the role out of band with its own secret (see `docs/deploymen
 `docker compose config` refuses to render without `MIGRATION_DATABASE_URL`, so the two connections
 cannot silently collapse into one.
 
-## 0023 — A lockfile bootstrap that exists only while a dependency changes
+## 0024 — A lockfile bootstrap that exists only while a dependency changes
 
 **Status:** accepted · **Phase:** 2a (temporary)
 
@@ -277,7 +277,7 @@ builds exactly the tree that was reviewed. Keeping it manual and off `main` mean
 drift into the release branch without a reviewable commit.
 
 
-## 0025 — Opaque access tokens, not JWTs
+## 0026 — Opaque access tokens, not JWTs
 
 **Status:** accepted · **Phase:** 2a
 
@@ -296,7 +296,7 @@ permissions come from `role_permissions` plus `user_permissions` on every reques
 or a suspended account takes effect on the next call.
 
 
-## 0026 — Email, bot protection and rate limiting behind interfaces, with no new dependencies
+## 0027 — Email, bot protection and rate limiting behind interfaces, with no new dependencies
 
 **Status:** accepted · **Phase:** 2a
 
@@ -325,7 +325,7 @@ and a provider can be replaced without touching the auth service.
 but delivery is not implemented yet — `PROGRESS.md` lists SMTP transport as a known gap, and the
 sender throws rather than dropping a message silently.
 
-## 0027 — The OpenAPI document is not mounted in production
+## 0028 — The OpenAPI document is not mounted in production
 
 **Status:** accepted · **Phase:** 2a
 
@@ -341,7 +341,7 @@ surface that is only protected by a guard still ships the whole map to anyone wh
 authenticated, admin-only route rather than re-enabling this one.
 
 
-## 0028 — `WEB_URL` comes from the environment, never from a request header
+## 0029 — `WEB_URL` comes from the environment, never from a request header
 
 **Status:** accepted · **Phase:** 2a
 
@@ -359,3 +359,64 @@ deployment cannot silently mail `localhost` links to students.
 
 **Consequence:** a production boot without `WEB_URL`, or with an `http` one, fails before the first
 request, and `docker-compose.prod.yml` refuses to render without it.
+
+
+## 0030 — Sign-in throttling that cannot lock the owner out
+
+**Status:** accepted · **Phase:** 2b
+
+Three counters, and none of them is a lock:
+
+1. **Per address and account** (`ratelimit:login:pair:<sha256(email)>:<ip>`): a
+   progressive delay of 100 ms, 200 ms, 400 ms, 800 ms after the first failures, and a
+   refusal at 10 failures in 15 minutes. Only that address pays; another address for the
+   same account is a different key, so a shared office connection cannot be used to lock
+   a person out.
+2. **Per account** (`ratelimit:login:account:<sha256(email)>`), deliberately higher (5
+   in 15 minutes): past it the sign-in must carry a Turnstile token that verifies. The
+   answer is the ordinary 401 body plus `challengeRequired: true`, so a client knows to
+   ask for the human check.
+3. **Per IP**: the existing 20 in 5 minutes, kept only to stop one host spraying many
+   accounts. It never touches an account.
+
+**Why:** the phase 2a rule put a hard 429 on the account counter, which is a denial of
+service waiting to happen: five wrong guesses from anybody locked the real student out.
+The account-wide counter no longer refuses anybody — it asks for a human check, which
+the owner can pass and a bot cannot — and the refusal lives on the address + account
+pair, where it only affects the address that is guessing. `auth-throttle.test.ts` proves
+the abuse case end to end: an attacker is refused on its own address, the owner is
+challenged and still signs in.
+
+**Consequence:** the sign-in form always sends a Turnstile token, so the challenge is
+satisfied in the normal case; an API client that skips it is asked for one after five
+failures. A successful sign-in clears both counters, so a mistyped password followed by
+the right one leaves no residue.
+
+## 0031 — Session lifecycle: one place for every revocation reason
+
+**Status:** accepted · **Phase:** 2b
+
+`revokeReason` is a closed set in the database (`sessions_revoke_reason_valid`), and each
+way a session can end has its own value: `LOGOUT`, `USER_REVOKED` (the person ended one
+of their own sessions from the account page), `ROTATED`, `REUSE_DETECTED`,
+`PASSWORD_CHANGED`, `PASSWORD_RESET`, `ACCOUNT_DEACTIVATED`, `ROLE_CHANGED`,
+`ADMIN_REVOKED`. The migration adds `USER_REVOKED` and `sessions.last_used_at`, which the
+guard stamps on every authenticated request in the same `UPDATE` that validates the
+token.
+
+Every write that changes a credential ends the sessions it must inside the transaction
+that changes it, and writes both the specific audit row and an `IDENTITY_SESSIONS_REVOKED`
+row carrying the reason and the count:
+
+- **change password** keeps the session that asked and ends the others (`PASSWORD_CHANGED`);
+- **reset password** ends every session (`PASSWORD_RESET`) and the token is single use, so
+  a replayed link is refused;
+- **deactivate** needs the password, disables the account and ends every session
+  (`ACCOUNT_DEACTIVATED`), and the guard already refuses a non-`ACTIVE` user;
+- **role change** (ADMIN only, `roles.write`) ends every session of that user
+  (`ROLE_CHANGED`), so no token outlives the permissions it was issued under.
+
+**Why:** a token that survives the event that should have killed it is the whole risk of
+staying signed in. Doing the revocation in the same transaction as the change means there
+is no window in which the new password and the old session exist together, and the closed
+set of reasons makes the audit trail readable instead of a free-text column nobody trusts.

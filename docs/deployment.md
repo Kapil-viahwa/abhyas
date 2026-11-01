@@ -33,7 +33,7 @@ flowchart TB
   serving, which is exactly what the `compose-smoke` and `e2e` CI jobs rely on.
 - Database ports are published in development only, so host-side `pnpm db:migrate` and
   `pnpm test:db` work.
-- Two database roles (decision 0022): migrations connect as the owner
+- Two database roles (decision 0023): migrations connect as the owner
   (`MIGRATION_DATABASE_URL`), while the API and the worker connect as `abhyas_app`
   (`DATABASE_URL`, `APP_DATABASE_URL` for tests) — not a superuser, with `UPDATE`, `DELETE`
   and `TRUNCATE` on `audit_logs` revoked. Development and CI create the role from

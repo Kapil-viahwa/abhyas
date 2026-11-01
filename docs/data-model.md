@@ -308,11 +308,15 @@ erDiagram
   single CHECK constraint.
 - **Audit log** rows can be inserted and read, never updated, deleted or truncated: a trigger
   raises for every session, and the application's database role has those privileges revoked.
-- **Sessions** store only the SHA-256 hash of a token pair, never the token itself, with one row
-  per pair and a CHECK that keeps `revoked_at` and `revoke_reason` in step. Presenting a refresh
-  token that was already rotated revokes the whole family as `REUSE_DETECTED`.
-- **Email tokens** are hashed, purpose-scoped, single use and expire 30 minutes after issue. A new
-  verification link marks the previous one used, so exactly one link works at a time.
+- **Sessions** store only the SHA-256 hash of a token pair, never the token itself, with
+  one row per pair and a CHECK that keeps `revoked_at` and `revoke_reason` in step.
+  Presenting a refresh token that was already rotated revokes the whole family as
+  `REUSE_DETECTED`. `last_used_at` is stamped by the same statement that validates an
+  access token, and the allowed reasons name every way a session can end — including
+  `USER_REVOKED` for the person ending one of their own from the account page.
+- **Email tokens** are hashed, purpose-scoped, single use and expire 30 minutes after
+  issue. A new verification or reset link marks the previous one used, so exactly one
+  link works at a time, and a used reset link is refused on replay.
 - **Domain events** are written in the same transaction as the row they describe, so an account
   cannot exist without its `user.registered` event. `published_at` and `attempts` are the worker's
   outbox bookkeeping.

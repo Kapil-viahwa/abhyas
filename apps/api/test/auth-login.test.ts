@@ -211,18 +211,36 @@ describe('login and logout over HTTP', () => {
     expect(response.json().message).toMatch(/Verify your email/);
   });
 
-  it('throttles password guesses against one account', async () => {
-    await redis.flushdb();
-    const email = `brute-${randomUUID().slice(0, 8)}@example.com`;
-    await registerAndVerify(email, '198.51.100.26');
+  it(
+    'asks for a human check after repeated failures instead of locking the account',
+    async () => {
+      await redis.flushdb();
+      const email = `brute-${randomUUID().slice(0, 8)}@example.com`;
+      await registerAndVerify(email, '198.51.100.26');
 
-    const statuses: number[] = [];
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const response = await loginRequest(email, `wrong-password-9x-${attempt}`, '198.51.100.27');
-      statuses.push(response.statusCode);
-    }
+      const statuses: number[] = [];
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const response = await loginRequest(email, `wrong-password-9x-${attempt}`, '198.51.100.27');
+        statuses.push(response.statusCode);
+      }
 
-    expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
-    expect(statuses[5]).toBe(429);
-  });
+      expect(statuses).toEqual([401, 401, 401, 401, 401]);
+
+      // The account-wide ceiling is now passed. An attempt without a human check is
+      // refused with the same body plus a flag asking for one — not a lock.
+      const challenged = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { email, password: 'wrong-password-9x-last' },
+        remoteAddress: '198.51.100.28',
+      });
+      expect(challenged.statusCode).toBe(401);
+      expect(challenged.json().challengeRequired).toBe(true);
+
+      // The owner is not locked out: the right password with the challenge passes.
+      const signedIn = await loginRequest(email, PASSWORD, '198.51.100.28');
+      expect(signedIn.statusCode).toBe(200);
+    },
+    60_000,
+  );
 });

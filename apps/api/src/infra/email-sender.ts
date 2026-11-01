@@ -75,7 +75,7 @@ export class ConsoleEmailSender implements EmailSender {
  * boot with EMAIL_PROVIDER=smtp but no SMTP_URL fails instead of quietly dropping
  * every verification mail. Delivery itself fails loudly rather than pretending:
  * writing an SMTP client is a dependency decision, and PROGRESS.md lists it as a
- * known gap (decision 0026).
+ * known gap (decision 0027).
  */
 export class SmtpEmailSender implements EmailSender {
   private readonly logger = new Logger(SmtpEmailSender.name);
@@ -93,7 +93,7 @@ export class SmtpEmailSender implements EmailSender {
 
   async send(email: OutgoingEmail): Promise<void> {
     this.logger.warn(`SMTP delivery is not implemented; message to ${email.to} was not delivered (${redact(this.endpoint)})`);
-    throw new EmailDeliveryError('SMTP delivery is not wired in this build: see decision 0026 in docs/decisions.md');
+    throw new EmailDeliveryError('SMTP delivery is not wired in this build: see decision 0027 in docs/decisions.md');
   }
 }
 

@@ -75,5 +75,5 @@ run proved at the time, and `password.spec.ts` now proves the current algorithm.
 | One Playwright flow only | Only the health page is proven in a browser; the auth screens do not exist yet | Phase 2b (one flow per phase thereafter) |
 | Refresh tokens, session list and revoke, password change and reset, deactivation | Sign-in works, but a session cannot be renewed, reviewed, revoked from another device, and a password cannot be changed or recovered | Phase 2b |
 | No auth web screens | Registration, verification, sign-in and the account page exist only as API endpoints; nothing in the browser calls them yet | Phase 2b |
-| SMTP delivery is a stub | `EMAIL_PROVIDER=smtp` requires `SMTP_URL` and boots, but the transport throws instead of sending, so verification mail is not delivered in production | Before the platform goes live (decision 0026) |
+| SMTP delivery is a stub | `EMAIL_PROVIDER=smtp` requires `SMTP_URL` and boots, but the transport throws instead of sending, so verification mail is not delivered in production | Before the platform goes live (decision 0027) |
 | Dev-only advisories | `vitest`/`tinypool` and the `eslint` chain, tracked in `docs/security-exceptions.md` | Continuous, via Dependabot |
