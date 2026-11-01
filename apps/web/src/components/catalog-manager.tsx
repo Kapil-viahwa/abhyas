@@ -8,14 +8,43 @@ import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButto
  * The catalog tree and the forms that change it, shared by the Administrator and editor
  * areas. The API decides who may change which row; this component only carries the
  * forms, so the same screen is safe in both places.
+ *
+ * Every row offers the writes the API supports for its kind: edit (name, slug,
+ * description and order), move one place up or down among its siblings, activate or
+ * deactivate, and delete.
  */
 
-interface CatalogManagerProps {
+type CatalogType = 'categories' | 'exams' | 'subjects' | 'topics';
+
+interface RowState {
+  readonly id: string;
+  readonly name: string;
+  readonly slug: string;
+  readonly sortOrder: number;
+  readonly isActive: boolean;
+  /** Present on categories and exams; subjects and topics carry none in the tree. */
+  readonly description?: string | null;
+}
+
+/** What a move needs to know about a neighbour: its id and the order it currently holds. */
+interface Sibling {
+  readonly id: string;
+  readonly sortOrder: number;
+}
+
+interface RowProps {
   readonly csrf: string;
   readonly area: 'admin' | 'editor';
-  readonly tree: CatalogTree;
-  readonly notices: readonly string[];
-  readonly error?: string | undefined;
+  readonly type: CatalogType;
+  readonly row: RowState;
+  readonly siblings: readonly Sibling[];
+  readonly index: number;
+  /** Categories and exams carry a description; subjects and topics do not in the tree. */
+  readonly showDescription: boolean;
+}
+
+function siblingsOf(rows: readonly RowState[]): Sibling[] {
+  return rows.map((row) => ({ id: row.id, sortOrder: row.sortOrder }));
 }
 
 function ActionButton({
@@ -28,7 +57,7 @@ function ActionButton({
 }: {
   readonly csrf: string;
   readonly area: 'admin' | 'editor';
-  readonly type: string;
+  readonly type: CatalogType;
   readonly id: string;
   readonly action: string;
   readonly label: string;
@@ -55,7 +84,7 @@ function DeleteButton({
 }: {
   readonly csrf: string;
   readonly area: 'admin' | 'editor';
-  readonly type: string;
+  readonly type: CatalogType;
   readonly id: string;
 }): ReactElement {
   return (
@@ -71,8 +100,201 @@ function DeleteButton({
   );
 }
 
-export function CatalogManager({ csrf, area, tree, notices, error }: CatalogManagerProps): ReactElement {
+/**
+ * Moves one row one place up or down. Both order values are sent and the API is asked to
+ * give each row the other's: a swap keeps the relative position the person asked for even
+ * when both rows currently hold the same order.
+ */
+function MoveButton({
+  csrf,
+  area,
+  type,
+  row,
+  direction,
+  neighbour,
+}: {
+  readonly csrf: string;
+  readonly area: 'admin' | 'editor';
+  readonly type: CatalogType;
+  readonly row: RowState;
+  readonly direction: 'up' | 'down';
+  readonly neighbour: Sibling;
+}): ReactElement {
+  const label = `Move ${row.name} ${direction}`;
+
+  return (
+    <form action="/api/catalog/update" method="post">
+      <input type="hidden" name="csrfToken" value={csrf} />
+      <input type="hidden" name="area" value={area} />
+      <input type="hidden" name="type" value={type} />
+      <input type="hidden" name="id" value={row.id} />
+      <input type="hidden" name="action" value="move" />
+      <input type="hidden" name="sortOrder" value={row.sortOrder} />
+      <input type="hidden" name="swapId" value={neighbour.id} />
+      <input type="hidden" name="swapOrder" value={neighbour.sortOrder} />
+      <button className={secondaryButtonClass} type="submit" aria-label={label} title={label}>
+        {direction === 'up' ? 'Move up' : 'Move down'}
+      </button>
+    </form>
+  );
+}
+
+function CatalogRow({ csrf, area, type, row, siblings, index, showDescription }: RowProps): ReactElement {
+  const previous = index > 0 ? siblings[index - 1] : undefined;
+  const next = index >= 0 && index < siblings.length - 1 ? siblings[index + 1] : undefined;
+
+  return (
+    <div data-testid="catalog-row" data-name={row.name} className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-slate-200">
+          {row.name}
+          <span className="ml-2 text-xs text-slate-500">{row.isActive ? 'active' : 'inactive'}</span>
+          <span className="ml-2 text-xs text-slate-600">order {row.sortOrder}</span>
+        </p>
+
+        <div className="flex flex-wrap gap-2">
+          {previous === undefined ? null : (
+            <MoveButton csrf={csrf} area={area} type={type} row={row} direction="up" neighbour={previous} />
+          )}
+          {next === undefined ? null : (
+            <MoveButton csrf={csrf} area={area} type={type} row={row} direction="down" neighbour={next} />
+          )}
+
+          <ActionButton
+            csrf={csrf}
+            area={area}
+            type={type}
+            id={row.id}
+            action={row.isActive ? 'deactivate' : 'activate'}
+            label={row.isActive ? 'Deactivate' : 'Activate'}
+          />
+          <DeleteButton csrf={csrf} area={area} type={type} id={row.id} />
+        </div>
+      </div>
+
+      <details>
+        <summary className="cursor-pointer text-xs text-sky-400">Edit</summary>
+        <form action="/api/catalog/update" method="post" className="mt-2 space-y-3">
+          <input type="hidden" name="csrfToken" value={csrf} />
+          <input type="hidden" name="area" value={area} />
+          <input type="hidden" name="type" value={type} />
+          <input type="hidden" name="id" value={row.id} />
+          <input type="hidden" name="action" value="edit" />
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className={labelClass}>
+              Name
+              <input className={inputClass} name="name" type="text" defaultValue={row.name} required />
+            </label>
+
+            <label className={labelClass}>
+              Slug
+              <input className={inputClass} name="slug" type="text" defaultValue={row.slug} required />
+            </label>
+
+            <label className={labelClass}>
+              Order
+              <input
+                className={inputClass}
+                name="sortOrder"
+                type="number"
+                min={0}
+                max={10000}
+                defaultValue={row.sortOrder}
+                required
+              />
+            </label>
+          </div>
+
+          {showDescription ? (
+            <label className={labelClass}>
+              Description
+              <textarea className={inputClass} name="description" rows={2} defaultValue={row.description ?? ''} />
+            </label>
+          ) : null}
+
+          <button className={buttonClass} type="submit">
+            Save changes
+          </button>
+        </form>
+      </details>
+    </div>
+  );
+}
+
+export function CatalogManager({
+  csrf,
+  area,
+  tree,
+  notices,
+  error,
+}: {
+  readonly csrf: string;
+  readonly area: 'admin' | 'editor';
+  readonly tree: CatalogTree;
+  readonly notices: readonly string[];
+  readonly error?: string | undefined;
+}): ReactElement {
   const roots = tree.categories.filter((category) => category.parentId === null);
+  const rootSiblings = siblingsOf(roots);
+
+  /** Exams under one category, each with its subjects and their topics. */
+  const examList = (categoryId: string): ReactElement => {
+    const exams = tree.exams.filter((exam) => exam.categoryId === categoryId);
+    const examSiblings = siblingsOf(exams);
+
+    return (
+      <ul className="ml-4 space-y-3 border-l border-slate-800 pl-4">
+        {exams.map((exam, examIndex) => (
+          <li key={exam.id} className="space-y-2">
+            <CatalogRow
+              csrf={csrf}
+              area={area}
+              type="exams"
+              row={exam}
+              siblings={examSiblings}
+              index={examIndex}
+              showDescription
+            />
+
+            <ul className="ml-4 space-y-3 border-l border-slate-800 pl-4">
+              {exam.subjects.map((subject, subjectIndex) => (
+                <li key={subject.id} className="space-y-2">
+                  <CatalogRow
+                    csrf={csrf}
+                    area={area}
+                    type="subjects"
+                    row={subject}
+                    siblings={siblingsOf(exam.subjects)}
+                    index={subjectIndex}
+                    showDescription={false}
+                  />
+
+                  <ul className="ml-4 space-y-2 border-l border-slate-800 pl-4">
+                    {subject.topics.map((topic, topicIndex) => (
+                      <li key={topic.id}>
+                        <CatalogRow
+                          csrf={csrf}
+                          area={area}
+                          type="topics"
+                          row={topic}
+                          siblings={siblingsOf(subject.topics)}
+                          index={topicIndex}
+                          showDescription={false}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+
+        {exams.length === 0 ? <li className="text-xs text-slate-500">No exams in this category yet.</li> : null}
+      </ul>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -86,7 +308,7 @@ export function CatalogManager({ csrf, area, tree, notices, error }: CatalogMana
 
         <details className="mt-3">
           <summary className="cursor-pointer text-sm text-sky-400">Category</summary>
-          <form action="/api/catalog/create" method="post" className="mt-3 space-y-3">
+          <form action="/api/catalog/create" method="post" data-testid="create-form-categories" className="mt-3 space-y-3">
             <input type="hidden" name="csrfToken" value={csrf} />
             <input type="hidden" name="area" value={area} />
             <input type="hidden" name="type" value="categories" />
@@ -116,7 +338,7 @@ export function CatalogManager({ csrf, area, tree, notices, error }: CatalogMana
 
         <details className="mt-3">
           <summary className="cursor-pointer text-sm text-sky-400">Exam</summary>
-          <form action="/api/catalog/create" method="post" className="mt-3 space-y-3">
+          <form action="/api/catalog/create" method="post" data-testid="create-form-exams" className="mt-3 space-y-3">
             <input type="hidden" name="csrfToken" value={csrf} />
             <input type="hidden" name="area" value={area} />
             <input type="hidden" name="type" value="exams" />
@@ -145,7 +367,7 @@ export function CatalogManager({ csrf, area, tree, notices, error }: CatalogMana
 
         <details className="mt-3">
           <summary className="cursor-pointer text-sm text-sky-400">Subject</summary>
-          <form action="/api/catalog/create" method="post" className="mt-3 space-y-3">
+          <form action="/api/catalog/create" method="post" data-testid="create-form-subjects" className="mt-3 space-y-3">
             <input type="hidden" name="csrfToken" value={csrf} />
             <input type="hidden" name="area" value={area} />
             <input type="hidden" name="type" value="subjects" />
@@ -174,7 +396,7 @@ export function CatalogManager({ csrf, area, tree, notices, error }: CatalogMana
 
         <details className="mt-3">
           <summary className="cursor-pointer text-sm text-sky-400">Topic</summary>
-          <form action="/api/catalog/create" method="post" className="mt-3 space-y-3">
+          <form action="/api/catalog/create" method="post" data-testid="create-form-topics" className="mt-3 space-y-3">
             <input type="hidden" name="csrfToken" value={csrf} />
             <input type="hidden" name="area" value={area} />
             <input type="hidden" name="type" value="topics" />
@@ -211,96 +433,55 @@ export function CatalogManager({ csrf, area, tree, notices, error }: CatalogMana
           <p className="mt-3 text-sm text-slate-400">No categories yet. Create one above.</p>
         ) : (
           <ul data-testid="catalog-tree" className="mt-3 space-y-4">
-            {roots.map((category) => {
+            {roots.map((category, categoryIndex) => {
               const children = tree.categories.filter((row) => row.parentId === category.id);
-              const categoryIds = new Set([category.id, ...children.map((child) => child.id)]);
-              const exams = tree.exams.filter((exam) => categoryIds.has(exam.categoryId));
 
               return (
-                <li key={category.id} className="space-y-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm text-slate-200">
-                      {category.name}
-                      <span className="ml-2 text-xs text-slate-500">{category.isActive ? 'active' : 'inactive'}</span>
-                    </p>
-                    <div className="flex gap-2">
-                      <ActionButton
-                        csrf={csrf}
-                        area={area}
-                        type="categories"
-                        id={category.id}
-                        action={category.isActive ? 'deactivate' : 'activate'}
-                        label={category.isActive ? 'Deactivate' : 'Activate'}
-                      />
-                      <DeleteButton csrf={csrf} area={area} type="categories" id={category.id} />
-                    </div>
-                  </div>
+                <li key={category.id} className="space-y-3">
+                  <CatalogRow
+                    csrf={csrf}
+                    area={area}
+                    type="categories"
+                    row={category}
+                    siblings={rootSiblings}
+                    index={categoryIndex}
+                    showDescription
+                  />
 
-                  <ul className="ml-4 space-y-2 border-l border-slate-800 pl-4">
-                    {children.map((child) => (
-                      <li key={child.id} className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-xs text-slate-400">
-                          {child.name}
-                          <span className="ml-2">{child.isActive ? 'active' : 'inactive'}</span>
-                        </p>
-                        <ActionButton
-                          csrf={csrf}
-                          area={area}
-                          type="categories"
-                          id={child.id}
-                          action={child.isActive ? 'deactivate' : 'activate'}
-                          label={child.isActive ? 'Deactivate' : 'Activate'}
-                        />
-                      </li>
-                    ))}
+                  {examList(category.id)}
 
-                    {exams.map((exam) => (
-                      <li key={exam.id} className="space-y-1">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <p className="text-xs text-slate-300">
-                            {exam.name}
-                            <span className="ml-2 text-slate-500">{exam.isActive ? 'active' : 'inactive'}</span>
-                          </p>
-                          <div className="flex gap-2">
-                            <ActionButton
-                              csrf={csrf}
-                              area={area}
-                              type="exams"
-                              id={exam.id}
-                              action={exam.isActive ? 'deactivate' : 'activate'}
-                              label={exam.isActive ? 'Deactivate' : 'Activate'}
-                            />
-                            <DeleteButton csrf={csrf} area={area} type="exams" id={exam.id} />
-                            <Link
-                              href={`/exams/${tree.categories.find((row) => row.id === exam.categoryId)?.slug ?? ''}/${exam.slug}`}
-                              className="text-xs text-sky-400 hover:text-sky-300"
-                            >
-                              Public page
-                            </Link>
-                          </div>
-                        </div>
+                  {children.length === 0 ? null : (
+                    <ul className="ml-4 space-y-3 border-l border-slate-800 pl-4">
+                      {children.map((child, childIndex) => (
+                        <li key={child.id} className="space-y-3">
+                          <CatalogRow
+                            csrf={csrf}
+                            area={area}
+                            type="categories"
+                            row={child}
+                            siblings={siblingsOf(children)}
+                            index={childIndex}
+                            showDescription
+                          />
 
-                        {exam.subjects.length > 0 ? (
-                          <ul className="ml-3 space-y-1 text-xs text-slate-500">
-                            {exam.subjects.map((subject) => (
-                              <li key={subject.id}>
-                                {subject.name}
-                                {subject.topics.length === 0
-                                  ? ''
-                                  : ` · ${subject.topics.map((topic) => topic.name).join(', ')}`}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
+                          {examList(child.id)}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               );
             })}
           </ul>
         )}
       </section>
+
+      <p className="text-xs text-slate-500">
+        Public pages:{' '}
+        <Link href="/exams" className="text-sky-400 hover:text-sky-300">
+          /exams
+        </Link>
+      </p>
     </div>
   );
 }

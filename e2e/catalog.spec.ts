@@ -141,13 +141,18 @@ test.describe.serial('the exam catalog', () => {
 
     await page.goto('/admin/catalog');
     await openBuilder(page, 'Category');
-    await page.fill('form:has(input[name="type"][value="categories"]) input[name="name"]', categoryName);
-    await page.click('form:has(input[name="type"][value="categories"]) button[type="submit"]');
+    // By test id: every tree row also holds an edit form of the same kind, so a
+    // `form:has(input[name="type"]...)` selector would no longer be unique.
+    const categoryForm = page.getByTestId('create-form-categories');
+    await categoryForm.locator('input[name="name"]').fill(categoryName);
+    await categoryForm.locator('button[type="submit"]').click();
     await expect(page).toHaveURL(/created=1/);
 
     await openBuilder(page, 'Exam');
-    await page.fill('form:has(input[name="type"][value="exams"]) input[name="name"]', examName);
-    await page.click('form:has(input[name="type"][value="exams"]) button[type="submit"]');
+    const examForm = page.getByTestId('create-form-exams');
+    await examForm.locator('input[name="name"]').fill(examName);
+    await examForm.locator('select[name="categoryId"]').selectOption({ label: categoryName });
+    await examForm.locator('button[type="submit"]').click();
     await expect(page).toHaveURL(/created=1/);
 
     await expect(page.getByTestId('catalog-tree')).toContainText(categoryName);
@@ -173,6 +178,57 @@ test.describe.serial('the exam catalog', () => {
     await page.goto(`/exams/${slug}/${examSlug}`);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(examName);
     await expect(page.getByText(/subjects are defined for/)).toBeVisible();
+  });
+
+  test('an administrator renames and reorders a category, and the public list follows', async ({ page }) => {
+    registerAdmin();
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
+    await expect(page).toHaveURL(/\/admin$/);
+
+    // Two more top-level categories with explicit orders: the move below needs distinct
+    // values to have a visible effect, since rows that share an order sort by name.
+    const first = `Zulu ${marker}`;
+    const second = `Alpha ${marker}`;
+
+    for (const [name, order] of [
+      [first, '1'],
+      [second, '2'],
+    ] as const) {
+      await page.goto('/admin/catalog');
+      await openBuilder(page, 'Category');
+      const form = page.getByTestId('create-form-categories');
+      await form.locator('input[name="name"]').fill(name);
+      await form.locator('button[type="submit"]').click();
+      await expect(page).toHaveURL(/created=1/);
+
+      const row = page.locator(`[data-testid="catalog-row"][data-name="${name}"]`);
+
+      await row.locator('summary').first().click();
+      await row.locator('input[name="sortOrder"]').fill(order);
+      await row.getByRole('button', { name: 'Save changes' }).click();
+
+      await expect(page).toHaveURL(/updated=1/);
+    }
+
+    await page.goto('/exams');
+    const links = page.locator('section.grid article h2 a');
+    await expect(links.filter({ hasText: first })).toHaveCount(1);
+    await expect(links.filter({ hasText: second })).toHaveCount(1);
+
+    const ordered = await links.allTextContents();
+    expect(ordered.indexOf(first)).toBeLessThan(ordered.indexOf(second));
+
+    // One place up: the pair swaps orders, and the public list follows the swap.
+    await page.goto('/admin/catalog');
+    await page
+      .locator(`[data-testid="catalog-row"][data-name="${second}"]`)
+      .getByRole('button', { name: `Move ${second} up` })
+      .click();
+    await expect(page).toHaveURL(/updated=1/);
+
+    await page.goto('/exams');
+    const afterMove = await page.locator('section.grid article h2 a').allTextContents();
+    expect(afterMove.indexOf(second)).toBeLessThan(afterMove.indexOf(first));
   });
 
   test('an editor can author in their own catalog but not reach the admin ones', async ({ page, browser }) => {
@@ -240,13 +296,16 @@ test.describe.serial('the exam catalog', () => {
 
     const categoryName = `Staff Selection ${marker}`;
     await openBuilder(pageA, 'Category');
-    await pageA.fill('form:has(input[name="type"][value="categories"]) input[name="name"]', categoryName);
-    await pageA.click('form:has(input[name="type"][value="categories"]) button[type="submit"]');
+    const categoryForm = pageA.getByTestId('create-form-categories');
+    await categoryForm.locator('input[name="name"]').fill(categoryName);
+    await categoryForm.locator('button[type="submit"]').click();
     await expect(pageA).toHaveURL(/created=1/);
 
     await openBuilder(pageA, 'Exam');
-    await pageA.fill('form:has(input[name="type"][value="exams"]) input[name="name"]', examName);
-    await pageA.click('form:has(input[name="type"][value="exams"]) button[type="submit"]');
+    const examForm = pageA.getByTestId('create-form-exams');
+    await examForm.locator('input[name="name"]').fill(examName);
+    await examForm.locator('select[name="categoryId"]').selectOption({ label: categoryName });
+    await examForm.locator('button[type="submit"]').click();
     await expect(pageA).toHaveURL(/created=1/);
     await contextA.close();
 
@@ -268,6 +327,8 @@ test.describe.serial('the exam catalog', () => {
         const form = document.createElement('form');
         form.method = 'post';
         form.action = '/api/catalog/update';
+        // The tree has one update form per row, so this one names itself.
+        form.id = 'editor-b-request';
 
         const fields: Record<string, string> = {
           csrfToken,
@@ -297,7 +358,7 @@ test.describe.serial('the exam catalog', () => {
 
     // Clicking the button rather than calling form.submit(): Playwright waits for the
     // navigation the submit causes, so the assertion below reads the answer the API sent.
-    await pageB.click('form[action="/api/catalog/update"] button[type="submit"]');
+    await pageB.click('#editor-b-request button[type="submit"]');
 
     await expect(pageB).toHaveURL(/error=/);
     await expect(pageB.getByText('You can only change content you created')).toBeVisible();
