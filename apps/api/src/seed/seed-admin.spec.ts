@@ -49,7 +49,11 @@ describe('resolveSeedAdminConfig', () => {
       /must not be a well-known default/,
     );
     expect(() =>
-      resolveSeedAdminConfig({ ...development, SEED_ADMIN_EMAIL: 'abhyas-seed@example.com', SEED_ADMIN_PASSWORD: 'abhyas-seed1' }),
+      resolveSeedAdminConfig({
+        ...development,
+        SEED_ADMIN_EMAIL: 'abhyas-seed1@example.com',
+        SEED_ADMIN_PASSWORD: 'abhyas-seed1',
+      }),
     ).toThrow(/must not equal the email local part/);
   });
 

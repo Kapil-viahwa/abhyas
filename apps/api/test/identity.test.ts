@@ -8,6 +8,8 @@ import { createMigratedTestDatabase, type TestDatabase } from './support/databas
  * Proves the phase 1 constraints by attempting the violation and watching the
  * database reject it. Every test here is about behaviour the application cannot
  * accidentally bypass.
+ *
+ * Prisma binds string parameters as text, so UUID columns are cast explicitly.
  */
 
 describe('identity foundation', () => {
@@ -30,7 +32,7 @@ describe('identity foundation', () => {
   async function insertUser(options: { email: string; mobile?: string | null }): Promise<string> {
     const id = randomUUID();
     await db.client.$executeRawUnsafe(
-      'INSERT INTO "users" ("id", "email", "mobile", "password_hash", "full_name", "role_id") VALUES ($1, $2, $3, $4, $5, $6)',
+      'INSERT INTO "users" ("id", "email", "mobile", "password_hash", "full_name", "role_id") VALUES ($1::uuid, $2, $3, $4, $5, $6::uuid)',
       id,
       options.email,
       options.mobile ?? null,
@@ -80,10 +82,13 @@ describe('identity foundation', () => {
 
   it('normalises a mobile number and rejects a duplicate in another format', async () => {
     const suffix = String(Math.floor(Math.random() * 90_000_000) + 10_000_000);
-    const id = await insertUser({ email: `mobile-${randomUUID().slice(0, 8)}@example.com`, mobile: '+91 98765 ' + suffix.slice(0, 5) });
+    const id = await insertUser({
+      email: `mobile-${randomUUID().slice(0, 8)}@example.com`,
+      mobile: `+91 98765 ${suffix.slice(0, 5)}`,
+    });
 
     const stored = await db.client.$queryRawUnsafe<Array<{ mobile: string | null }>>(
-      'SELECT "mobile" FROM "users" WHERE "id" = $1',
+      'SELECT "mobile" FROM "users" WHERE "id" = $1::uuid',
       id,
     );
     expect(stored[0]!.mobile).toMatch(/^[0-9]{10}$/);
@@ -154,25 +159,25 @@ describe('identity foundation', () => {
   it('rejects an update and a delete on the audit log', async () => {
     const id = randomUUID();
     await db.client.$executeRawUnsafe(
-      'INSERT INTO "audit_logs" ("id", "action", "entity_type") VALUES ($1, $2, $3)',
+      'INSERT INTO "audit_logs" ("id", "action", "entity_type") VALUES ($1::uuid, $2, $3)',
       id,
       'IDENTITY_TEST',
       'user',
     );
 
     await expect(
-      db.client.$executeRawUnsafe('UPDATE "audit_logs" SET "action" = $1 WHERE "id" = $2', 'CHANGED', id),
+      db.client.$executeRawUnsafe('UPDATE "audit_logs" SET "action" = $1 WHERE "id" = $2::uuid', 'CHANGED', id),
     ).rejects.toThrow(/append-only/);
 
     await expect(
-      db.client.$executeRawUnsafe('DELETE FROM "audit_logs" WHERE "id" = $1', id),
+      db.client.$executeRawUnsafe('DELETE FROM "audit_logs" WHERE "id" = $1::uuid', id),
     ).rejects.toThrow(/append-only/);
   });
 
   it('refuses audit updates and deletes for the application role, which may only read and append', async () => {
     const id = randomUUID();
     await db.client.$executeRawUnsafe(
-      'INSERT INTO "audit_logs" ("id", "action") VALUES ($1, $2)',
+      'INSERT INTO "audit_logs" ("id", "action") VALUES ($1::uuid, $2)',
       id,
       'IDENTITY_TEST',
     );
@@ -180,14 +185,18 @@ describe('identity foundation', () => {
     await expect(
       db.client.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET ROLE "abhyas_app"');
-        await tx.$executeRawUnsafe('UPDATE "audit_logs" SET "action" = $1 WHERE "id" = $2', 'CHANGED', id);
+        await tx.$executeRawUnsafe(
+          'UPDATE "audit_logs" SET "action" = $1 WHERE "id" = $2::uuid',
+          'CHANGED',
+          id,
+        );
       }),
     ).rejects.toThrow(/permission denied/i);
 
     await expect(
       db.client.$transaction(async (tx) => {
         await tx.$executeRawUnsafe('SET ROLE "abhyas_app"');
-        await tx.$executeRawUnsafe('DELETE FROM "audit_logs" WHERE "id" = $1', id);
+        await tx.$executeRawUnsafe('DELETE FROM "audit_logs" WHERE "id" = $1::uuid', id);
       }),
     ).rejects.toThrow(/permission denied/i);
   });
@@ -198,12 +207,12 @@ describe('identity foundation', () => {
     const inserted = await db.client.$transaction(async (tx) => {
       await tx.$executeRawUnsafe('SET ROLE "abhyas_app"');
       await tx.$executeRawUnsafe(
-        'INSERT INTO "audit_logs" ("id", "action") VALUES ($1, $2)',
+        'INSERT INTO "audit_logs" ("id", "action") VALUES ($1::uuid, $2)',
         id,
         'IDENTITY_APPEND_OK',
       );
       const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-        'SELECT "id" FROM "audit_logs" WHERE "id" = $1',
+        'SELECT "id" FROM "audit_logs" WHERE "id" = $1::uuid',
         id,
       );
       return rows.length;
@@ -221,7 +230,7 @@ describe('identity foundation', () => {
 
     await expect(
       db.client.$executeRawUnsafe(
-        'INSERT INTO "user_permissions" ("user_id", "permission_id", "granted_by") VALUES ($1, $2, $3)',
+        'INSERT INTO "user_permissions" ("user_id", "permission_id", "granted_by") VALUES ($1::uuid, $2::uuid, $3::uuid)',
         userId,
         permissions[0]!.id,
         userId,
@@ -237,14 +246,14 @@ describe('identity foundation', () => {
     );
 
     await db.client.$executeRawUnsafe(
-      'INSERT INTO "user_permissions" ("user_id", "permission_id") VALUES ($1, $2)',
+      'INSERT INTO "user_permissions" ("user_id", "permission_id") VALUES ($1::uuid, $2::uuid)',
       userId,
       permissions[0]!.id,
     );
 
     await expect(
       db.client.$executeRawUnsafe(
-        'INSERT INTO "user_permissions" ("user_id", "permission_id") VALUES ($1, $2)',
+        'INSERT INTO "user_permissions" ("user_id", "permission_id") VALUES ($1::uuid, $2::uuid)',
         userId,
         permissions[0]!.id,
       ),
