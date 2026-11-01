@@ -25,6 +25,6 @@ Nothing in this table has run yet. Each row is the claim its job must satisfy on
 | The stack comes up and serves health and docs | compose-smoke | `docker compose up --wait`, `curl /health`, `curl /api/docs-json`, `curl /` |
 | A user can open the home page and see a healthy API | e2e | `home.spec.ts`: `data-status="ok"`, database `ok`, redis `ok`, `/health` present in the OpenAPI document |
 | No secret is committed | gitleaks | full-history scan |
-| No high-severity advisories | audit | `pnpm audit --audit-level=high` |
+| No high or critical advisory in a production dependency | audit | `pnpm audit:ci`: parses `pnpm audit --prod --json`, fails on production high/critical, reports dev-only findings as warnings listed in `docs/security-exceptions.md` |
 
 Every job writes the last 80 lines of its captured logs to the job summary on failure and uploads the full logs as an artifact.
