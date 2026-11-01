@@ -82,6 +82,14 @@ The home page is a server component that reads `API_INTERNAL_URL`; no API base U
 
 **Why:** a default secret is the most common way a staging stack becomes a production incident. Compose itself refusing to render without them, plus `scripts/validate-compose-prod.mjs` asserting the rest in CI, makes the production topology testable rather than aspirational.
 
+## 0010 — Prisma binary target pinned to Debian OpenSSL 3, and OpenSSL installed in the images
+
+**Status:** accepted · **Phase:** 0
+
+`apps/api/prisma/schema.prisma` declares `binaryTargets = ["native", "debian-openssl-3.0.x"]`, and both Docker stages of the API image install `openssl`.
+
+**Why:** `node:22-bookworm-slim` ships no OpenSSL, so `prisma generate` guessed `openssl-1.1.x` and the API died at boot with `Details: libssl.so.1.1: cannot open shared object file: No such file or directory`. Guessing is the bug: the target is now declared instead of inferred, and the library the engine links against is installed rather than hoped for.
+
 ---
 
 ## Dependency reasons
