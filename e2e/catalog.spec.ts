@@ -8,8 +8,13 @@ import { expect, test, type Page } from '@playwright/test';
  * page shows them, and a second editor cannot change what the first one made.
  */
 
-const ADMIN_EMAIL = 'e2e-catalog-admin@example.com';
-const ADMIN_LOGIN = 'catalog-admin-9pass';
+/**
+ * The same Administrator the other browser specs use: the seed creates one account and
+ * refuses a second, so this spec signs in with the shared credentials rather than
+ * expecting one of its own.
+ */
+const ADMIN_EMAIL = 'e2e-admin@example.com';
+const ADMIN_LOGIN = 'administrator-9pass';
 const EDITOR_LOGIN = 'catalog-editor-9pass';
 
 let seeded = false;
@@ -28,7 +33,7 @@ function registerAdmin(): void {
       '-e',
       `SEED_ADMIN_EMAIL=${ADMIN_EMAIL}`,
       '-e',
-      `SEED_ADMIN_LOGIN=${ADMIN_LOGIN}`,
+      `SEED_ADMIN_PASSWORD=${ADMIN_LOGIN}`,
       'api',
       'node',
       'apps/api/dist/seed/cli.js',
@@ -254,11 +259,19 @@ test.describe.serial('the exam catalog', () => {
           form.appendChild(field);
         }
 
+        const submit = document.createElement('button');
+        submit.type = 'submit';
+        submit.textContent = 'Send';
+        form.appendChild(submit);
+
         document.body.appendChild(form);
-        form.submit();
       },
       { csrfToken: csrf, id: examId },
     );
+
+    // Clicking the button rather than calling form.submit(): Playwright waits for the
+    // navigation the submit causes, so the assertion below reads the answer the API sent.
+    await pageB.click('form[action="/api/catalog/update"] button[type="submit"]');
 
     await expect(pageB).toHaveURL(/error=/);
     await expect(pageB.getByText('You can only change content you created')).toBeVisible();

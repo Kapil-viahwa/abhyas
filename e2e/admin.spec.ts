@@ -12,6 +12,11 @@ import { expect, test, type Page } from '@playwright/test';
  * exists in the application to create one.
  */
 
+/**
+ * One Administrator for the whole browser suite. The seed refuses to create a second
+ * one, so every spec that needs an Administrator signs in with these credentials and
+ * the second and third seed runs report `admin-already-exists` instead of a failure.
+ */
 const ADMIN_EMAIL = 'e2e-admin@example.com';
 const ADMIN_LOGIN = 'administrator-9pass';
 const EDITOR_LOGIN = 'editorial-9pass';
@@ -32,7 +37,7 @@ function seedAdmin(): void {
       '-e',
       `SEED_ADMIN_EMAIL=${ADMIN_EMAIL}`,
       '-e',
-      `SEED_ADMIN_LOGIN=${ADMIN_LOGIN}`,
+      `SEED_ADMIN_PASSWORD=${ADMIN_LOGIN}`,
       'api',
       'node',
       'apps/api/dist/seed/cli.js',

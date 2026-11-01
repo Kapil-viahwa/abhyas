@@ -9,8 +9,9 @@ import { expect, test, type Page } from '@playwright/test';
  * screen.
  */
 
-const ADMIN_EMAIL = 'e2e-ops-admin@example.com';
-const ADMIN_LOGIN = 'operations-9pass';
+/** The shared Administrator: the seed creates exactly one, and refuses a second. */
+const ADMIN_EMAIL = 'e2e-admin@example.com';
+const ADMIN_LOGIN = 'administrator-9pass';
 const EDITOR_LOGIN = 'ops-editor-9pass';
 const STUDENT_LOGIN = 'student-9login-ok';
 
@@ -30,7 +31,7 @@ function registerAdmin(): void {
       '-e',
       `SEED_ADMIN_EMAIL=${ADMIN_EMAIL}`,
       '-e',
-      `SEED_ADMIN_LOGIN=${ADMIN_LOGIN}`,
+      `SEED_ADMIN_PASSWORD=${ADMIN_LOGIN}`,
       'api',
       'node',
       'apps/api/dist/seed/cli.js',
