@@ -79,6 +79,11 @@ test.describe.serial('authentication flows', () => {
     await signIn(page, email, PASSWORD);
     await expect(page).toHaveURL(/\/account/);
 
+    // Sessions left behind by earlier tests are still live, and this test owns the
+    // number it asserts, so it starts from exactly the session that asked.
+    await page.getByRole('button', { name: 'End every other session' }).click();
+    await expect(page).toHaveURL(/signedOutOthers=1/);
+
     const otherContext = await browser.newContext();
     const other = await otherContext.newPage();
     await signIn(other, email, PASSWORD);

@@ -317,6 +317,11 @@ jobs:
         run: |
           set -o pipefail
           docker compose up -d --build --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-up.log"
+      - name: Apply migrations as the owner role
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose run --rm migrate 2>&1 | tee "$RUNNER_TEMP/migrate.log"
       - name: Run Playwright
         shell: bash
         run: |
