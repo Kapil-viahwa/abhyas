@@ -31,8 +31,11 @@ services:
 
   # S3-compatible object storage for development and CI. The API creates the bucket at
   # boot here; production points at an external service instead (decision 0038).
+  # MinIO publishes server images on quay.io, not Docker Hub. `latest` is deliberate for
+  # now: the dated release tags are not listable without an account, so pinning one by
+  # guess would break the stack. Replace with a dated tag once it is confirmed by hand.
   minio:
-    image: quay.io/minio/minio:RELEASE.2024-05-10T01-41-38Z
+    image: quay.io/minio/minio:latest
     command: ['server', '/data', '--console-address', ':9001']
     environment:
       MINIO_ROOT_USER: abhyas-dev

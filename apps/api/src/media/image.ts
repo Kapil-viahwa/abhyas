@@ -78,7 +78,7 @@ export async function processImage(input: Buffer): Promise<ProcessedImage> {
     throw new ImageRejectedError('Only JPEG, PNG and WebP images are accepted');
   }
 
-  let output: { data: Buffer; info: sharp.OutputInfo };
+  let output: { data: Buffer; info: { width: number; height: number } };
 
   try {
     const metadata = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
