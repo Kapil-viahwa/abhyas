@@ -148,6 +148,8 @@ model Session {
   userId           String    @map("user_id") @db.Uuid
   familyId         String    @map("family_id") @db.Uuid
   refreshTokenHash String    @unique(map: "sessions_refresh_token_hash_key") @map("refresh_token_hash")
+  accessTokenHash  String?   @unique(map: "sessions_access_token_hash_key") @map("access_token_hash")
+  accessExpiresAt  DateTime? @map("access_expires_at") @db.Timestamptz(6)
   issuedAt         DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
   expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
   rotatedAt        DateTime? @map("rotated_at") @db.Timestamptz(6)
