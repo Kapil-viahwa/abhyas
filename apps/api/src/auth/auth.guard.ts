@@ -40,7 +40,10 @@ function bearerToken(header: string | string[] | undefined): string | null {
 @Injectable()
 export class AuthGuard implements CanActivate {
   constructor(
-    private readonly reflector: Reflector,
+    // Every dependency is injected by explicit token. Nest can then build the guard
+    // from the tokens alone, without relying on decorator metadata that a test
+    // transformer may not emit.
+    @Inject(Reflector) private readonly reflector: Reflector,
     @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
     @Inject(PermissionsService) private readonly permissions: PermissionsService,
   ) {}

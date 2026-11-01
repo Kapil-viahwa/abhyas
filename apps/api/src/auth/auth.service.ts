@@ -1,16 +1,33 @@
-import { BadRequestException, HttpException, HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
 import { loadConfig } from '../config/config';
 import { webUrlFor } from '../config/links';
 import { DatabaseService } from '../infra/database.service';
 import { EMAIL_SENDER, type EmailSender } from '../infra/email-sender';
-import { RATE_LIMITS, RateLimiter, ipRateLimitKey, type RateLimitRule } from '../infra/rate-limiter';
+import {
+  RATE_LIMITS,
+  RateLimiter,
+  accountRateLimitKey,
+  ipRateLimitKey,
+  type RateLimitRule,
+} from '../infra/rate-limiter';
 import { DATABASE_PROBE } from '../infra/tokens';
 import { TURNSTILE_VERIFIER, type TurnstileVerifier } from '../infra/turnstile-verifier';
-import { hashPassword } from './password';
+import type { AuthenticatedUser } from './access';
+import { hashPassword, verifyPassword } from './password';
+import { SESSIONS_SERVICE, type SessionsService } from './sessions.service';
 import { EMAIL_TOKEN_TTL_MS, generateToken, hashToken, isExpired } from './tokens';
-import { parseEmailToken, parseRegisterBody, type RegisterInput } from './validation';
+import { parseEmailToken, parseLoginBody, parseRegisterBody, type RegisterInput } from './validation';
 
 /**
  * Registration and email verification.
@@ -40,6 +57,25 @@ export interface VerifyEmailResult {
 /** Identical for an unknown address and an address that already exists. */
 export const REGISTER_ACCEPTED: RegisterResult = { status: 'PENDING_VERIFICATION' };
 
+export interface LoginResult {
+  readonly accessToken: string;
+  readonly accessExpiresAt: string;
+  readonly refreshToken: string;
+  readonly refreshExpiresAt: string;
+  readonly user: {
+    readonly id: string;
+    readonly email: string;
+    readonly roleCode: string;
+  };
+}
+
+export interface LogoutResult {
+  readonly status: 'SIGNED_OUT';
+}
+
+/** Identical for an unknown address and a wrong password. */
+export const LOGIN_FAILURE_MESSAGE = 'Email or password is incorrect.';
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
@@ -49,7 +85,9 @@ export class AuthService {
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
     @Inject(EMAIL_SENDER) private readonly email: EmailSender,
     @Inject(TURNSTILE_VERIFIER) private readonly turnstile: TurnstileVerifier,
-    private readonly rateLimiter: RateLimiter,
+    @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
+    // Injected by token, so the container never has to infer it from metadata.
+    @Inject(RateLimiter) private readonly rateLimiter: RateLimiter,
   ) {
     const config = loadConfig(process.env);
     this.webUrl = webUrlFor(config.NODE_ENV, process.env.WEB_URL);
@@ -146,6 +184,87 @@ export class AuthService {
     });
 
     return { status: 'VERIFIED' };
+  }
+
+  async login(body: unknown, meta: RequestMetadata = {}): Promise<LoginResult> {
+    const input = parseLoginBody(body);
+
+    // Two windows: one host cannot spray addresses, and one account cannot be
+    // guessed at from many hosts.
+    await this.enforceRateLimit([
+      { key: ipRateLimitKey('login', meta.ip ?? ''), ...RATE_LIMITS.loginPerIp },
+      { key: accountRateLimitKey('login', input.email), ...RATE_LIMITS.loginPerAccount },
+    ]);
+
+    const human = await this.turnstile.verify(input.turnstileToken, meta.ip);
+    if (!human) {
+      throw new BadRequestException('Human verification failed. Please try again.');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { email: input.email },
+      select: {
+        id: true,
+        email: true,
+        passwordHash: true,
+        status: true,
+        emailVerifiedAt: true,
+        role: { select: { code: true } },
+      },
+    });
+
+    if (!user) {
+      // Verifying against a throwaway hash costs what a real check costs, so the
+      // response time does not say whether the address exists.
+      await verifyPassword(await dummyHash(), input.password);
+      await this.recordLoginFailure(null, input.email, 'UNKNOWN_ACCOUNT', meta);
+      throw new UnauthorizedException(LOGIN_FAILURE_MESSAGE);
+    }
+
+    const passwordMatches = await verifyPassword(user.passwordHash, input.password);
+    if (!passwordMatches) {
+      await this.recordLoginFailure(user.id, input.email, 'BAD_PASSWORD', meta);
+      throw new UnauthorizedException(LOGIN_FAILURE_MESSAGE);
+    }
+
+    // Only reached with the correct password, so neither message below tells
+    // anyone anything they could not already prove.
+    if (user.status !== 'ACTIVE') {
+      await this.recordLoginFailure(user.id, input.email, 'ACCOUNT_INACTIVE', meta);
+      throw new ForbiddenException('This account is not active. Contact support.');
+    }
+
+    if (user.emailVerifiedAt === null) {
+      throw new ForbiddenException('Verify your email address before signing in.');
+    }
+
+    const issued = await this.sessions.issue(user.id, { ip: meta.ip, userAgent: meta.userAgent });
+
+    await this.prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    await this.recordAudit(
+      'IDENTITY_LOGIN_SUCCEEDED',
+      user.id,
+      meta,
+      { sessionId: issued.sessionId },
+      user.role.code,
+    );
+
+    return {
+      accessToken: issued.accessToken,
+      accessExpiresAt: issued.accessExpiresAt.toISOString(),
+      refreshToken: issued.refreshToken,
+      refreshExpiresAt: issued.refreshExpiresAt.toISOString(),
+      user: { id: user.id, email: user.email, roleCode: user.role.code },
+    };
+  }
+
+  async logout(user: AuthenticatedUser, meta: RequestMetadata = {}): Promise<LogoutResult> {
+    // Scoped by user id inside the session service, so one session cannot revoke
+    // another account's session (no IDOR), and the token stops working at once.
+    await this.sessions.revokeOwnedSession(user.id, user.sessionId, 'LOGOUT');
+    await this.recordAudit('IDENTITY_LOGOUT', user.id, meta, { sessionId: user.sessionId }, user.roleCode);
+
+    return { status: 'SIGNED_OUT' };
   }
 
   private async createAccount(input: RegisterInput, passwordHash: string, meta: RequestMetadata): Promise<void> {
@@ -254,15 +373,34 @@ export class AuthService {
     userId: string,
     meta: RequestMetadata,
     metadata: Prisma.InputJsonObject,
+    actorRole = 'USER',
   ): Promise<void> {
     await this.prisma.auditLog.create({
       data: {
         actorUserId: userId,
-        actorRole: 'USER',
+        actorRole,
         action,
         entityType: 'user',
         entityId: userId,
         metadata,
+        ip: meta.ip ?? null,
+      },
+    });
+  }
+
+  private async recordLoginFailure(
+    userId: string | null,
+    email: string,
+    reason: string,
+    meta: RequestMetadata,
+  ): Promise<void> {
+    await this.prisma.auditLog.create({
+      data: {
+        actorUserId: userId,
+        entityType: userId === null ? null : 'user',
+        entityId: userId,
+        action: 'IDENTITY_LOGIN_FAILED',
+        metadata: { email, reason },
         ip: meta.ip ?? null,
       },
     });
@@ -305,4 +443,12 @@ export class AuthService {
 
 function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'P2002';
+}
+
+let dummyPasswordHash: Promise<string> | undefined;
+
+/** One throwaway hash, so an unknown address costs what a wrong password costs. */
+function dummyHash(): Promise<string> {
+  dummyPasswordHash ??= hashPassword('abhyas-dummy-password-9x');
+  return dummyPasswordHash;
 }
