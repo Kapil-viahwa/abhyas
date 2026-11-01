@@ -9,6 +9,9 @@ name: Lockfile bootstrap
 on:
   push:
     branches: ['phase-*']
+  # Kept alongside the push trigger so a re-run is possible from the Actions tab if a
+  # push ever lands without the job running.
+  workflow_dispatch:
 
 permissions:
   contents: read
