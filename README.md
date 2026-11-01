@@ -97,6 +97,26 @@ guarded by an `Origin` check and a double-submit CSRF value. An expired access c
 refreshed silently on the server. `TURNSTILE_SITE_KEY` is required in production and must
 not be a Cloudflare test key; development and CI use the test key.
 
+## Administration and the catalog
+
+Administrators work from `/admin`: accounts (search, filters, editor creation, capability
+editing, suspend and restore), the catalog, the settings the platform runs on, the audit
+trail (filter, page, export), and a dashboard of real counts. Editors work from
+`/editor/catalog`, where the API lets them change only the content they created.
+
+The public catalog is server-rendered at `/exams`, `/exams/<category>` and
+`/exams/<category>/<exam>`, with their own titles, descriptions, canonicals and
+breadcrumbs. A catalog write asks the web tier to drop the cached pages through
+`/api/revalidate`, which accepts only the shared `REVALIDATE_SECRET`.
+
+```bash
+pnpm db:seed:catalog       # a few example exam groups; idempotent by slug, never automatic
+```
+
+`NODE_ENV=production` refuses that seed without
+`CATALOG_SEED_CONFIRM=seed-example-catalog`, and it needs an Administrator to own the rows:
+run `pnpm db:seed:admin` first.
+
 Local commands (each one is what CI runs):
 
 ```bash

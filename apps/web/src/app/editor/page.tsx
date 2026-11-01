@@ -27,8 +27,12 @@ export default async function EditorPage(): Promise<ReactElement> {
       <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
         <h2 className="text-lg font-medium text-slate-100">Question authoring</h2>
         <p className="mt-1 text-sm text-slate-400">
-          The authoring tools arrive with the content phase. Your permissions are already resolved from the database on
-          every request, so the screens can rely on them from the first line.
+          The catalog is live: categories, exams, subjects and topics, and the public pages built from them.
+        </p>
+        <p className="mt-3 text-sm">
+          <Link href="/editor/catalog" className="text-sky-400 hover:text-sky-300">
+            Open the catalog
+          </Link>
         </p>
         <p className="mt-3 text-xs text-slate-500">Permissions: {session.profile.permissions.join(', ') || 'none'}</p>
       </section>

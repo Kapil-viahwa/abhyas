@@ -291,6 +291,7 @@ describe('auth over HTTP', () => {
       EMAIL_PROVIDER: 'smtp',
       SMTP_URL: 'smtp://smtp.example.com:587',
       WEB_URL: 'https://abhyas.example.com',
+      REVALIDATE_SECRET: 'r'.repeat(32),
     };
 
     let previous: Record<string, string | undefined> = {};

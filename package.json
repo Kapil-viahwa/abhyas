@@ -18,6 +18,7 @@
     "audit:ci": "node scripts/audit-report.mjs",
     "db:migrate": "DATABASE_URL=\"${MIGRATION_DATABASE_URL:-$DATABASE_URL}\" pnpm --filter @abhyas/api exec prisma migrate deploy",
     "db:seed:admin": "pnpm --filter @abhyas/api run build && pnpm --filter @abhyas/api run seed:admin",
+    "db:seed:catalog": "pnpm --filter @abhyas/api run build && pnpm --filter @abhyas/api run seed:catalog",
     "compose:validate": "node scripts/validate-compose-prod.mjs",
     "compose:up": "docker compose up -d --build --wait",
     "compose:down": "docker compose down -v"

@@ -37,6 +37,11 @@ const TURNSTILE_TEST_SECRET_PATTERN = /^[123]x0{20,}/i;
 
 export const MIN_AUTH_SECRET_LENGTH = 32;
 
+/** The shared secret the API presents when it asks the web tier to refresh cached pages. */
+export const MIN_REVALIDATE_SECRET_LENGTH = 16;
+
+export const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
+
 export interface EnvIssue {
   readonly variable: string;
   readonly message: string;
@@ -66,6 +71,8 @@ export interface AppEnv {
   readonly SMS_PROVIDER: SmsProvider;
   readonly EMAIL_PROVIDER: EmailProvider;
   readonly ALLOW_DEV_LOGIN: boolean;
+  /** Shared with the web tier, which accepts it on its cache-revalidation route. */
+  readonly REVALIDATE_SECRET: string;
 }
 
 type RawEnv = Readonly<Record<string, string | undefined>>;
@@ -189,6 +196,20 @@ export function validateEnv(raw: RawEnv): AppEnv {
     });
   }
 
+  // The API proves itself to the web tier with this value before the web tier drops a
+  // cached page. A short one is a guessable one, and production has to set it.
+  const revalidateRaw = read(raw, 'REVALIDATE_SECRET');
+  if (isProduction) {
+    if (revalidateRaw === '') {
+      issues.push({ variable: 'REVALIDATE_SECRET', message: 'is required in production' });
+    } else if (revalidateRaw.length < MIN_REVALIDATE_SECRET_LENGTH) {
+      issues.push({
+        variable: 'REVALIDATE_SECRET',
+        message: `must be at least ${MIN_REVALIDATE_SECRET_LENGTH} characters`,
+      });
+    }
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -203,5 +224,6 @@ export function validateEnv(raw: RawEnv): AppEnv {
     SMS_PROVIDER: smsProvider,
     EMAIL_PROVIDER: emailProvider,
     ALLOW_DEV_LOGIN: allowDevLogin,
+    REVALIDATE_SECRET: revalidateRaw === '' ? DEFAULT_REVALIDATE_SECRET : revalidateRaw,
   };
 }

@@ -55,10 +55,10 @@ code that checks it.
 | `coins.adjust` | Y | — | — |
 | `audit.read` | Y | — | — |
 | `content.read` | Y | Y | published only |
-| `content.write` | Y | Y | — |
+| `content.write` | Y | by flag | — |
 | `tests.read` | Y | Y | published only |
-| `tests.write` | Y | Y | — |
-| `tests.publish` | Y | — | — |
+| `tests.write` | Y | by flag | — |
+| `tests.publish` | Y | by flag | — |
 | `attempts.take` | Y | — | Y |
 | `attempts.read.all` | Y | — | — |
 | `analytics.read` | Y | — | — |
@@ -67,6 +67,21 @@ code that checks it.
 reading `/me/coins` passes a `users.read.self` style check enforced by the handler, and a
 published filter is applied in the query. `USER_PERMISSIONS` adds individual codes to a user
 without changing their role; those are always granted by an `ADMIN` and are audited.
+
+"By flag" is the phase 3 model, and it is the reason the `EDITOR` row carries only the read side:
+an editor's write capability is an explicit grant, one row in `user_permissions` per ticked flag,
+and a flag that was not ticked grants nothing. The three flags are:
+
+| Flag | Permission code | What it allows |
+| --- | --- | --- |
+| `manage_questions` | `content.write` | Create and edit exams, subjects, topics, questions and options |
+| `manage_tests` | `tests.write` | Create and edit tests, sections and question placement |
+| `publish_tests` | `tests.publish` | Publish or archive a test |
+
+Two database triggers keep that model honest: one refuses to grant any of those three codes to an
+account that is not an `EDITOR`, and one clears them when an editor is demoted. Changing an
+editor's flags ends that editor's sessions in the same transaction, so no token outlives the
+capability it was issued under.
 
 ## Rules that are enforced, not documented
 
@@ -92,5 +107,11 @@ without changing their role; those are always granted by an `ADMIN` and are audi
 | `USER_REVOKED` and `last_used_at` on sessions, so the account page can show activity | 2b | Done, by migration |
 | Role change behind `roles.write`, revoking every session of the user whose role changed | 2b | Done |
 | Web screens, cookies and CSRF protection: server-side refresh, httpOnly cookies, an `Origin` check plus a double-submit value on every write, and security headers | 2b | Done |
-| Object-level rules per resource | with the resource (phases 3–4) | Not yet |
+| Editor capability as explicit grants (the three flags), refused on a non-editor and cleared on demotion | 3 | Done, by migration and triggers |
+| User administration: searchable list, detail, editor creation, capability editing, activate/suspend/deactivate, each ending the sessions it invalidates | 3 | Done |
+| Exam catalog with object-level ownership: an editor changes only what they created, and subjects and topics inherit their exam's owner | 3 | Done |
+| Settings with per-row bounds, and the topic band scale validated as one ordered set | 3 | Done |
+| Audit viewer: filter by actor, action and date range, page, and export; read-only by construction and the export is audited | 3 | Done |
+| Admin dashboard with real counts of what exists today | 3 | Done |
+| Object-level rules for questions, tests and attempts | with the resource (phases 4–5) | Not yet |
 

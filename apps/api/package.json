@@ -13,7 +13,8 @@
     "test": "pnpm run prisma:generate && vitest run src",
     "test:db": "pnpm run prisma:generate && vitest run test --no-file-parallelism",
     "db:migrate": "prisma migrate deploy",
-    "seed:admin": "node dist/seed/cli.js"
+    "seed:admin": "node dist/seed/cli.js",
+    "seed:catalog": "node dist/seed/cli-catalog.js"
   },
   "dependencies": {
     "@abhyas/shared": "workspace:*",

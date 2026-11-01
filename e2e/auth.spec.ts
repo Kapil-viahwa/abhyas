@@ -14,6 +14,16 @@ import { expect, test, type Page } from '@playwright/test';
 const PASSWORD = 'correct-horse-9battery';
 const NEW_PASSWORD = 'battery-horse-9-correct';
 
+/**
+ * This spec talks to the stack as one client address. The API limits sign-ins per
+ * address, and each spec file signs in several times, so every file gets its own —
+ * the limit itself is untouched, and no two files share a counter.
+ */
+const CLIENT_IP = '198.18.0.11';
+const CLIENT = { extraHTTPHeaders: { 'x-forwarded-for': CLIENT_IP } };
+
+test.use(CLIENT);
+
 function apiLogs(): string {
   // The stack is the development compose file, launched by the e2e CI job.
   return execFileSync('docker', ['compose', 'logs', '--no-color', 'api'], {
@@ -115,7 +125,7 @@ test.describe.serial('authentication flows', () => {
     await page.getByRole('button', { name: 'End every other session' }).click();
     await expect(page).toHaveURL(/signedOutOthers=1/);
 
-    const otherContext = await browser.newContext();
+    const otherContext = await browser.newContext(CLIENT);
     const other = await otherContext.newPage();
     await signIn(other, email, PASSWORD);
     await expect(other).toHaveURL(/\/account/);
@@ -140,7 +150,7 @@ test.describe.serial('authentication flows', () => {
     await signIn(page, email, PASSWORD);
     await expect(page).toHaveURL(/\/account/);
 
-    const otherContext = await browser.newContext();
+    const otherContext = await browser.newContext(CLIENT);
     const other = await otherContext.newPage();
     await signIn(other, email, PASSWORD);
     await expect(other).toHaveURL(/\/account/);
@@ -205,7 +215,7 @@ test.describe.serial('authentication flows', () => {
     ] as const) {
       setRole(email, role);
 
-      const context = await browser.newContext();
+      const context = await browser.newContext(CLIENT);
       const page = await context.newPage();
       await signIn(page, email, PASSWORD);
       await expect(page).toHaveURL(new RegExp(`${landing}$`));

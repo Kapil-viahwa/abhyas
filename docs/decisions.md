@@ -172,6 +172,8 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Why:** a seed with a default password is how "temporary" admin accounts become permanent back doors. Requiring the confirmation flag in production means the seeder cannot create an admin by accident there, while development still works with two obvious variables. The run is idempotent: it does nothing if any admin already exists, and it writes an `IDENTITY_ADMIN_SEEDED` audit row when it does create one.
 
+The account it creates is marked verified in the same transaction. Sign-in refuses an unverified address for everyone else, so a seeded administrator left unverified would be an account the platform created and then would not admit to; holding the deployment's environment is stronger proof of ownership than an emailed link. `seed-admin.test.ts` asserts the role, the hash, the `ACTIVE` status and the verification together.
+
 ## 0021 — Database test files run sequentially
 
 **Status:** accepted · **Phase:** 1
@@ -462,3 +464,96 @@ runner.
 **CSP note:** the policy allows `'unsafe-inline'` for scripts because Next's bootstrap is
 inline; moving to a nonce-based policy belongs with the edge proxy work in the hardening
 phase and is listed as a known gap.
+
+
+## 0033 — Editor capability is a grant, not a role
+
+**Status:** accepted · **Phase:** 3
+
+An editor's ability to write is not part of the `EDITOR` role any more. The role carries
+the read side (`content.read`, `tests.read`); the three write codes — `content.write`,
+`tests.write`, `tests.publish` — are granted one row at a time in `user_permissions`, one
+per ticked flag, by the Administrator who creates or edits the editor. A flag that was not
+ticked grants nothing.
+
+**Why:** "editor" is a job title, not a capability. The phase 1 matrix gave every editor
+the whole content surface, and the product needs an editor who may draft questions but not
+publish a test. Making the grant explicit also means the audit trail says exactly who was
+given what, instead of a role code standing in for a decision nobody recorded.
+
+**Consequence:** two triggers keep the model from drifting. `user_permissions_editor_flags_only`
+refuses any of the three codes on an account that is not an `EDITOR`, so a student cannot be
+handed write capability by mistake; `users_clear_editor_flags` deletes them when an editor is
+demoted, so a demotion cannot leave a stale grant behind. Changing an editor's flags ends that
+editor's sessions in the same transaction. The phase 1 matrix test was updated to the new
+truth and the old expectation is replaced by stronger per-account assertions in
+`user-management.test.ts`.
+
+## 0034 — Content ownership is stored on the row that matters
+
+**Status:** accepted · **Phase:** 3
+
+Categories and exams record `created_by`. Subjects and topics do too, for the trail, but the
+ownership rule reads the *exam*: a subject or topic belongs to whoever created its exam. The
+catalog service checks that on every write, and an Administrator is exempt.
+
+**Why:** an editor's boundary is "what I made". Writing it down on the exam means creating a
+subject underneath somebody else's exam is refused for the same reason editing the exam is —
+there is no second code path to keep in step. Deriving it from a parent rather than copying it
+also means a transfer of an exam would move its whole subtree in one update.
+
+**Consequence:** the API exposes no way to change `created_by`. `catalog.test.ts` proves the
+negative cases explicitly: a foreign exam cannot be updated, deleted, or have a subject created
+under it, and the same for a foreign subject's topics.
+
+## 0035 — Settings carry their bounds, and related settings are validated together
+
+**Status:** accepted · **Phase:** 3
+
+Every setting row already carried its type and its integer bounds (decision 0017). The phase 3
+settings keep that and add one thing a `CHECK` cannot express alone: the three topic band values
+(`topic_band_weak_below` ≤ `topic_band_average_below` ≤ `topic_band_good_below`) are validated
+by a trigger that reads all three rows together, with the incoming row standing in for itself.
+
+**Why:** a scale whose bands are out of order is never a valid configuration, and an API check
+alone would be one `psql` session away from being bypassed. The trigger means the invariant is a
+property of the data.
+
+**Consequence:** the settings screen shows each value's bounds beside the field, and saving a
+value outside them is a 400 with the API's message. Every change is audited with the old and new
+value.
+
+## 0036 — The public catalog is cached under one tag and dropped by a secret-protected route
+
+**Status:** accepted · **Phase:** 3
+
+The public `/exams` pages are server-rendered and cached. The catalog fetch is cached under the
+`catalog` tag, and after every catalog write the API POSTs to the web tier's `/api/revalidate`
+with the shared `REVALIDATE_SECRET` from the environment; the web tier compares it and calls
+`revalidateTag('catalog')`. A missing or short secret is refused at boot in production.
+
+**Why:** the alternative is a cache that is either always cold (a database query on every public
+page view) or stale until a TTL expires (an editor publishes an exam and nobody sees it). A tag
+gives exactly the second half of that: cached until the thing it depends on changes.
+
+**Consequence:** the secret is a second shared secret between the two tiers, required in
+`docker-compose.prod.yml` and in the web's production configuration. A revalidation failure is
+logged and swallowed: the write has already committed, and the page is stale for at most one
+revalidation window rather than the API reporting a failure for a change it made.
+
+## 0037 — The audit viewer is read-only by construction and its export is audited
+
+**Status:** accepted · **Phase** 3
+
+`GET /v1/admin/audit` filters by actor, action and date range and pages the result;
+`GET /v1/admin/audit/export` returns the same rows as CSV. Neither has a counterpart: there is no
+update and no delete route, the table's trigger raises for `UPDATE`, `DELETE` and `TRUNCATE`, and
+the application role has those privileges revoked. The export writes an `AUDIT_EXPORTED` row.
+
+**Why:** a viewer is only as trustworthy as the absence of a write path behind it, and taking a
+copy of the trail is itself something an administrator did — exactly the kind of act the trail
+exists to record.
+
+**Consequence:** the export is capped at 5,000 rows so one request cannot become a database dump,
+and the CSV is generated from the same filter function the viewer uses, so what is exported is
+what was on screen.

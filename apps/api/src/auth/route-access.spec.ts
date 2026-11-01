@@ -2,6 +2,8 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
 
 import { AdminController } from '../admin/admin.controller';
+import { CatalogController } from '../catalog/catalog.controller';
+import { PublicCatalogController } from '../catalog/public.controller';
 import { HealthController } from '../health/health.controller';
 import { IS_PUBLIC_KEY, AUTHENTICATED_KEY, PERMISSIONS_KEY } from './access';
 import { AccountController } from './account.controller';
@@ -12,7 +14,14 @@ import { AuthController } from './auth.controller';
  * it here, so the registry cannot silently fall behind. The test then refuses any route
  * handler that declares neither @Public(), @Authenticated() nor @RequirePermissions(...).
  */
-export const HTTP_CONTROLLERS = [HealthController, AuthController, AccountController, AdminController];
+export const HTTP_CONTROLLERS = [
+  HealthController,
+  AuthController,
+  AccountController,
+  AdminController,
+  CatalogController,
+  PublicCatalogController,
+];
 
 type Handler = (...args: never[]) => unknown;
 
