@@ -81,7 +81,7 @@ const QUESTION_SELECT = {
 type QuestionRow = Prisma.QuestionGetPayload<{ select: typeof QUESTION_SELECT }>;
 
 type VersionRow = Prisma.QuestionVersionGetPayload<{
-  select: typeof VERSION_SELECT & { options: true };
+  select: typeof VERSION_SELECT & { id: true; options: true };
 }>;
 
 function toView(question: QuestionRow, version: VersionRow): QuestionView {
@@ -158,7 +158,7 @@ export class QuestionsService {
       where.status = query.status;
     }
 
-    // Filters that live on the version apply to the current version of each question.
+    // Filters that live on the version apply to one of the question's versions.
     const versionFilter: Prisma.QuestionVersionWhereInput = {};
     if (query.difficulty !== undefined) {
       versionFilter.difficulty = query.difficulty;
@@ -166,21 +166,14 @@ export class QuestionsService {
     if (query.language !== undefined) {
       versionFilter.language = query.language;
     }
-    if (Object.keys(versionFilter).length > 0) {
-      where.versions = { some: { ...versionFilter, publishedAt: undefined } };
-    }
-
     if (query.search !== undefined) {
-      where.versions = {
-        ...(where.versions as Prisma.QuestionVersionListRelationFilter | undefined),
-        some: {
-          ...(versionFilter as Record<string, unknown>),
-          OR: [
-            { contentHtml: { contains: query.search, mode: 'insensitive' } },
-            { latex: { contains: query.search } },
-          ],
-        },
-      };
+      versionFilter.OR = [
+        { contentHtml: { contains: query.search, mode: 'insensitive' } },
+        { latex: { contains: query.search } },
+      ];
+    }
+    if (Object.keys(versionFilter).length > 0) {
+      where.versions = { some: versionFilter };
     }
 
     const [total, rows] = await this.prisma.$transaction([
