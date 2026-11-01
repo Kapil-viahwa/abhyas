@@ -73,6 +73,10 @@ services:
     environment:
       NODE_ENV: development
       API_INTERNAL_URL: http://api:3001
+      # Public base URL of this app: the origin trusted for cookies and form posts.
+      WEB_URL: http://localhost:3000
+      # Cloudflare's always-pass test site key; production refuses it.
+      TURNSTILE_SITE_KEY: 1x0000000000000000000000000000000AA
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
       - '3000:3000'

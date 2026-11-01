@@ -22,6 +22,7 @@ const requiredEnv = {
   REDIS_URL: 'redis://redis:6379',
   AUTH_SECRET: 'c'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
+  TURNSTILE_SITE_KEY: 'live-site-key',
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
   WEB_URL: 'https://abhyas.example.com',
@@ -104,6 +105,7 @@ for (const [name, service] of Object.entries(services)) {
 for (const [variable, label] of [
   ['AUTH_SECRET', 'AUTH_SECRET'],
   ['TURNSTILE_SECRET_KEY', 'TURNSTILE_SECRET_KEY'],
+  ['TURNSTILE_SITE_KEY', 'TURNSTILE_SITE_KEY'],
   ['MIGRATION_DATABASE_URL', 'MIGRATION_DATABASE_URL'],
   ['WEB_URL', 'WEB_URL'],
 ]) {

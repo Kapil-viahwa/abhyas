@@ -420,3 +420,43 @@ row carrying the reason and the count:
 staying signed in. Doing the revocation in the same transaction as the change means there
 is no window in which the new password and the old session exist together, and the closed
 set of reasons makes the audit trail readable instead of a free-text column nobody trusts.
+
+
+## 0032 — The browser never holds a token: cookies, server-side refresh and a double-submit CSRF check
+
+**Status:** accepted · **Phase:** 2b
+
+The web app never calls the API from the browser and never receives a token as data:
+
+- Every call goes from a Next.js route handler or server component to
+  `API_INTERNAL_URL`. The API URL is not exposed, and the API's CORS surface stays closed.
+- The two opaque tokens live in httpOnly, `SameSite=Lax`, `Secure`-in-production cookies
+  (`abhyas_access`, `abhyas_refresh`). Nothing is stored in `localStorage` or
+  `sessionStorage`, and no page renders a token into its HTML.
+- An expired access cookie is refreshed silently: a route handler that gets a 401
+  exchanges the refresh cookie, sets the new pair on the response it was already
+  returning, and retries once; a page that finds no usable access token is sent through
+  `/api/auth/refresh-and-return`, which can write cookies before rendering.
+- Every write is a form post to a route handler, guarded by an `Origin` check against
+  the configured web origin **and** a double-submit value: middleware sets a random
+  `abhyas_csrf` cookie and injects the same value as a request header, so the first
+  render's form carries a token the browser already holds.
+- The API's per-IP limits follow the person: the route handlers forward
+  `X-Forwarded-For`, and the API runs with `trustProxy`.
+
+**Why:** a token in JavaScript is a token one XSS away from being stolen, and an
+Access-Control-Allow-Origin for a cookie-authenticated API is an invitation to
+confused-deputy bugs. Keeping the exchange server-side means the browser only ever holds
+opaque cookies that page scripts cannot read, and CSRF is answered by the double submit
+rather than by a CORS policy nobody tests.
+
+**Consequence:** the web is a BFF (backend for frontend) and its route handlers are part
+of the security surface; they are tested by the Playwright flows rather than by unit
+tests. `TURNSTILE_SITE_KEY` is required in production and refuses Cloudflare test keys,
+and in development/CI the widget is rendered with the test key while the form carries the
+token the API's test verifier accepts, so the flow does not depend on Cloudflare being
+reachable from a CI runner.
+
+**CSP note:** the policy allows `'unsafe-inline'` for scripts because Next's bootstrap is
+inline; moving to a nonce-based policy belongs with the edge proxy work in the hardening
+phase and is listed as a known gap.

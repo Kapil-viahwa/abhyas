@@ -19,6 +19,14 @@ export interface SessionListResult {
   readonly sessions: readonly SessionSummary[];
 }
 
+export interface ProfileResult {
+  readonly id: string;
+  readonly email: string;
+  readonly fullName: string;
+  readonly roleCode: string;
+  readonly permissions: readonly string[];
+}
+
 export interface SessionRevokedResult {
   readonly status: 'REVOKED';
 }
@@ -50,6 +58,26 @@ export class AccountService {
   async listSessions(user: AuthenticatedUser): Promise<SessionListResult> {
     const sessions = await this.sessions.listForUser(user.id, user.sessionId);
     return { sessions };
+  }
+
+  /** Who the caller is. The one endpoint a server-rendered page needs before it can render. */
+  async profile(user: AuthenticatedUser): Promise<ProfileResult> {
+    const row = await this.prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, email: true, fullName: true, role: { select: { code: true } } },
+    });
+
+    if (!row) {
+      throw new NotFoundException('Account not found');
+    }
+
+    return {
+      id: row.id,
+      email: row.email,
+      fullName: row.fullName,
+      roleCode: row.role.code,
+      permissions: [...user.permissions].sort(),
+    };
   }
 
   async revokeSession(

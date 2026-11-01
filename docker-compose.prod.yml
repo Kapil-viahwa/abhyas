@@ -89,6 +89,8 @@ services:
     environment:
       NODE_ENV: production
       API_INTERNAL_URL: http://api:3001
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY is required}
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
       - '${WEB_PORT:-3000}:3000'

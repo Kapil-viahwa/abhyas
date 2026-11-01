@@ -13,6 +13,7 @@ import {
   type DeactivatedResult,
   type OtherSessionsRevokedResult,
   type PasswordChangedResult,
+  type ProfileResult,
   type SessionListResult,
   type SessionRevokedResult,
 } from './account.service';
@@ -26,6 +27,15 @@ import { requestMeta, type RequestLike } from './request';
 @Controller('v1/auth')
 export class AccountController {
   constructor(@Inject(AccountService) private readonly account: AccountService) {}
+
+  @Authenticated()
+  @Get('me')
+  @ApiOperation({ summary: 'Who the caller is, with the role and the permissions currently granted' })
+  @ApiOkResponse({ description: 'Profile, role code and the permission codes resolved from the database' })
+  @ApiUnauthorizedResponse({ description: 'No live session behind this token' })
+  async me(@CurrentUser() user: AuthenticatedUser): Promise<ProfileResult> {
+    return this.account.profile(user);
+  }
 
   @Authenticated()
   @Get('sessions')
