@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { callWithSession } from '../../../../lib/authenticated-write';
 import { errorRedirect, guardFormPost, redirectTo, stringField } from '../../../../lib/route-handler';
-import { clearSessionCookies, setSessionCookies } from '../../../../lib/session';
+import { clearSessionCookies } from '../../../../lib/session';
 import { apiCall, errorMessage } from '../../../../lib/upstream';
 
 export const dynamic = 'force-dynamic';
