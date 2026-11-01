@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   parseChangePasswordBody,
+  parseCreateEditorBody,
   parseDeactivateBody,
+  parseEditorFlagsBody,
   parseEmail,
   parseEmailToken,
   parseForgotPasswordBody,
@@ -14,6 +16,8 @@ import {
   parseRegisterBody,
   parseResetPasswordBody,
   parseRoleChangeBody,
+  parseUserListQuery,
+  parseUserStatusBody,
   parseUuid,
 } from './validation';
 
@@ -126,5 +130,62 @@ describe('auth input validation', () => {
     expect(() => parseRoleChangeBody({})).toThrow(/Choose a role/);
     expect(() => parseRoleChangeBody({ roleCode: 'editor!' })).toThrow(/Choose a role/);
     expect(() => parseRoleChangeBody({ roleCode: 'E' })).toThrow(/Choose a role/);
+  });
+});
+
+describe('user administration input validation', () => {
+  it('clamps paging and keeps what is returned strict', () => {
+    const query = parseUserListQuery({ search: '  asha  ', role: 'editor', status: 'suspended', page: '3', pageSize: '500' });
+
+    expect(query).toEqual({
+      search: 'asha',
+      roleCode: 'EDITOR',
+      status: 'SUSPENDED',
+      page: 3,
+      pageSize: 50,
+    });
+
+    expect(parseUserListQuery({}).page).toBe(1);
+    expect(parseUserListQuery({}).pageSize).toBe(20);
+    expect(parseUserListQuery({ page: '0' }).page).toBe(1);
+    expect(() => parseUserListQuery({ status: 'deleted' })).toThrow(BadRequestException);
+    expect(() => parseUserListQuery({ role: 'root' })).toThrow(BadRequestException);
+  });
+
+  it('treats a missing editor flag as an explicit denial', () => {
+    const flags = parseEditorFlagsBody({ manage_questions: true });
+
+    expect(flags).toEqual({ manage_questions: true, manage_tests: false, publish_tests: false });
+    expect(parseEditorFlagsBody({ manage_questions: 'true', publish_tests: 'on' })).toEqual({
+      manage_questions: false,
+      manage_tests: false,
+      publish_tests: false,
+    });
+  });
+
+  it('validates a new editor the same way a registration is validated', () => {
+    expect(() =>
+      parseCreateEditorBody({ email: 'not-an-email', fullName: 'Editor', password: 'correct-horse-9battery' }),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      parseCreateEditorBody({ email: 'editor@example.com', fullName: 'Editor', password: 'short' }),
+    ).toThrow(BadRequestException);
+
+    const input = parseCreateEditorBody({
+      email: 'Editor@Example.com',
+      fullName: '  Asha   Verma ',
+      password: 'correct-horse-9battery',
+      manage_tests: true,
+    });
+    expect(input.email).toBe('editor@example.com');
+    expect(input.fullName).toBe('Asha Verma');
+    expect(input.flags.manage_tests).toBe(true);
+  });
+
+  it('accepts only the three documented account statuses', () => {
+    expect(parseUserStatusBody({ status: 'suspended' })).toBe('SUSPENDED');
+    expect(parseUserStatusBody({ status: 'DISABLED' })).toBe('DISABLED');
+    expect(() => parseUserStatusBody({ status: 'DELETED' })).toThrow(BadRequestException);
+    expect(() => parseUserStatusBody({})).toThrow(BadRequestException);
   });
 });

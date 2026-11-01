@@ -18,6 +18,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const userId = stringField(guard.form, 'userId').trim();
+  const back = `/admin/users/${encodeURIComponent(userId)}`;
   const outcome = await callWithSession(request, (accessToken) =>
     apiCall<{ status: string }>(`/v1/admin/users/${encodeURIComponent(userId)}/role`, {
       method: 'PATCH',
@@ -33,9 +34,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const response =
-    outcome.result.status === 200
-      ? redirectTo('/admin?role=changed')
-      : errorRedirect('/admin', errorMessage(outcome.result.body));
+    outcome.result.status === 200 ? redirectTo(`${back}?role=changed`) : errorRedirect(back, errorMessage(outcome.result.body));
 
   if (outcome.tokens !== undefined) {
     setSessionCookies(response, outcome.tokens);

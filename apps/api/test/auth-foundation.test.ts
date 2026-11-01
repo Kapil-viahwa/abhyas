@@ -38,9 +38,10 @@ describe('auth foundation', () => {
       const totalPermissions = await db.client.permission.count();
       expect(byRole.get('ADMIN')).toHaveLength(totalPermissions);
 
-      expect(new Set(byRole.get('EDITOR'))).toEqual(
-        new Set(['content.read', 'content.write', 'tests.read', 'tests.write']),
-      );
+      // Since phase 3 an editor's write capability is an explicit per-editor grant, so
+      // the role itself carries only what every editor needs: the read side. The write
+      // codes are proven per account in user-management.test.ts.
+      expect(new Set(byRole.get('EDITOR'))).toEqual(new Set(['content.read', 'tests.read']));
       expect(new Set(byRole.get('USER'))).toEqual(new Set(['attempts.take']));
     });
 

@@ -1,77 +1,67 @@
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 
-import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../components/auth-shell';
+import { AdminPage } from '../../components/admin-shell';
+import { listUsers } from '../../lib/admin-api';
 import { csrfFromCookies, loadRoleSession } from '../../lib/session';
 
 export const dynamic = 'force-dynamic';
 
-interface PageProps {
-  readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
-}
-
-/**
- * Administrator area. The role check happens here, on the server, before a byte of the
- * page is sent: a student who types /admin lands back on their account page.
- */
-export default async function AdminPage({ searchParams }: PageProps): Promise<ReactElement> {
+/** The administrator's landing page: real counts from the endpoints that exist today. */
+export default async function AdminOverviewPage(): Promise<ReactElement> {
   const session = await loadRoleSession('/admin', ['ADMIN']);
   const csrf = await csrfFromCookies();
-  const params = await searchParams;
+
+  const [students, editors, admins] = await Promise.all([
+    listUsers(session.accessToken, { role: 'USER' }),
+    listUsers(session.accessToken, { role: 'EDITOR' }),
+    listUsers(session.accessToken, { role: 'ADMIN' }),
+  ]);
+
+  const tiles = [
+    { label: 'Students', value: students.total, href: '/admin/users?role=USER' },
+    { label: 'Editors', value: editors.total, href: '/admin/users?role=EDITOR' },
+    { label: 'Administrators', value: admins.total, href: '/admin/users?role=ADMIN' },
+  ];
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-12">
-      <header className="space-y-1">
-        <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Administration</p>
-        <h1 className="text-2xl font-semibold text-white">Administrator area</h1>
-        <p className="text-sm text-slate-400">
-          {session.profile.fullName} · {session.profile.roleCode}
-        </p>
-      </header>
-
-      <Notice message={params.role === 'changed' ? 'Role changed. That user was signed out everywhere.' : undefined} />
-      <FieldError message={typeof params.error === 'string' ? params.error : undefined} />
-
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-        <h2 className="text-lg font-medium text-slate-100">Change a role</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Every session held by that user ends immediately, so the new permissions take effect from the next sign-in.
-        </p>
-
-        <form action="/api/admin/role" method="post" className="mt-4 space-y-3">
-          <input type="hidden" name="csrfToken" value={csrf} />
-
-          <label className={labelClass}>
-            User id
-            <input className={inputClass} name="userId" type="text" required />
-          </label>
-
-          <label className={labelClass}>
-            Role
-            <select className={inputClass} name="roleCode" defaultValue="EDITOR">
-              <option value="USER">USER</option>
-              <option value="EDITOR">EDITOR</option>
-              <option value="ADMIN">ADMIN</option>
-            </select>
-          </label>
-
-          <button className={buttonClass} type="submit">
-            Save role
-          </button>
-        </form>
+    <AdminPage
+      csrf={csrf}
+      current="/admin"
+      title="Administrator area"
+      subtitle={`${session.profile.fullName} · ${session.profile.roleCode}`}
+    >
+      <section className="grid gap-3 sm:grid-cols-3">
+        {tiles.map((tile) => (
+          <Link
+            key={tile.label}
+            href={tile.href}
+            className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 transition hover:border-slate-600"
+          >
+            <p className="text-xs uppercase tracking-wide text-slate-500">{tile.label}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{tile.value}</p>
+          </Link>
+        ))}
       </section>
 
-      <div className="flex gap-4 text-sm">
-        <Link href="/account" className="text-sky-400 hover:text-sky-300">
-          Your account
-        </Link>
-        <form action="/api/auth/logout" method="post">
-          <input type="hidden" name="csrfToken" value={csrf} />
-          <button className={secondaryButtonClass} type="submit">
-            Sign out
-          </button>
-        </form>
-      </div>
-    </main>
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+        <h2 className="text-lg font-medium text-slate-100">People</h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Search and filter every account, create an editor with explicit capabilities, and suspend or restore an
+          account. Every write ends the sessions it invalidates and is audited.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-3 text-sm">
+          <Link href="/admin/users" className="text-sky-400 hover:text-sky-300">
+            All accounts
+          </Link>
+          <Link href="/admin/users?role=EDITOR" className="text-sky-400 hover:text-sky-300">
+            Editors
+          </Link>
+          <Link href="/admin/users/new" className="text-sky-400 hover:text-sky-300">
+            Create an editor
+          </Link>
+        </div>
+      </section>
+    </AdminPage>
   );
 }

@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
+import type { EditorFlags } from '../admin/editor-flags';
 import { passwordIssues } from './password';
 
 /**
@@ -239,3 +240,125 @@ export function parseRoleChangeBody(body: unknown): string {
   return normalised;
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Phase 3: user administration
+// ---------------------------------------------------------------------------
+
+export const USER_STATUSES = ['ACTIVE', 'SUSPENDED', 'DISABLED'] as const;
+
+export type UserStatus = (typeof USER_STATUSES)[number];
+
+export const USER_LIST_DEFAULT_PAGE_SIZE = 20;
+export const USER_LIST_MAX_PAGE_SIZE = 50;
+export const USER_SEARCH_MAX_LENGTH = 120;
+
+export interface UserListQueryInput {
+  readonly search?: string;
+  readonly roleCode?: string;
+  readonly status?: UserStatus;
+  readonly page: number;
+  readonly pageSize: number;
+}
+
+function firstString(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Array.isArray(value) && typeof value[0] === 'string') {
+    return value[0];
+  }
+  return '';
+}
+
+function parsePositiveInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const raw = firstString(value).trim();
+  if (raw === '') {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.min(Math.max(parsed, min), max);
+}
+
+/**
+ * Query parameters are clamped rather than rejected: a hand-edited URL should show a
+ * sensible page, not an error. Values that select *what* is returned are strict,
+ * because a typo there would silently widen the result.
+ */
+export function parseUserListQuery(query: Record<string, unknown>): UserListQueryInput {
+  const search = firstString(query.search).trim().slice(0, USER_SEARCH_MAX_LENGTH);
+
+  const roleRaw = firstString(query.role).trim().toUpperCase();
+  if (roleRaw !== '' && !ROLE_CODE_PATTERN.test(roleRaw)) {
+    throw new BadRequestException('Choose a valid role filter');
+  }
+
+  const statusRaw = firstString(query.status).trim().toUpperCase();
+  let status: UserStatus | undefined;
+  if (statusRaw !== '') {
+    if (!(USER_STATUSES as readonly string[]).includes(statusRaw)) {
+      throw new BadRequestException('Choose a valid status filter');
+    }
+    status = statusRaw as UserStatus;
+  }
+
+  return {
+    search: search === '' ? undefined : search,
+    roleCode: roleRaw === '' ? undefined : roleRaw,
+    status,
+    page: parsePositiveInteger(query.page, 1, 1, 10_000),
+    pageSize: parsePositiveInteger(query.pageSize, USER_LIST_DEFAULT_PAGE_SIZE, 1, USER_LIST_MAX_PAGE_SIZE),
+  };
+}
+
+export interface CreateEditorInput {
+  readonly email: string;
+  readonly fullName: string;
+  readonly password: string;
+  readonly flags: EditorFlags;
+}
+
+/** A missing flag is a denial, so every key is normalised to a boolean here. */
+export function parseEditorFlags(record: Record<string, unknown>): EditorFlags {
+  return {
+    manage_questions: record.manage_questions === true,
+    manage_tests: record.manage_tests === true,
+    publish_tests: record.publish_tests === true,
+  };
+}
+
+export function parseCreateEditorBody(body: unknown): CreateEditorInput {
+  const record = asRecord(body);
+
+  return {
+    email: parseEmail(record.email),
+    fullName: parseFullName(record.fullName),
+    password: parsePassword(record.password),
+    flags: parseEditorFlags(record),
+  };
+}
+
+export function parseEditorFlagsBody(body: unknown): EditorFlags {
+  return parseEditorFlags(asRecord(body));
+}
+
+export function parseUserStatusBody(body: unknown): UserStatus {
+  const status = asRecord(body).status;
+
+  if (typeof status !== 'string') {
+    throw new BadRequestException('Choose a status');
+  }
+
+  const normalised = status.trim().toUpperCase();
+  if (!(USER_STATUSES as readonly string[]).includes(normalised)) {
+    throw new BadRequestException('Choose a status');
+  }
+
+  return normalised as UserStatus;
+}
