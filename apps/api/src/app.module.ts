@@ -29,6 +29,8 @@ import { DATABASE_PROBE, REDIS_PROBE } from './infra/tokens';
 import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-verifier';
 import { MediaController } from './media/media.controller';
 import { MediaService } from './media/media.service';
+import { QuestionsController } from './questions/questions.controller';
+import { QuestionsService } from './questions/questions.service';
 
 @Module({
   controllers: [
@@ -39,6 +41,7 @@ import { MediaService } from './media/media.service';
     CatalogController,
     PublicCatalogController,
     MediaController,
+    QuestionsController,
   ],
   providers: [
     { provide: DATABASE_PROBE, useClass: DatabaseService },
@@ -79,6 +82,7 @@ import { MediaService } from './media/media.service';
       useFactory: () => createObjectStorage(loadConfig(process.env)),
     },
     MediaService,
+    QuestionsService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
