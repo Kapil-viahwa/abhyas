@@ -52,6 +52,33 @@ async function signIn(page: Page, email: string, password: string): Promise<void
   await page.click('button[type="submit"]');
 }
 
+/**
+ * A fixture, not behaviour under test: the flow needs the same account to hold each
+ * role in turn, and the API has no admin seed in the e2e stack. One statement against
+ * the stack's own database, so no test-only route is added to the application.
+ */
+function setRole(email: string, roleCode: 'USER' | 'EDITOR' | 'ADMIN'): void {
+  execFileSync(
+    'docker',
+    [
+      'compose',
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '-U',
+      'abhyas',
+      '-d',
+      'abhyas',
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-c',
+      `update users set role_id = (select id from roles where code = '${roleCode}') where email = '${email}'`,
+    ],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+}
+
 test.describe.serial('authentication flows', () => {
   const email = `e2e-${randomUUID().slice(0, 8)}@example.com`;
 
@@ -169,6 +196,32 @@ test.describe.serial('authentication flows', () => {
 
     await signIn(page, email, PASSWORD);
     await expect(page).toHaveURL(/\/account/);
+  });
+
+  test('lands each role on its own page and keeps the other areas closed', async ({ browser }) => {
+    for (const [role, landing] of [
+      ['EDITOR', '/editor'],
+      ['ADMIN', '/admin'],
+    ] as const) {
+      setRole(email, role);
+
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      await signIn(page, email, PASSWORD);
+      await expect(page).toHaveURL(new RegExp(`${landing}$`));
+
+      if (role === 'EDITOR') {
+        // An editor may not open the administrator area, which the server refuses
+        // before the page is rendered.
+        await page.goto('/admin');
+        await expect(page).toHaveURL(/\/account\?denied=1/);
+      }
+
+      await context.close();
+    }
+
+    // Leave the account as a student for the checks that follow.
+    setRole(email, 'USER');
   });
 
   test('keeps every token out of the browser', async ({ page, context }) => {
