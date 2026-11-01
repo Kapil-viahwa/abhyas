@@ -15,6 +15,7 @@
     "test:unit": "pnpm run build:shared && pnpm -r run test",
     "test:db": "pnpm --filter @abhyas/api run test:db",
     "test:e2e": "playwright test",
+    "audit:ci": "node scripts/audit-report.mjs",
     "db:migrate": "pnpm --filter @abhyas/api exec prisma migrate deploy",
     "compose:validate": "node scripts/validate-compose-prod.mjs",
     "compose:up": "docker compose up -d --build --wait",
