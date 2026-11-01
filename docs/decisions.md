@@ -275,3 +275,22 @@ branch it was dispatched for.
 package manager. The alternative — `--no-frozen-lockfile` in CI — removes the guarantee that CI
 builds exactly the tree that was reviewed. Keeping it manual and off `main` means no dependency can
 drift into the release branch without a reviewable commit.
+
+
+## 0025 — Opaque access tokens, not JWTs
+
+**Status:** accepted · **Phase:** 2a
+
+An access token is 32 random bytes, returned once, stored only as a SHA-256 hash in
+`sessions.access_token_hash`, and valid for 15 minutes. The guard looks the hash up on every
+request and rejects the token as soon as the session row is revoked, rotated or expired.
+
+**Why not a JWT:** a signed token is valid until it expires, wherever it is presented. Every rule in
+this phase — logout, password change, password reset, deactivation, role change — must kill access
+*immediately*, and a stateless token cannot do that without a revocation list, which is a session
+lookup with extra steps. A hand-rolled HMAC signer would also be exactly the kind of crypto this
+repository should not invent.
+
+**Consequence:** one indexed lookup per request. No permission is cached in a token: role and
+permissions come from `role_permissions` plus `user_permissions` on every request, so a revoked role
+or a suspended account takes effect on the next call.
