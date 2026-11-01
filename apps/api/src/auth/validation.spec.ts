@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { describe, expect, it } from 'vitest';
 
-import { parseEmail, parseEmailToken, parseFullName, parsePassword, parseRegisterBody } from './validation';
+import { parseEmail, parseEmailToken, parseFullName, parseLoginBody, parsePassword, parseRegisterBody } from './validation';
+
+const TURNSTILE_TOKEN = 'abhyas-test-turnstile-token';
 
 describe('auth input validation', () => {
   it('normalises an email address and refuses anything that is not one', () => {
@@ -34,5 +36,16 @@ describe('auth input validation', () => {
     expect(parseEmailToken({ token: ' abc ' })).toBe('abc');
     expect(() => parseEmailToken({})).toThrow(BadRequestException);
     expect(() => parseEmailToken([])).toThrow(BadRequestException);
+  });
+
+  it('accepts any non-empty password on login and never states the policy', () => {
+    expect(parseLoginBody({ email: 'a@example.com', password: 'short', turnstileToken: TURNSTILE_TOKEN })).toEqual({
+      email: 'a@example.com',
+      password: 'short',
+      turnstileToken: TURNSTILE_TOKEN,
+    });
+    expect(() => parseLoginBody({ email: 'a@example.com', turnstileToken: TURNSTILE_TOKEN })).toThrow(
+      /Enter your password/,
+    );
   });
 });

@@ -14,7 +14,17 @@ export const MAX_FULL_NAME_LENGTH = 80;
 export const MAX_EMAIL_LENGTH = 254;
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/;
+
+/** Control characters are invisible in a name and a classic log-injection trick. */
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function asRecord(body: unknown): Record<string, unknown> {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -45,7 +55,7 @@ export function parseFullName(value: unknown): string {
   if (
     name.length < MIN_FULL_NAME_LENGTH ||
     name.length > MAX_FULL_NAME_LENGTH ||
-    CONTROL_CHARACTERS.test(name)
+    hasControlCharacter(name)
   ) {
     throw new BadRequestException(
       `Enter your full name (${MIN_FULL_NAME_LENGTH}-${MAX_FULL_NAME_LENGTH} characters)`,
@@ -100,3 +110,27 @@ export function parseRegisterBody(body: unknown): RegisterInput {
     turnstileToken: parseTurnstileToken(record.turnstileToken),
   };
 }
+
+export interface LoginInput {
+  readonly email: string;
+  readonly password: string;
+  readonly turnstileToken: string;
+}
+
+export function parseLoginBody(body: unknown): LoginInput {
+  const record = asRecord(body);
+  const password = record.password;
+
+  // The policy is deliberately not re-checked here: a sign-in must not explain
+  // which passwords are acceptable, and an old account may hold any value.
+  if (typeof password !== 'string' || password === '') {
+    throw new BadRequestException('Enter your password');
+  }
+
+  return {
+    email: parseEmail(record.email),
+    password,
+    turnstileToken: parseTurnstileToken(record.turnstileToken),
+  };
+}
+
