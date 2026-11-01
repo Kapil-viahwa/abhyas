@@ -1,0 +1,415 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Keyed by event as well as ref: a push and the pull-request run for the same
+  # commit are separate requests and must not cancel each other.
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Used by `prisma generate` (which never connects) and by the database job.
+  DATABASE_URL: postgresql://abhyas:abhyas@localhost:5432/abhyas
+  REDIS_URL: redis://localhost:6379
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Lint
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm lint 2>&1 | tee "$RUNNER_TEMP/lint.log"
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Typecheck
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm typecheck 2>&1 | tee "$RUNNER_TEMP/typecheck.log"
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  unit:
+    name: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Unit tests
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test:unit 2>&1 | tee "$RUNNER_TEMP/unit.log"
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  database:
+    name: database
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: abhyas
+          POSTGRES_PASSWORD: abhyas
+          POSTGRES_DB: abhyas
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U abhyas -d abhyas"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Migration test against Postgres 16
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm test:db 2>&1 | tee "$RUNNER_TEMP/database.log"
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker:
+    name: docker
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build images
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose build 2>&1 | tee "$RUNNER_TEMP/docker-build.log"
+      - name: Validate production compose
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/validate-compose-prod.mjs 2>&1 | tee "$RUNNER_TEMP/compose-validate.log"
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  compose-smoke:
+    name: compose-smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Bring the stack up and wait for health
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose up -d --build --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-up.log"
+          docker compose ps | tee "$RUNNER_TEMP/compose-ps.log"
+      - name: Curl the health endpoint and the two front doors
+        shell: bash
+        run: |
+          set -o pipefail
+          curl -fsS http://localhost:3001/health | tee "$RUNNER_TEMP/health.log"
+          curl -fsS http://localhost:3001/api/docs-json -o /dev/null
+          curl -fsS http://localhost:3000/ -o /dev/null
+      - name: Collect API container logs
+        if: failure()
+        shell: bash
+        run: |
+          docker compose logs --no-color api > "$RUNNER_TEMP/api-logs.log" 2>&1 || true
+          echo "### API container log (last 150 lines)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 150 "$RUNNER_TEMP/api-logs.log" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 150 "$RUNNER_TEMP/api-logs.log"
+      - name: Tear the stack down
+        if: always()
+        shell: bash
+        run: |
+          docker compose logs --no-color > "$RUNNER_TEMP/compose-logs.log" 2>&1 || true
+          docker compose down -v > "$RUNNER_TEMP/compose-down.log" 2>&1 || true
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Install Playwright browsers
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm exec playwright install --with-deps chromium 2>&1 | tee "$RUNNER_TEMP/playwright-install.log"
+      - name: Bring the stack up and wait for health
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose up -d --build --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-up.log"
+      - name: Run Playwright
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm exec playwright test 2>&1 | tee "$RUNNER_TEMP/playwright.log"
+      - name: Collect API container logs
+        if: failure()
+        shell: bash
+        run: |
+          docker compose logs --no-color api > "$RUNNER_TEMP/api-logs.log" 2>&1 || true
+          echo "### API container log (last 150 lines)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 150 "$RUNNER_TEMP/api-logs.log" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 150 "$RUNNER_TEMP/api-logs.log"
+      - name: Tear the stack down
+        if: always()
+        shell: bash
+        run: |
+          docker compose logs --no-color > "$RUNNER_TEMP/compose-logs.log" 2>&1 || true
+          docker compose down -v > "$RUNNER_TEMP/compose-down.log" 2>&1 || true
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # gitleaks-action lists the pull request's commits to scope its scan, which
+    # needs pull-requests: read. Without it the action fails with
+    # "Resource not accessible by integration" (403) on /pulls/{n}/commits.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@44c470ffc35caa8b1eb3e8012ca53c2f9bea4eb5 # v2.3.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  audit:
+    name: audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Audit dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm audit:ci 2>&1 | tee "$RUNNER_TEMP/audit.log"
+      - name: Failure summary
+        if: failure()
+        run: node scripts/ci-failure-summary.mjs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: logs-${{ github.job }}
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7

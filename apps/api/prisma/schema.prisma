@@ -1,0 +1,23 @@
+generator client {
+  provider      = "prisma-client-js"
+  // The images are node:22-bookworm-slim (Debian 12, OpenSSL 3). Declaring the
+  // target stops the CLI from guessing openssl-1.1.x, whose engine cannot load.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Phase 0 only: a trivial table so the migration pipeline has something real to apply.
+/// Future phases add their own tables in their own migrations.
+model AppMetadata {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_metadata")
+}
