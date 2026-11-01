@@ -27,6 +27,26 @@ export class EmailDeliveryError extends Error {
   }
 }
 
+export interface CapturedEmail extends OutgoingEmail {
+  readonly capturedAt: Date;
+}
+
+const CAPTURE_LIMIT = 20;
+const captured: CapturedEmail[] = [];
+
+/**
+ * The last messages the console outbox printed. This is what lets a development
+ * run — and the HTTP test — follow the link that was "sent" without a mail server
+ * or a test-only bypass of the real path.
+ */
+export function capturedOutbox(): readonly CapturedEmail[] {
+  return captured;
+}
+
+export function clearCapturedOutbox(): void {
+  captured.length = 0;
+}
+
 /**
  * Development, test and CI only. Printing the message is what makes the flow
  * usable locally: the verification link appears in the API log, which is where a
@@ -42,6 +62,10 @@ export class ConsoleEmailSender implements EmailSender {
   }
 
   async send(email: OutgoingEmail): Promise<void> {
+    captured.push({ ...email, capturedAt: new Date() });
+    if (captured.length > CAPTURE_LIMIT) {
+      captured.splice(0, captured.length - CAPTURE_LIMIT);
+    }
     this.logger.log(`to=${email.to} subject="${email.subject}"\n${email.text}`);
   }
 }

@@ -24,6 +24,7 @@ const requiredEnv = {
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
+  WEB_URL: 'https://abhyas.example.com',
 };
 
 function renderConfig(env) {
@@ -104,6 +105,7 @@ for (const [variable, label] of [
   ['AUTH_SECRET', 'AUTH_SECRET'],
   ['TURNSTILE_SECRET_KEY', 'TURNSTILE_SECRET_KEY'],
   ['MIGRATION_DATABASE_URL', 'MIGRATION_DATABASE_URL'],
+  ['WEB_URL', 'WEB_URL'],
 ]) {
   let refused = false;
   try {

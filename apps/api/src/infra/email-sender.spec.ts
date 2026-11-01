@@ -1,14 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { ConsoleEmailSender, EmailDeliveryError, SmtpEmailSender, createEmailSender } from './email-sender';
+import {
+  ConsoleEmailSender,
+  EmailDeliveryError,
+  SmtpEmailSender,
+  capturedOutbox,
+  clearCapturedOutbox,
+  createEmailSender,
+} from './email-sender';
 
 const message = { to: 'student@example.com', subject: 'Verify your email', text: 'https://example.test/verify' };
 
 describe('email sender', () => {
   it('prints the message to the outbox in development and CI', async () => {
+    clearCapturedOutbox();
     const sender = new ConsoleEmailSender('test');
 
     await expect(sender.send(message)).resolves.toBeUndefined();
+    expect(capturedOutbox().at(-1)).toMatchObject({ to: 'student@example.com', subject: 'Verify your email' });
   });
 
   it('refuses the console outbox in production', () => {

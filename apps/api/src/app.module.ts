@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 
+import { AdminController } from './admin/admin.controller';
+import { AuthController } from './auth/auth.controller';
 import { AuthGuard } from './auth/auth.guard';
+import { AuthService } from './auth/auth.service';
 import { PermissionsService } from './auth/permissions.service';
 import { SESSIONS_SERVICE, SessionsService } from './auth/sessions.service';
 import { loadConfig } from './config/config';
@@ -15,7 +18,7 @@ import { DATABASE_PROBE, REDIS_PROBE } from './infra/tokens';
 import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-verifier';
 
 @Module({
-  controllers: [HealthController],
+  controllers: [HealthController, AuthController, AdminController],
   providers: [
     { provide: DATABASE_PROBE, useClass: DatabaseService },
     { provide: REDIS_PROBE, useClass: RedisService },
@@ -42,6 +45,7 @@ import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-v
       },
     },
     RateLimiter,
+    AuthService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.
     { provide: APP_GUARD, useClass: AuthGuard },
   ],

@@ -339,3 +339,23 @@ surface that is only protected by a guard still ships the whole map to anyone wh
 
 **Consequence:** if a future phase needs a machine-readable contract in production, it gets its own
 authenticated, admin-only route rather than re-enabling this one.
+
+
+## 0028 — `WEB_URL` comes from the environment, never from a request header
+
+**Status:** accepted · **Phase:** 2a
+
+The API builds the verification link from `WEB_URL`, read once when the auth service is
+constructed. In production the value is required and must be `https`; in development it defaults to
+`http://localhost:3000`. The console outbox keeps the last twenty messages in memory as well, so a
+development run and the HTTP test can follow the link the mail contained without a mail server and
+without a test-only bypass of the real path.
+
+**Why:** the alternative — deriving the base URL from the incoming `Host` or `X-Forwarded-Host`
+header — hands an attacker control of the domain in a mail that also carries a bearer token.
+Building the link from configuration keeps the token pointed at a host the operator chose. Requiring
+`https` in production keeps the token off plaintext links, and requiring the variable at all means a
+deployment cannot silently mail `localhost` links to students.
+
+**Consequence:** a production boot without `WEB_URL`, or with an `http` one, fails before the first
+request, and `docker-compose.prod.yml` refuses to render without it.

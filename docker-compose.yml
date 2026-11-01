@@ -43,6 +43,8 @@ services:
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       SMS_PROVIDER: fake
       EMAIL_PROVIDER: console
+      # Public base URL of the web app, used for links in email.
+      WEB_URL: http://localhost:3000
       ALLOW_DEV_LOGIN: 'true'
     ports:
       - '3001:3001'

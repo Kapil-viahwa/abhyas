@@ -1,15 +1,17 @@
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
 
+import { AdminController } from '../admin/admin.controller';
 import { HealthController } from '../health/health.controller';
 import { IS_PUBLIC_KEY, AUTHENTICATED_KEY, PERMISSIONS_KEY } from './access';
+import { AuthController } from './auth.controller';
 
 /**
  * Every controller the application module registers. Adding a controller means adding
  * it here, so the registry cannot silently fall behind. The test then refuses any route
  * handler that declares neither @Public(), @Authenticated() nor @RequirePermissions(...).
  */
-export const HTTP_CONTROLLERS = [HealthController];
+export const HTTP_CONTROLLERS = [HealthController, AuthController, AdminController];
 
 type Handler = (...args: never[]) => unknown;
 

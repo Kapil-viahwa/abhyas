@@ -58,6 +58,7 @@ services:
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?TURNSTILE_SECRET_KEY is required}
       SMS_PROVIDER: ${SMS_PROVIDER:?SMS_PROVIDER is required}
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:?EMAIL_PROVIDER is required}
+      WEB_URL: ${WEB_URL:?WEB_URL is required}
     expose:
       - '3001'
     depends_on:
