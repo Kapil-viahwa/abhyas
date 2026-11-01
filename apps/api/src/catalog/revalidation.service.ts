@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 
 import { loadConfig } from '../config/config';
 import { webUrlFor } from '../config/links';

@@ -37,7 +37,7 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
   }
 
   try {
-    const init: RequestInit & { next?: { tags: readonly string[] } } = {
+    const init: RequestInit & { next?: { tags?: string[] } } = {
       method: options.method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -45,7 +45,7 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
 
     if (options.tags !== undefined && options.tags.length > 0) {
       // Cached under a tag so /api/revalidate can drop it after a catalog write.
-      init.next = { tags: options.tags };
+      init.next = { tags: [...options.tags] };
     } else {
       init.cache = 'no-store';
     }

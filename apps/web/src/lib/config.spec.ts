@@ -56,9 +56,24 @@ describe('web configuration', () => {
       WEB_URL: 'https://abhyas.example.com',
       API_INTERNAL_URL: 'http://api:3001',
       TURNSTILE_SITE_KEY: 'live-site-key',
+      REVALIDATE_SECRET: 'r'.repeat(32),
     });
 
     expect(config.turnstileTestMode).toBe(false);
     expect(config.turnstileSiteKey).toBe('live-site-key');
+    expect(config.revalidateSecret).toBe('r'.repeat(32));
+  });
+
+  it('requires a revalidation secret of a usable length in production', () => {
+    const base = {
+      NODE_ENV: 'production',
+      WEB_URL: 'https://abhyas.example.com',
+      TURNSTILE_SITE_KEY: 'live-site-key',
+    };
+
+    expect(() => webConfig(base)).toThrow(/REVALIDATE_SECRET is required in production/);
+    expect(() => webConfig({ ...base, REVALIDATE_SECRET: 'short' })).toThrow(
+      /REVALIDATE_SECRET must be at least 16 characters/,
+    );
   });
 });

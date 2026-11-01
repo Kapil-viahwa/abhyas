@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 
 import { AdminController } from './admin/admin.controller';
+import { AuditService } from './admin/audit.service';
+import { DashboardService } from './admin/dashboard.service';
+import { SettingsService } from './admin/settings.service';
 import { AdminUsersService } from './admin/users.service';
 import { AccountController } from './auth/account.controller';
 import { AccountService } from './auth/account.service';
@@ -55,6 +58,9 @@ import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-v
     AuthService,
     AccountService,
     AdminUsersService,
+    SettingsService,
+    AuditService,
+    DashboardService,
     CatalogRevalidationService,
     CatalogService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.

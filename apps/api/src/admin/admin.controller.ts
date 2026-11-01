@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   Inject,
   Param,
@@ -22,6 +23,10 @@ import {
 import { CurrentUser, RequirePermissions, type AuthenticatedUser } from '../auth/access';
 import { requestMeta, type RequestLike } from '../auth/request';
 import { parseUserListQuery } from '../auth/validation';
+import { AuditService, type AuditPage } from './audit.service';
+import { DashboardService, type DashboardCounts } from './dashboard.service';
+import { parseAuditQuery } from './operations.validation';
+import { SettingsService, type SettingRow } from './settings.service';
 import {
   AdminUsersService,
   type RoleChangeResult,
@@ -33,13 +38,18 @@ import {
  * Administration.
  *
  * Every route states the permission it needs, so the matrix is enforced by the one
- * guard rather than by a role check inside a handler. An editor holds neither
- * `users.read` nor `users.write`, so every route below is a 403 for them.
+ * guard rather than by a role check inside a handler. An editor holds none of these
+ * permissions, so every route below is a 403 for them.
  */
 @ApiTags('admin')
 @Controller('v1/admin')
 export class AdminController {
-  constructor(@Inject(AdminUsersService) private readonly users: AdminUsersService) {}
+  constructor(
+    @Inject(AdminUsersService) private readonly users: AdminUsersService,
+    @Inject(SettingsService) private readonly settings: SettingsService,
+    @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(DashboardService) private readonly dashboard: DashboardService,
+  ) {}
 
   @RequirePermissions('users.read')
   @Get('ping')
@@ -47,6 +57,14 @@ export class AdminController {
   @ApiOkResponse({ description: 'The caller may administer users' })
   ping(): { status: 'ok' } {
     return { status: 'ok' };
+  }
+
+  @RequirePermissions('users.read')
+  @Get('dashboard')
+  @ApiOperation({ summary: 'Real counts of what the platform holds today' })
+  @ApiOkResponse({ description: 'Users, editors, live sessions, categories and exams' })
+  async dashboardCounts(): Promise<DashboardCounts> {
+    return this.dashboard.counts();
   }
 
   @RequirePermissions('users.read')
@@ -122,5 +140,51 @@ export class AdminController {
     @Req() request: RequestLike,
   ): Promise<RoleChangeResult> {
     return this.users.changeRole(actor, id, body, requestMeta(request));
+  }
+
+  @RequirePermissions('settings.read')
+  @Get('settings')
+  @ApiOperation({ summary: 'Every platform setting, with its type and bounds' })
+  @ApiOkResponse({ description: 'The settings as the platform stores them' })
+  async listSettings(): Promise<{ settings: readonly SettingRow[] }> {
+    return { settings: await this.settings.list() };
+  }
+
+  @RequirePermissions('settings.write')
+  @Patch('settings/:key')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Change one setting, within the bounds the row carries' })
+  @ApiOkResponse({ description: 'The setting as it now stands' })
+  @ApiForbiddenResponse({ description: 'The caller does not hold settings.write' })
+  async updateSetting(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Param('key') key: string,
+    @Body() body: unknown,
+    @Req() request: RequestLike,
+  ): Promise<SettingRow> {
+    return this.settings.update(actor, key, body, requestMeta(request));
+  }
+
+  @RequirePermissions('audit.read')
+  @Get('audit')
+  @ApiOperation({ summary: 'Search the audit trail by actor, action and date range' })
+  @ApiOkResponse({ description: 'One page of audit rows, newest first' })
+  async searchAudit(@Query() query: Record<string, unknown>): Promise<AuditPage> {
+    return this.audit.search(parseAuditQuery(query));
+  }
+
+  @RequirePermissions('audit.read')
+  @Get('audit/export')
+  @Header('content-type', 'text/csv; charset=utf-8')
+  @Header('content-disposition', 'attachment; filename="abhyas-audit.csv"')
+  @ApiOperation({ summary: 'Export what the same filters show as CSV; the export is audited' })
+  @ApiOkResponse({ description: 'A CSV document' })
+  async exportAudit(
+    @CurrentUser() actor: AuthenticatedUser,
+    @Query() query: Record<string, unknown>,
+    @Req() request: RequestLike,
+  ): Promise<string> {
+    const result = await this.audit.exportCsv(actor, parseAuditQuery(query), requestMeta(request));
+    return result.csv;
   }
 }

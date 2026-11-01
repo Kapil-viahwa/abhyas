@@ -20,7 +20,6 @@ import {
   parseExamBody,
   parseSubjectBody,
   parseTopicBody,
-  type CatalogUpdateInput,
 } from './validation';
 
 export interface CategoryNode {

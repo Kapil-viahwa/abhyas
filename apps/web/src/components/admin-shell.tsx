@@ -11,8 +11,9 @@ export function AdminNav({ csrf, current }: { readonly csrf: string; readonly cu
   const links = [
     { href: '/admin', label: 'Overview' },
     { href: '/admin/users', label: 'Users' },
-    { href: '/admin/users/new', label: 'New editor' },
     { href: '/admin/catalog', label: 'Catalog' },
+    { href: '/admin/settings', label: 'Settings' },
+    { href: '/admin/audit', label: 'Audit' },
   ];
 
   return (
