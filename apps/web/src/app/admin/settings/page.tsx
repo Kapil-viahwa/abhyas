@@ -1,9 +1,9 @@
 import type { ReactElement } from 'react';
 
-import { AdminPage } from '../../components/admin-shell';
-import { FieldError, Notice, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
-import { listSettings, settingValue } from '../../lib/operations-api';
-import { csrfFromCookies, loadRoleSession } from '../../lib/session';
+import { AdminPage } from '../../../components/admin-shell';
+import { FieldError, Notice, buttonClass, inputClass, labelClass } from '../../../components/auth-shell';
+import { listSettings, settingValue } from '../../../lib/operations-api';
+import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +11,7 @@ interface PageProps {
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-function bounds(setting: { minInt: number | null; maxInt: number | null }): string {
+function bounds(setting: { readonly minInt: number | null; readonly maxInt: number | null }): string {
   if (setting.minInt === null && setting.maxInt === null) {
     return 'no bounds';
   }

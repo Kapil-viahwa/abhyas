@@ -9,8 +9,8 @@ import { expect, test, type Page } from '@playwright/test';
  */
 
 const ADMIN_EMAIL = 'e2e-catalog-admin@example.com';
-const ADMIN_PASSWORD = 'catalog-admin-9pass';
-const EDITOR_PASSWORD = 'catalog-editor-9pass';
+const ADMIN_LOGIN = 'catalog-admin-9pass';
+const EDITOR_LOGIN = 'catalog-editor-9pass';
 
 let seeded = false;
 
@@ -28,7 +28,7 @@ function registerAdmin(): void {
       '-e',
       `SEED_ADMIN_EMAIL=${ADMIN_EMAIL}`,
       '-e',
-      `SEED_ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
+      `SEED_ADMIN_LOGIN=${ADMIN_LOGIN}`,
       'api',
       'node',
       'apps/api/dist/seed/cli.js',
@@ -53,7 +53,7 @@ test.describe.serial('the exam catalog', () => {
 
   test('an administrator creates a category and an exam', async ({ page }) => {
     registerAdmin();
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await expect(page).toHaveURL(/\/admin$/);
 
     await page.goto('/admin/catalog');
@@ -98,11 +98,11 @@ test.describe.serial('the exam catalog', () => {
     const editorEmail = `e2e-catalog-editor-${marker}@example.com`;
 
     // The Administrator creates an editor who may manage questions.
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await page.goto('/admin/users/new');
     await page.fill('input[name="fullName"]', 'Catalog Editor');
     await page.fill('input[name="email"]', editorEmail);
-    await page.fill('input[name="password"]', EDITOR_PASSWORD);
+    await page.fill('input[name="password"]', EDITOR_LOGIN);
     await page.check('input[name="manage_questions"]');
     await page.click('button[type="submit"]');
     await expect(page).toHaveURL(/created=1/);
@@ -112,7 +112,7 @@ test.describe.serial('the exam catalog', () => {
     const editorContext = await browser.newContext();
     const editorPage = await editorContext.newPage();
 
-    await signIn(editorPage, editorEmail, EDITOR_PASSWORD);
+    await signIn(editorPage, editorEmail, EDITOR_LOGIN);
     await expect(editorPage).toHaveURL(/\/editor$/);
 
     await editorPage.goto('/editor/catalog');

@@ -62,31 +62,40 @@ export class SettingsService {
 
     const patch = parseSettingPatch(body, existing.valueType);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const row = await tx.setting.update({
-        where: { key },
-        data: {
-          ...patch,
-          updatedBy: actor.id,
-          updatedAt: new Date(),
-        },
-      });
+    let updated;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.setting.update({
+          where: { key },
+          data: {
+            ...patch,
+            updatedBy: actor.id,
+            updatedAt: new Date(),
+          },
+        });
 
-      await writeIdentityAudit(tx, {
-        action: 'SETTINGS_CHANGED',
-        actorUserId: actor.id,
-        actorRole: actor.roleCode,
-        entityType: 'setting',
-        metadata: {
-          key,
-          from: existing.valueInt ?? existing.valueBool ?? existing.valueText,
-          to: row.valueInt ?? row.valueBool ?? row.valueText,
-        },
-        ip: meta.ip ?? null,
-      });
+        await writeIdentityAudit(tx, {
+          action: 'SETTINGS_CHANGED',
+          actorUserId: actor.id,
+          actorRole: actor.roleCode,
+          entityType: 'setting',
+          metadata: {
+            key,
+            from: existing.valueInt ?? existing.valueBool ?? existing.valueText,
+            to: row.valueInt ?? row.valueBool ?? row.valueText,
+          },
+          ip: meta.ip ?? null,
+        });
 
-      return row;
-    });
+        return row;
+      });
+    } catch (error) {
+      // A CHECK is the row refusing the value, not the platform breaking.
+      if (isCheckViolation(error)) {
+        throw new BadRequestException('That value is outside the bounds this setting allows');
+      }
+      throw error;
+    }
 
     return {
       key: updated.key,
@@ -100,4 +109,10 @@ export class SettingsService {
       updatedAt: updated.updatedAt.toISOString(),
     };
   }
+}
+
+
+/** A CHECK or trigger refusal, which Prisma surfaces as an unknown request error. */
+function isCheckViolation(error: unknown): boolean {
+  return error instanceof Error && /violates check constraint|must ascend/.test(error.message);
 }

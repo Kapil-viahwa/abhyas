@@ -13,8 +13,8 @@ import { expect, test, type Page } from '@playwright/test';
  */
 
 const ADMIN_EMAIL = 'e2e-admin@example.com';
-const ADMIN_PASSWORD = 'administrator-9pass';
-const EDITOR_PASSWORD = 'editorial-9pass';
+const ADMIN_LOGIN = 'administrator-9pass';
+const EDITOR_LOGIN = 'editorial-9pass';
 
 let seeded = false;
 
@@ -32,7 +32,7 @@ function seedAdmin(): void {
       '-e',
       `SEED_ADMIN_EMAIL=${ADMIN_EMAIL}`,
       '-e',
-      `SEED_ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
+      `SEED_ADMIN_LOGIN=${ADMIN_LOGIN}`,
       'api',
       'node',
       'apps/api/dist/seed/cli.js',
@@ -56,13 +56,13 @@ test.describe.serial('administration', () => {
   test('an administrator creates an editor with explicit capability', async ({ page }) => {
     seedAdmin();
 
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await expect(page).toHaveURL(/\/admin$/);
 
     await page.goto('/admin/users/new');
     await page.fill('input[name="fullName"]', 'E2E Editor');
     await page.fill('input[name="email"]', editorEmail);
-    await page.fill('input[name="password"]', EDITOR_PASSWORD);
+    await page.fill('input[name="password"]', EDITOR_LOGIN);
     await page.check('input[name="manage_questions"]');
 
     await page.click('button[type="submit"]');
@@ -76,7 +76,7 @@ test.describe.serial('administration', () => {
 
   test('the user list finds the new editor through the search field', async ({ page }) => {
     seedAdmin();
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
 
     await page.goto('/admin/users');
     await page.fill('input[name="search"]', editorEmail);
@@ -88,7 +88,7 @@ test.describe.serial('administration', () => {
   });
 
   test('the editor reaches their own area and none of the administration', async ({ page }) => {
-    await signIn(page, editorEmail, EDITOR_PASSWORD);
+    await signIn(page, editorEmail, EDITOR_LOGIN);
 
     await expect(page).toHaveURL(/\/editor$/);
     await expect(page.getByRole('heading', { name: 'Editor area' })).toBeVisible();
@@ -108,10 +108,10 @@ test.describe.serial('administration', () => {
 
     const editorContext = await browser.newContext();
     const editor = await editorContext.newPage();
-    await signIn(editor, editorEmail, EDITOR_PASSWORD);
+    await signIn(editor, editorEmail, EDITOR_LOGIN);
     await expect(editor).toHaveURL(/\/editor$/);
 
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await page.goto('/admin/users');
     await page.fill('input[name="search"]', editorEmail);
     await page.click('button:has-text("Filter")');

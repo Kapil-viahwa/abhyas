@@ -10,9 +10,9 @@ import { expect, test, type Page } from '@playwright/test';
  */
 
 const ADMIN_EMAIL = 'e2e-ops-admin@example.com';
-const ADMIN_PASSWORD = 'operations-9pass';
-const EDITOR_PASSWORD = 'ops-editor-9pass';
-const STUDENT_PASSWORD = 'student-9pass-okay';
+const ADMIN_LOGIN = 'operations-9pass';
+const EDITOR_LOGIN = 'ops-editor-9pass';
+const STUDENT_LOGIN = 'student-9login-ok';
 
 let seeded = false;
 
@@ -30,7 +30,7 @@ function registerAdmin(): void {
       '-e',
       `SEED_ADMIN_EMAIL=${ADMIN_EMAIL}`,
       '-e',
-      `SEED_ADMIN_PASSWORD=${ADMIN_PASSWORD}`,
+      `SEED_ADMIN_LOGIN=${ADMIN_LOGIN}`,
       'api',
       'node',
       'apps/api/dist/seed/cli.js',
@@ -79,7 +79,7 @@ test.describe.serial('settings and the audit trail', () => {
 
   test('a setting change is saved and appears in the audit trail', async ({ page }) => {
     registerAdmin();
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await expect(page).toHaveURL(/\/admin$/);
 
     await page.goto('/admin/settings');
@@ -102,7 +102,7 @@ test.describe.serial('settings and the audit trail', () => {
 
   test('the audit viewer can export a CSV', async ({ page }) => {
     registerAdmin();
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
 
     const response = await page.request.get('/api/admin/audit-export?action=SETTINGS_CHANGED');
     expect(response.status()).toBe(200);
@@ -117,18 +117,18 @@ test.describe.serial('settings and the audit trail', () => {
     registerAdmin();
     const editorEmail = `e2e-ops-editor-${marker}@example.com`;
 
-    await signIn(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await page.goto('/admin/users/new');
     await page.fill('input[name="fullName"]', 'Ops Editor');
     await page.fill('input[name="email"]', editorEmail);
-    await page.fill('input[name="password"]', EDITOR_PASSWORD);
+    await page.fill('input[name="password"]', EDITOR_LOGIN);
     await page.check('input[name="manage_tests"]');
     await page.click('button[type="submit"]');
     await expect(page).toHaveURL(/created=1/);
 
     const context = await browser.newContext();
     const editorPage = await context.newPage();
-    await signIn(editorPage, editorEmail, EDITOR_PASSWORD);
+    await signIn(editorPage, editorEmail, EDITOR_LOGIN);
     await expect(editorPage).toHaveURL(/\/editor$/);
 
     await editorPage.goto('/admin/settings');
@@ -148,7 +148,7 @@ test.describe.serial('settings and the audit trail', () => {
     await page.goto('/register');
     await page.fill('input[name="fullName"]', 'Ops Student');
     await page.fill('input[name="email"]', studentEmail);
-    await page.fill('input[name="password"]', STUDENT_PASSWORD);
+    await page.fill('input[name="password"]', STUDENT_LOGIN);
 
     const before = apiLogs();
     await page.click('button[type="submit"]');
@@ -158,7 +158,7 @@ test.describe.serial('settings and the audit trail', () => {
     await page.goto(`/verify-email?token=${encodeURIComponent(token)}`);
     await expect(page.getByRole('heading', { name: 'Email verified' })).toBeVisible();
 
-    await signIn(page, studentEmail, STUDENT_PASSWORD);
+    await signIn(page, studentEmail, STUDENT_LOGIN);
     await expect(page).toHaveURL(/\/account/);
 
     await page.goto('/admin/settings');
