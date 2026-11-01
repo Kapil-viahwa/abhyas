@@ -21,3 +21,105 @@ model AppMetadata {
 
   @@map("app_metadata")
 }
+
+/// Phase 1 identity foundation. Constraints, normalising triggers and append-only
+/// rules live in hand-written SQL; this model is the typed access layer only.
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id               String    @id @default(uuid()) @db.Uuid
+  email            String    @unique(map: "users_email_key")
+  mobile           String?   @unique(map: "users_mobile_key")
+  passwordHash     String    @map("password_hash")
+  fullName         String    @map("full_name")
+  roleId           String    @map("role_id") @db.Uuid
+  status           String    @default("ACTIVE")
+  emailVerifiedAt  DateTime? @map("email_verified_at") @db.Timestamptz(6)
+  mobileVerifiedAt DateTime? @map("mobile_verified_at") @db.Timestamptz(6)
+  lastLoginAt      DateTime? @map("last_login_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  role               Role             @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  permissions        UserPermission[] @relation("UserPermissions")
+  grantedPermissions UserPermission[] @relation("GrantedPermissions")
+  updatedSettings    Setting[]        @relation("SettingUpdates")
+  auditEntries       AuditLog[]       @relation("AuditActor")
+
+  @@map("users")
+}
+
+model Permission {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  userPermissions UserPermission[]
+
+  @@map("permissions")
+}
+
+model UserPermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  userId       String   @map("user_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  grantedBy    String?  @map("granted_by") @db.Uuid
+  grantedAt    DateTime @default(now()) @map("granted_at") @db.Timestamptz(6)
+
+  user        User       @relation("UserPermissions", fields: [userId], references: [id], onDelete: Cascade)
+  permission  Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+  grantedByUser User?    @relation("GrantedPermissions", fields: [grantedBy], references: [id], onDelete: SetNull)
+
+  @@unique([userId, permissionId], map: "user_permissions_user_permission_key")
+  @@map("user_permissions")
+}
+
+model Setting {
+  key         String   @id
+  valueType   String   @map("value_type")
+  valueText   String?  @map("value_text")
+  valueInt    Int?     @map("value_int")
+  valueBool   Boolean? @map("value_bool")
+  minInt      Int?     @map("min_int")
+  maxInt      Int?     @map("max_int")
+  description String?
+  updatedBy   String?  @map("updated_by") @db.Uuid
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  updatedByUser User? @relation("SettingUpdates", fields: [updatedBy], references: [id], onDelete: SetNull)
+
+  @@map("settings")
+}
+
+/// Append-only: the database rejects UPDATE, DELETE and TRUNCATE, and the
+/// application role has those privileges revoked.
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  occurredAt  DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actorUserId String?  @map("actor_user_id") @db.Uuid
+  actorRole   String?  @map("actor_role")
+  action      String
+  entityType  String?  @map("entity_type")
+  entityId    String?  @map("entity_id") @db.Uuid
+  metadata    Json     @default("{}")
+  ip          String?
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([occurredAt], map: "audit_logs_occurred_at_idx")
+  @@index([entityType, entityId], map: "audit_logs_entity_idx")
+  @@map("audit_logs")
+}

@@ -17,6 +17,7 @@
     "test:e2e": "playwright test",
     "audit:ci": "node scripts/audit-report.mjs",
     "db:migrate": "pnpm --filter @abhyas/api exec prisma migrate deploy",
+    "db:seed:admin": "pnpm --filter @abhyas/api run build && pnpm --filter @abhyas/api run seed:admin",
     "compose:validate": "node scripts/validate-compose-prod.mjs",
     "compose:up": "docker compose up -d --build --wait",
     "compose:down": "docker compose down -v"
