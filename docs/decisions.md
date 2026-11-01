@@ -122,6 +122,64 @@ The home page is a server component that reads `API_INTERNAL_URL`; no API base U
 
 **Why:** `apps/api` declares `fastify@^5.12.5` directly, but `@nestjs/platform-fastify@11.2.8` keeps its own nested `fastify@5.11.3`, and the audit attributes four high advisories to that copy (header validation bypasses, all fixed in `<5.12.2`). An override is the only way to move a copy the parent package pins itself.
 
+## 0014 — UUID primary keys and UTC `timestamptz` everywhere
+
+**Status:** accepted · **Phase:** 1
+
+Every table added from phase 1 on uses `uuid` primary keys defaulting to `gen_random_uuid()`, and every timestamp is `timestamptz` written in UTC. Business dates (the daily login bonus) are computed in Asia/Kolkata and stored as a `date`.
+
+**Why:** sequential integer ids leak volume and invite enumeration; UUIDs can be generated before insert, which keeps multi-statement writes simple. UTC storage plus an explicit business-date column means "first login of the day" is a property of the database, not of whichever server answered the request.
+
+## 0015 — Identity fields are normalised by the database, not by callers
+
+**Status:** accepted · **Phase:** 1
+
+A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` and rewrites `users.mobile` to digits with a leading `91` or `0` stripped. Uniqueness is then a plain unique index on the normalised column, and the mobile column is additionally constrained to exactly ten digits.
+
+**Why:** every caller (API, seed, future import) would otherwise have to remember to normalise first, and one forgotten path silently creates a duplicate account. Putting it in the database means "unique case-insensitively" and "unique after normalisation" are properties of the data that a test can prove by attempting the duplicate and watching it fail.
+
+**Trade-off:** a trigger is invisible in the ORM's model, so it is documented in `docs/data-model.md` and proven by `apps/api/test/identity.test.ts`.
+
+## 0016 — The audit log is append-only by trigger *and* by revoked privileges
+
+**Status:** accepted · **Phase:** 1
+
+`audit_logs` has a `BEFORE UPDATE`, a `BEFORE DELETE` and a `BEFORE TRUNCATE` trigger that raise, and a non-login role `abhyas_app` that is granted `SELECT` and `INSERT` and has `UPDATE`, `DELETE` and `TRUNCATE` revoked.
+
+**Why:** a trigger protects against application bugs, including a superuser's mistake; revoked privileges protect against a future application role being over-granted and quietly rewriting history. Both are tested: the trigger path as the owner, the privilege path with `SET ROLE abhyas_app`. The role is created idempotently inside the migration so a fresh database and an existing one converge.
+
+## 0017 — Settings store their type and their bounds in the row
+
+**Status:** accepted · **Phase:** 1
+
+`settings` carries `value_type` (`string` | `integer` | `boolean`), typed value columns, and optional `min_int`/`max_int`. One CHECK constraint requires the value to match its declared type, keeps unused columns null, and rejects an integer outside its bounds or a blank/over-long string.
+
+**Why:** the coin rules are settings (signup bonus, daily bonus, per-attempt cost), and "the admin can edit the attempt cost" must not become "the platform can be configured into an invalid state". Bounds live next to the value they bound so the API can read them back and the database refuses a bad write regardless of the code path.
+
+## 0018 — Role→permission mapping is designed now, implemented in phase 2
+
+**Status:** accepted · **Phase:** 1
+
+`docs/data-model.md` designs `role_permissions`, but phase 1 ships only the permission catalog and per-user overrides; the join table arrives with the enforcement layer in phase 2.
+
+**Why:** the phase brief fixes the phase 1 table set. Shipping a join table that no guard reads would be untested surface area; the matrix in `docs/permissions.md` is the contract that phase 2 implements.
+
+## 0019 — The admin seed has no default password and refuses production without explicit opt-in
+
+**Status:** accepted · **Phase:** 1
+
+`apps/api/src/seed/cli.ts` (invoked as `pnpm db:seed:admin`) requires `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD`, rejects passwords shorter than 12 characters, well-known defaults and passwords equal to the email local part, and in production additionally requires `SEED_ADMIN_CONFIRM=create-first-admin`.
+
+**Why:** a seed with a default password is how "temporary" admin accounts become permanent back doors. Requiring the confirmation flag in production means the seeder cannot create an admin by accident there, while development still works with two obvious variables. The run is idempotent: it does nothing if any admin already exists, and it writes an `IDENTITY_ADMIN_SEEDED` audit row when it does create one.
+
+## 0020 — Database test files run sequentially
+
+**Status:** accepted · **Phase:** 1
+
+The `test:db` script passes `--no-file-parallelism` to Vitest.
+
+**Why:** each database test creates its own schema and applies migrations to it, and the phase 1 migration creates the `abhyas_app` role idempotently. Two of those transactions racing on `CREATE ROLE` would occasionally fail for a reason unrelated to the code under test. Serialising the database suite removes that flake without slowing the unit suite, which keeps its parallelism.
+
 ---
 
 ## Dependency reasons
