@@ -3,9 +3,9 @@ import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 import { AppModule } from './app.module';
+import { configureApiDocs } from './config/api-docs';
 import { loadConfig } from './config/config';
 
 async function bootstrap(): Promise<void> {
@@ -23,18 +23,14 @@ async function bootstrap(): Promise<void> {
 
   app.enableShutdownHooks();
 
-  const openApiConfig = new DocumentBuilder()
-    .setTitle('Abhyas API')
-    .setDescription('Mock test platform API. Every response shape is generated from this document.')
-    .setVersion('0.1.0')
-    .build();
-
-  const document = SwaggerModule.createDocument(app, openApiConfig);
-  // Serves the UI at /api/docs and the machine-readable document at /api/docs-json.
-  SwaggerModule.setup('api/docs', app, document);
+  // Development and CI only: in production the OpenAPI UI and document are not
+  // mounted at all, so /api/docs and /api/docs-json answer 404 (decision 0027).
+  const docsMounted = configureApiDocs(app, config.NODE_ENV);
 
   await app.listen(config.PORT, '0.0.0.0');
-  logger.log(`API listening on http://0.0.0.0:${config.PORT} (docs at /api/docs)`);
+  logger.log(
+    `API listening on http://0.0.0.0:${config.PORT}${docsMounted ? ' (docs at /api/docs)' : ' (API docs disabled)'}`,
+  );
 }
 
 void bootstrap().catch((error: unknown) => {

@@ -294,3 +294,48 @@ repository should not invent.
 **Consequence:** one indexed lookup per request. No permission is cached in a token: role and
 permissions come from `role_permissions` plus `user_permissions` on every request, so a revoked role
 or a suspended account takes effect on the next call.
+
+
+## 0026 — Email, bot protection and rate limiting behind interfaces, with no new dependencies
+
+**Status:** accepted · **Phase:** 2a
+
+Three seams, each an interface with an injection token, so no provider SDK enters the API:
+
+- `EMAIL_SENDER` — `ConsoleEmailSender` prints the message to the log (development, test and CI
+  only; its constructor throws under `NODE_ENV=production`), and `SmtpEmailSender` refuses to be
+  constructed without `SMTP_URL` and fails loudly at send time instead of pretending to deliver.
+  `SMTP_URL` is validated by the transport rather than by `validateEnv`: the shared schema's job is
+  to refuse development shortcuts, and the transport is the thing that knows what it needs.
+- `TURNSTILE_VERIFIER` — production always verifies against Cloudflare's `siteverify` with
+  `node:https` and a timeout (no SDK); development and CI use `TestTurnstileVerifier`, which accepts
+  only the fixed test token and refuses to be constructed in production. `validateEnv` already
+  refuses Cloudflare test secrets in production, so the two gates cannot disagree.
+- `RateLimiter` — fixed-window `INCR` + `EXPIRE` on keys built from the client IP and, separately,
+  from a SHA-256 of the account identifier, so neither an address nor an email sits in Redis in
+  clear text. A key found without a TTL is repaired on the spot, so a crash between `INCR` and
+  `EXPIRE` cannot block a key for ever. The store is a three-method interface, so the window logic
+  is unit tested against a fake with a controllable clock.
+
+**Why:** a bot-protection or mail SDK is a large dependency for one HTTP call, and the limiter is
+forty lines of Redis. Keeping all three behind interfaces means the tests exercise the real seams,
+and a provider can be replaced without touching the auth service.
+
+**Consequence:** a production boot with `EMAIL_PROVIDER=smtp` refuses to start without `SMTP_URL`,
+but delivery is not implemented yet — `PROGRESS.md` lists SMTP transport as a known gap, and the
+sender throws rather than dropping a message silently.
+
+## 0027 — The OpenAPI document is not mounted in production
+
+**Status:** accepted · **Phase:** 2a
+
+`/api/docs` and `/api/docs-json` are mounted only when `NODE_ENV` is not `production`
+(`apps/api/src/config/api-docs.ts`). In production both paths are absent, not merely guarded.
+
+**Why:** the document enumerates every route, payload and error shape the API has. A documentation
+surface that is only protected by a guard still ships the whole map to anyone who gets past it, and
+"disable it in production" is one line that a test can pin. Development and CI keep it, because
+`compose-smoke` curls `/api/docs-json` to prove the API serves what it advertises.
+
+**Consequence:** if a future phase needs a machine-readable contract in production, it gets its own
+authenticated, admin-only route rather than re-enabling this one.
