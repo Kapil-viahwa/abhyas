@@ -15,6 +15,16 @@ const ADMIN_LOGIN = 'administrator-9pass';
 const EDITOR_LOGIN = 'ops-editor-9pass';
 const STUDENT_LOGIN = 'student-9login-ok';
 
+/**
+ * This spec talks to the stack as one client address. The API limits sign-ins per
+ * address, and each spec file signs in several times, so every file gets its own —
+ * the limit itself is untouched, and no two files share a counter.
+ */
+const CLIENT_IP = '198.18.0.41';
+const CLIENT = { extraHTTPHeaders: { 'x-forwarded-for': CLIENT_IP } };
+
+test.use(CLIENT);
+
 let seeded = false;
 
 function registerAdmin(): void {
@@ -124,10 +134,13 @@ test.describe.serial('settings and the audit trail', () => {
     await page.fill('input[name="email"]', editorEmail);
     await page.fill('input[name="password"]', EDITOR_LOGIN);
     await page.check('input[name="manage_tests"]');
-    await page.click('button[type="submit"]');
+
+    // By role, not `button[type="submit"]`: the shared administration nav also has a
+    // submit button (Sign out), and it comes first in the document.
+    await page.getByRole('button', { name: 'Create editor' }).click();
     await expect(page).toHaveURL(/created=1/);
 
-    const context = await browser.newContext();
+    const context = await browser.newContext(CLIENT);
     const editorPage = await context.newPage();
     await signIn(editorPage, editorEmail, EDITOR_LOGIN);
     await expect(editorPage).toHaveURL(/\/editor$/);
@@ -143,7 +156,7 @@ test.describe.serial('settings and the audit trail', () => {
 
   test('a student cannot open the settings or the audit trail', async ({ browser }) => {
     const studentEmail = `e2e-ops-student-${marker}@example.com`;
-    const context = await browser.newContext();
+    const context = await browser.newContext(CLIENT);
     const page = await context.newPage();
 
     await page.goto('/register');
