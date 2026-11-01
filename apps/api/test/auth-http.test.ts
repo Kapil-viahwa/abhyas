@@ -25,6 +25,28 @@ const PASSWORD = 'correct-horse-9battery';
 /** Restored afterwards: the database tests share one process. */
 const savedEnv: NodeJS.ProcessEnv = { ...process.env };
 
+/**
+ * A freshly booted API reports `/health` as degraded until its Redis connection is
+ * established, which is the honest answer — it cannot serve a request that needs
+ * Redis yet. Docker's healthcheck gates traffic the same way, so the test waits for
+ * readiness instead of pretending the first request must succeed.
+ */
+async function waitUntilHealthy(target: NestFastifyApplication, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last = 'no response';
+
+  while (Date.now() < deadline) {
+    const response = await target.inject({ method: 'GET', url: '/health' });
+    if (response.statusCode === 200) {
+      return;
+    }
+    last = `${response.statusCode} ${response.body}`;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(`The API never became healthy: ${last}`);
+}
+
 describe('auth over HTTP', () => {
   let db!: TestDatabase;
   let app!: NestFastifyApplication;
@@ -41,9 +63,11 @@ describe('auth over HTTP', () => {
     await redis.flushdb();
 
     app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
-      logger: false,
+      // Errors only: a container that cannot build the graph prints why here.
+      logger: ['error'],
     });
     await app.init();
+    await waitUntilHealthy(app);
   }, 180_000);
 
   afterAll(async () => {
@@ -276,9 +300,10 @@ describe('auth over HTTP', () => {
       Object.assign(process.env, overrides);
 
       productionApp = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
-        logger: false,
+        logger: ['error'],
       });
       await productionApp.init();
+      await waitUntilHealthy(productionApp);
     }, 60_000);
 
     afterAll(async () => {
