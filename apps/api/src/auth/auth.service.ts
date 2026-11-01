@@ -250,6 +250,11 @@ export class AuthService {
       const human = challengeToken !== undefined && (await this.turnstile.verify(challengeToken, meta.ip));
 
       if (!human) {
+        // The refused attempt still counts against this address + account pair: the
+        // address failed to produce a challenge token, and it is the address that
+        // pays for it — never the account.
+        await this.rateLimiter.hit(pairKey, RATE_LIMITS.loginPair.windowSeconds);
+
         throw new UnauthorizedException({
           statusCode: HttpStatus.UNAUTHORIZED,
           message: LOGIN_FAILURE_MESSAGE,

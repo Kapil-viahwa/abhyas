@@ -118,13 +118,15 @@ describe('account lifecycle over HTTP', () => {
     });
   }
 
-  function authenticated(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', url: string, accessToken: string, payload?: unknown) {
-    return app.inject({
-      method,
-      url,
-      headers: { authorization: `Bearer ${accessToken}` },
-      ...(payload === undefined ? {} : { payload }),
-    });
+  function authenticated(
+    method: 'GET' | 'POST' | 'DELETE' | 'PATCH',
+    url: string,
+    accessToken: string,
+    payload?: Record<string, unknown>,
+  ) {
+    const headers = { authorization: `Bearer ${accessToken}` };
+
+    return app.inject(payload === undefined ? { method, url, headers } : { method, url, headers, payload });
   }
 
   it('rotates the refresh token and revokes the family when a rotated one is replayed', async () => {
@@ -226,7 +228,9 @@ describe('account lifecycle over HTTP', () => {
 
   it("refuses to revoke somebody else's session", async () => {
     await redis.flushdb();
-    const mine = await signIn(`mine-${randomUUID().slice(0, 8)}@example.com`, '198.51.100.104');
+    const mineEmail = `mine-${randomUUID().slice(0, 8)}@example.com`;
+    await makeUser(mineEmail);
+    const mine = await signIn(mineEmail, '198.51.100.104');
     const theirsEmail = `theirs-${randomUUID().slice(0, 8)}@example.com`;
     await makeUser(theirsEmail);
     const theirs = await signIn(theirsEmail, '198.51.100.105');

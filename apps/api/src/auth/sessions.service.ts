@@ -164,9 +164,12 @@ export class SessionsService {
     const now = new Date();
 
     const issued = await this.prisma.$transaction(async (tx) => {
+      // The rotated row is marked as rotated and its access token expires now, but
+      // it is *not* revoked: revocation is what a replay turns into, and the family
+      // revocation below needs this row to stay recognisable as "already rotated".
       const rotated = await tx.session.updateMany({
         where: { id: existing.id, rotatedAt: null, revokedAt: null },
-        data: { rotatedAt: now, revokeReason: 'ROTATED', revokedAt: now, accessExpiresAt: now },
+        data: { rotatedAt: now, accessExpiresAt: now },
       });
 
       if (rotated.count !== 1) {
@@ -258,7 +261,7 @@ export class SessionsService {
   /** Live sessions for the account page, newest first, with the current one marked. */
   async listForUser(userId: string, currentSessionId: string): Promise<SessionSummary[]> {
     const rows = await this.prisma.session.findMany({
-      where: { userId, revokedAt: null, expiresAt: { gt: new Date() } },
+      where: { userId, revokedAt: null, rotatedAt: null, expiresAt: { gt: new Date() } },
       orderBy: { lastUsedAt: 'desc' },
       select: {
         id: true,
