@@ -304,7 +304,11 @@ describe('the exam catalog over HTTP', () => {
       const editorWithoutFlags = await makeEditor([]);
       const student = await makeStudent();
 
-      expect((await call('GET', '/v1/catalog/tree', editorWithoutFlags.token)).statusCode).toBe(403);
+      // Reading the authoring tree takes `content.read`, which the EDITOR role carries:
+      // the role's read side is not the thing a flag grants. Every write takes
+      // `content.write`, which only a ticked flag does, so an editor with no flags can
+      // look at the catalog and change none of it.
+      expect((await call('GET', '/v1/catalog/tree', editorWithoutFlags.token)).statusCode).toBe(200);
       expect((await createCategory(editorWithoutFlags.token, 'Nope')).statusCode).toBe(403);
 
       expect((await call('GET', '/v1/catalog/tree', student.token)).statusCode).toBe(403);

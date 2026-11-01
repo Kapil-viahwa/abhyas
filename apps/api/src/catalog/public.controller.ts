@@ -18,7 +18,7 @@ export class PublicCatalogController {
   @Get('catalog')
   @ApiOperation({ summary: 'Active categories and exams, for the public pages' })
   @ApiOkResponse({ description: 'The public catalog' })
-  async catalog(): Promise<PublicCatalog> {
+  async publicCatalog(): Promise<PublicCatalog> {
     return this.catalog.publicCatalog();
   }
 }

@@ -18,6 +18,7 @@ import {
   parseCatalogUpdateBody,
   parseCategoryBody,
   parseExamBody,
+  parseSlug,
   parseSubjectBody,
   parseTopicBody,
 } from './validation';
@@ -96,6 +97,11 @@ function isUniqueViolation(error: unknown): boolean {
 
 function isForeignKeyViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'P2003';
+}
+
+/** A CHECK or trigger refusal, which Prisma surfaces as an unknown request error. */
+function isCheckViolation(error: unknown): boolean {
+  return error instanceof Error && /violates check constraint|two levels deep/.test(error.message);
 }
 
 /**
@@ -247,7 +253,9 @@ export class CatalogService {
       const row = await this.prisma.examCategory.create({
         data: {
           name: input.name,
-          slug: input.slug ?? '',
+          // The slug is derived from the name when the caller omits it, and the
+          // database's format CHECK is the last word on what a slug may be.
+          slug: parseSlug(input.slug, input.name),
           description: input.description,
           logoKey: input.logoKey,
           parentId: input.parentId,
@@ -349,7 +357,9 @@ export class CatalogService {
         data: {
           categoryId: input.categoryId,
           name: input.name,
-          slug: input.slug ?? '',
+          // The slug is derived from the name when the caller omits it, and the
+          // database's format CHECK is the last word on what a slug may be.
+          slug: parseSlug(input.slug, input.name),
           description: input.description,
           logoKey: input.logoKey,
           sortOrder: input.sortOrder,
@@ -433,7 +443,9 @@ export class CatalogService {
         data: {
           examId: input.examId,
           name: input.name,
-          slug: input.slug ?? '',
+          // The slug is derived from the name when the caller omits it, and the
+          // database's format CHECK is the last word on what a slug may be.
+          slug: parseSlug(input.slug, input.name),
           description: input.description,
           sortOrder: input.sortOrder,
           isActive: input.isActive,
@@ -520,7 +532,9 @@ export class CatalogService {
         data: {
           subjectId: input.subjectId,
           name: input.name,
-          slug: input.slug ?? '',
+          // The slug is derived from the name when the caller omits it, and the
+          // database's format CHECK is the last word on what a slug may be.
+          slug: parseSlug(input.slug, input.name),
           description: input.description,
           sortOrder: input.sortOrder,
           isActive: input.isActive,
@@ -709,6 +723,10 @@ export class CatalogService {
     }
     if (isForeignKeyViolation(error)) {
       return new ConflictException(conflictMessage);
+    }
+    if (isCheckViolation(error)) {
+      // A CHECK is the database refusing the value, not the platform breaking.
+      return new BadRequestException('That name does not give a usable slug; try a different one');
     }
     return error;
   }

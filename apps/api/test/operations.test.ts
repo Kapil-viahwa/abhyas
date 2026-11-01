@@ -218,6 +218,11 @@ describe('settings, audit and dashboard over HTTP', () => {
 
     it('has no write path at all, and the database refuses one anyway', async () => {
       const admin = await makePerson('ADMIN');
+
+      // Something this administrator actually did, so the row below is one they own
+      // rather than a row the fixture assumed into existence.
+      await call('PATCH', '/v1/admin/settings/daily_reward_coins', admin.token, { value: 13 });
+
       const auditRow = await db.client.auditLog.findFirst({ where: { actorUserId: admin.id } });
 
       expect(auditRow).not.toBeNull();

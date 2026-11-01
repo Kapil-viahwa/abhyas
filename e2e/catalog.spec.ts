@@ -46,6 +46,55 @@ async function signIn(page: Page, email: string, password: string): Promise<void
   await page.click('button[type="submit"]');
 }
 
+/**
+ * A fixture read, not behaviour under test: the id of the exam with this name, read from
+ * the stack's own database so the browser test can make the request the screens never
+ * offer. The same pattern `setRole` uses in auth.spec.ts, and no test-only endpoint.
+ */
+function examIdFor(name: string): string {
+  return execFileSync(
+    'docker',
+    [
+      'compose',
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '-U',
+      'abhyas',
+      '-d',
+      'abhyas',
+      '-t',
+      '-A',
+      '-c',
+      `select id::text from exams where name = '${name.replace(/'/g, "''")}' limit 1`,
+    ],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  ).trim();
+}
+
+function examIsActive(id: string): string {
+  return execFileSync(
+    'docker',
+    [
+      'compose',
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '-U',
+      'abhyas',
+      '-d',
+      'abhyas',
+      '-t',
+      '-A',
+      '-c',
+      `select is_active from exams where id = '${id}'`,
+    ],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  ).trim();
+}
+
 test.describe.serial('the exam catalog', () => {
   const marker = randomUUID().slice(0, 6);
   const categoryName = `Banking ${marker}`;
@@ -123,5 +172,93 @@ test.describe.serial('the exam catalog', () => {
     await expect(editorPage).toHaveURL(/\/account\?denied=1/);
 
     await editorContext.close();
+  });
+
+  test("an editor cannot change another editor's exam", async ({ page, browser }) => {
+    registerAdmin();
+
+    const editorAEmail = `e2e-catalog-a-${marker}@example.com`;
+    const editorBEmail = `e2e-catalog-b-${marker}@example.com`;
+    const examName = `SSC CGL ${marker}`;
+
+    // Two editors who may author content. Neither may touch the other's rows.
+    await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
+    for (const email of [editorAEmail, editorBEmail]) {
+      await page.goto('/admin/users/new');
+      await page.fill('input[name="fullName"]', 'Catalog Author');
+      await page.fill('input[name="email"]', email);
+      await page.fill('input[name="password"]', EDITOR_LOGIN);
+      await page.check('input[name="manage_questions"]');
+      await page.click('button[type="submit"]');
+      await expect(page).toHaveURL(/created=1/);
+    }
+
+    // Editor A authors a category and an exam in their own area.
+    const contextA = await browser.newContext();
+    const pageA = await contextA.newPage();
+    await signIn(pageA, editorAEmail, EDITOR_LOGIN);
+    await expect(pageA).toHaveURL(/\/editor$/);
+    await pageA.goto('/editor/catalog');
+
+    const categoryName = `Staff Selection ${marker}`;
+    await pageA.getByText('Category', { exact: true }).click();
+    await pageA.fill('form:has(input[name="type"][value="categories"]) input[name="name"]', categoryName);
+    await pageA.click('form:has(input[name="type"][value="categories"]) button[type="submit"]');
+    await expect(pageA).toHaveURL(/created=1/);
+
+    await pageA.getByText('Exam', { exact: true }).click();
+    await pageA.fill('form:has(input[name="type"][value="exams"]) input[name="name"]', examName);
+    await pageA.click('form:has(input[name="type"][value="exams"]) button[type="submit"]');
+    await expect(pageA).toHaveURL(/created=1/);
+    await contextA.close();
+
+    const examId = examIdFor(examName);
+    expect(examId).not.toBe('');
+
+    // Editor B, in their own session, sends the request the screens never offer: the
+    // other editor's exam id, with B's own CSRF value.
+    const contextB = await browser.newContext();
+    const pageB = await contextB.newPage();
+    await signIn(pageB, editorBEmail, EDITOR_LOGIN);
+    await expect(pageB).toHaveURL(/\/editor$/);
+    await pageB.goto('/editor/catalog');
+
+    const csrf = await pageB.locator('input[name="csrfToken"]').first().inputValue();
+
+    await pageB.evaluate(
+      ({ csrfToken, id }: { csrfToken: string; id: string }) => {
+        const form = document.createElement('form');
+        form.method = 'post';
+        form.action = '/api/catalog/update';
+
+        const fields: Record<string, string> = {
+          csrfToken,
+          area: 'editor',
+          type: 'exams',
+          id,
+          action: 'deactivate',
+        };
+
+        for (const [name, value] of Object.entries(fields)) {
+          const field = document.createElement('input');
+          field.type = 'hidden';
+          field.name = name;
+          field.value = value;
+          form.appendChild(field);
+        }
+
+        document.body.appendChild(form);
+        form.submit();
+      },
+      { csrfToken: csrf, id: examId },
+    );
+
+    await expect(pageB).toHaveURL(/error=/);
+    await expect(pageB.getByText('You can only change content you created')).toBeVisible();
+
+    // The exam A made is untouched, and the API refused rather than half-applied.
+    expect(examIsActive(examId)).toBe('t');
+
+    await contextB.close();
   });
 });
