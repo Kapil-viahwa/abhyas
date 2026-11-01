@@ -45,6 +45,9 @@ export function middleware(request: NextRequest): NextResponse {
       value: csrf,
       httpOnly: true,
       sameSite: 'lax',
+      // A local development server is plain http, so the flag follows the mode:
+      // always on where a real deployment runs, never breaking `pnpm dev`.
+      secure: process.env.NODE_ENV === 'production',
       path: '/',
     });
   }

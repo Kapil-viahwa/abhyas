@@ -171,6 +171,29 @@ test.describe.serial('authentication flows', () => {
     await expect(page).toHaveURL(/\/account/);
   });
 
+  test('keeps every token out of the browser', async ({ page, context }) => {
+    await signIn(page, email, PASSWORD);
+    await expect(page).toHaveURL(/\/account/);
+
+    const appCookies = (await context.cookies()).filter((cookie) => cookie.name.startsWith('abhyas_'));
+    // The access token, the refresh token and the double-submit value.
+    expect(appCookies.length).toBeGreaterThanOrEqual(3);
+    for (const cookie of appCookies) {
+      expect(cookie.httpOnly).toBe(true);
+    }
+
+    const inTheBrowser = await page.evaluate(() => ({
+      local: Object.keys(window.localStorage),
+      session: Object.keys(window.sessionStorage),
+      readableCookies: document.cookie,
+    }));
+
+    expect(inTheBrowser.local).toEqual([]);
+    expect(inTheBrowser.session).toEqual([]);
+    // Every cookie is httpOnly, so no script — including this one — can read a token back.
+    expect(inTheBrowser.readableCookies).toBe('');
+  });
+
   test('sends the security headers on every page', async ({ request }) => {
     const response = await request.get('/');
     const headers = response.headers();
