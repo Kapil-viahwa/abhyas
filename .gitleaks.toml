@@ -1,0 +1,28 @@
+# gitleaks configuration.
+#
+# The Playwright suite needs accounts to sign in with against a disposable
+# docker compose stack, so its spec files carry throwaway credentials as
+# constants. They are not secrets: they exist only in CI and on a developer's
+# machine, and the platform refuses the development shortcuts around them in
+# production (docs/decisions.md 0005 and 0009). They are listed below so the
+# scan stays strict for everything else — a real secret in a spec file is still
+# reported, and the audit trail of this decision is docs/security-exceptions.md.
+#
+# Each entry is written with a character class so this file does not reproduce
+# the exact strings it allows.
+
+title = "Abhyas"
+
+[allowlist]
+description = "Throwaway account credentials used by the browser suite against a disposable stack"
+regexes = [
+  '''administrator-9pas[s]''',
+  '''editorial-9pas[s]''',
+  '''catalog-editor-9pas[s]''',
+  '''ops-editor-9pas[s]''',
+  '''student-9login-o[k]''',
+  '''correct-horse-9batter[y]''',
+  '''battery-horse-9-correc[t]''',
+  '''wrong-password-9[x]''',
+  '''another-password-9[x]''',
+]

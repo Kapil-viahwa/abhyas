@@ -32,6 +32,18 @@ These run only on developer machines and CI runners. They are not copied into th
 - `js-yaml >= 4.3.2` and `lodash >= 4.17.24` — pinned by `@nestjs/swagger` 7 before the 11 upgrade; kept as a floor.
 - `fastify >= 5.12.5` — `@nestjs/platform-fastify` keeps its own nested copy below the patched line.
 
+## Secret scan
+
+`gitleaks` runs on every push and pull request, and its default rules are not
+adjusted. One exception is recorded, in `.gitleaks.toml`: the browser suite
+needs accounts to sign in with against a disposable `docker compose` stack, so
+its spec files define throwaway credentials as constants (`administrator-9pass`,
+`editorial-9pass`, and so on). Those values are listed by exact regex, written
+with a character class so the configuration does not reproduce them, and they
+are useless outside a local or CI stack because production refuses the
+development shortcuts around sign-in (decisions 0005 and 0009). A real secret in
+a spec file — or anywhere else — is still reported.
+
 ## Follow-up
 
 The dev-only findings are closed by moving to vitest 4 once the workspace's test configs are migrated. That is tracked in `PROGRESS.md` as a known gap, not silently dropped.
