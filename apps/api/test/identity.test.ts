@@ -215,6 +215,9 @@ describe('identity foundation', () => {
         'SELECT "id" FROM "audit_logs" WHERE "id" = $1::uuid',
         id,
       );
+      // SET ROLE persists for the session when its transaction commits, and this
+      // connection goes back to the pool. Reset it before committing.
+      await tx.$executeRawUnsafe('RESET ROLE');
       return rows.length;
     });
 
