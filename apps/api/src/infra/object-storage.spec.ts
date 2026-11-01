@@ -54,8 +54,10 @@ describe('object storage', () => {
     const storage = createObjectStorage(config());
 
     expect(storage).toBeInstanceOf(DisabledObjectStorage);
-    await expect(storage.put()).rejects.toThrow(ObjectStorageUnavailableError);
-    await expect(storage.presignedGetUrl()).rejects.toThrow(/not configured/);
+    await expect(storage.put(questionImageKey(), Buffer.from('x'), 'image/webp')).rejects.toThrow(
+      ObjectStorageUnavailableError,
+    );
+    await expect(storage.presignedGetUrl('question-image/elsewhere.webp')).rejects.toThrow(/not configured/);
     await expect(storage.ensureBucket()).rejects.toThrow(ObjectStorageUnavailableError);
   });
 

@@ -170,9 +170,12 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...production, S3_ACCESS_KEY_ID: 'minioadmin' })).toThrow(
       /S3_ACCESS_KEY_ID: development credentials are refused in production/,
     );
-    expect(() =>
-      validateEnv({ ...production, S3_SECRET_ACCESS_KEY: 'abhyas-dev-secret-0123456789' }),
-    ).toThrow(/S3_SECRET_ACCESS_KEY: must be at least 16 characters and not a development credential/);
+    expect(() => validateEnv({ ...production, S3_SECRET_ACCESS_KEY: 'abhyas-dev' })).toThrow(
+      /S3_SECRET_ACCESS_KEY: development credentials are refused in production/,
+    );
+    expect(() => validateEnv({ ...production, S3_SECRET_ACCESS_KEY: 'short' })).toThrow(
+      /S3_SECRET_ACCESS_KEY: must be at least 16 characters/,
+    );
   });
 
   it('refuses a public bucket in every environment', () => {

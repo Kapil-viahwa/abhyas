@@ -256,13 +256,15 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
     if (s3SecretKey === '') {
       issues.push({ variable: 'S3_SECRET_ACCESS_KEY', message: 'is required in production' });
-    } else if (
-      s3SecretKey.length < 16 ||
-      DEVELOPMENT_S3_CREDENTIALS.includes(s3SecretKey.toLowerCase())
-    ) {
+    } else if (DEVELOPMENT_S3_CREDENTIALS.includes(s3SecretKey.toLowerCase())) {
       issues.push({
         variable: 'S3_SECRET_ACCESS_KEY',
-        message: 'must be at least 16 characters and not a development credential',
+        message: 'development credentials are refused in production',
+      });
+    } else if (s3SecretKey.length < 16) {
+      issues.push({
+        variable: 'S3_SECRET_ACCESS_KEY',
+        message: 'must be at least 16 characters',
       });
     }
   } else if (s3Endpoint !== '') {

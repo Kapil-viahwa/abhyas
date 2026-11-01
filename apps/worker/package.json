@@ -19,7 +19,7 @@
     "bullmq": "^5.34.0",
     "exceljs": "4.4.0",
     "ioredis": "^5.4.2",
-    "sharp": "0.33.5",
+    "sharp": "0.35.5",
     "yauzl": "3.2.0"
   },
   "devDependencies": {
