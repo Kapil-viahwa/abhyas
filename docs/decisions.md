@@ -90,6 +90,30 @@ The home page is a server component that reads `API_INTERNAL_URL`; no API base U
 
 **Why:** `node:22-bookworm-slim` ships no OpenSSL, so `prisma generate` guessed `openssl-1.1.x` and the API died at boot with `Details: libssl.so.1.1: cannot open shared object file: No such file or directory`. Guessing is the bug: the target is now declared instead of inferred, and the library the engine links against is installed rather than hoped for.
 
+## 0011 — NestJS 11 with Fastify 5
+
+**Status:** accepted · **Phase:** 0
+
+`@nestjs/common`, `@nestjs/core`, `@nestjs/platform-fastify` and `@nestjs/swagger` move to their 11.x line, and `fastify` to 5.12.5 or newer, with `@fastify/static` on 10.x to match Fastify 5.
+
+**Why:** the audit found blocking production advisories in the 10.x line — `fastify` header validation bypass (`<5.12.2`), `@nestjs/platform-fastify` (`<11.1.10`), `@nestjs/core` (`<=11.1.17`), and `fastify` again at 5.12.1 and 5.12.5. The 10.x line cannot be patched, because Nest 10 requires Fastify 4. Upgrading is the only fix that does not weaken the gate.
+
+## 0012 — vitest 3.2.6 with an explicit vite 6.4.4 floor
+
+**Status:** accepted · **Phase:** 0
+
+`vitest` moves to `^3.2.6`, and `vite` is declared directly at `^6.4.4` so the resolution cannot land on a vulnerable 5.x or 6.4.x build.
+
+**Why:** dev-only advisories listed a critical in `vitest` (`<3.2.6`) and well as a critical in `tinypool` and several highs in `vite` (`<=6.4.3`) pulled in through vitest. Declaring `vite` explicitly is the only way to guarantee the patched build under pnpm's resolution.
+
+## 0013 — pnpm overrides for postcss, js-yaml and lodash
+
+**Status:** accepted · **Phase:** 0
+
+`pnpm.overrides` forces `postcss` to `^8.5.18`, `js-yaml` to `^4.3.2` and `lodash` to `^4.17.24`.
+
+**Why:** these three arrive transitively from packages that pin exact versions — `next@15` pins `postcss@8.4.31`, and `@nestjs/swagger@7` pinned `js-yaml@4.1.0` and `lodash@4.17.21` — so no direct upgrade removes them. Each override moves only a patch/minor within the same major, with an upstream advisory confirming the target version is patched. Overrides are reviewed when the parent package catches up, and removed then.
+
 ---
 
 ## Dependency reasons
