@@ -12,7 +12,7 @@ export function AdminNav({ csrf, current }: { readonly csrf: string; readonly cu
     { href: '/admin', label: 'Overview' },
     { href: '/admin/users', label: 'Users' },
     { href: '/admin/catalog', label: 'Catalog' },
-    { href: '/editor/questions', label: 'Questions' },
+    { href: '/editor/questions', label: 'Question bank' },
     { href: '/admin/settings', label: 'Settings' },
     { href: '/admin/audit', label: 'Audit' },
   ];
