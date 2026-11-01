@@ -19,7 +19,7 @@ permissions:
 jobs:
   sync:
     name: sync pnpm-lock.yaml
-    if: github.ref_name != 'main' && !contains(github.event.head_commit.message, 'chore: sync pnpm-lock.yaml')
+    if: "github.ref_name != 'main'"
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
