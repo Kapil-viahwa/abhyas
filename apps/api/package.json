@@ -11,8 +11,9 @@
     "start": "node dist/main.js",
     "typecheck": "pnpm run prisma:generate && tsc -p tsconfig.json --noEmit",
     "test": "pnpm run prisma:generate && vitest run src",
-    "test:db": "pnpm run prisma:generate && vitest run test/migrations.test.ts",
-    "db:migrate": "prisma migrate deploy"
+    "test:db": "pnpm run prisma:generate && vitest run test --no-file-parallelism",
+    "db:migrate": "prisma migrate deploy",
+    "seed:admin": "node dist/seed/cli.js"
   },
   "dependencies": {
     "@abhyas/shared": "workspace:*",
