@@ -11,6 +11,11 @@ export interface ApiCallOptions {
   readonly accessToken?: string | undefined;
   /** The end user's address, forwarded so the API's per-IP limits follow the person. */
   readonly clientIp?: string | undefined;
+  /**
+   * Cache the response under these Next cache tags instead of treating it as uncached.
+   * Public catalog pages use this so /api/revalidate can drop them after a write.
+   */
+  readonly tags?: readonly string[] | undefined;
 }
 
 export interface ApiResult<T> {
@@ -32,12 +37,20 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
   }
 
   try {
-    const response = await fetch(`${webConfig().apiInternalUrl}${path}`, {
+    const init: RequestInit & { next?: { tags: readonly string[] } } = {
       method: options.method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
-      cache: 'no-store',
-    });
+    };
+
+    if (options.tags !== undefined && options.tags.length > 0) {
+      // Cached under a tag so /api/revalidate can drop it after a catalog write.
+      init.next = { tags: options.tags };
+    } else {
+      init.cache = 'no-store';
+    }
+
+    const response = await fetch(`${webConfig().apiInternalUrl}${path}`, init);
 
     const text = await response.text();
     let body: unknown = null;

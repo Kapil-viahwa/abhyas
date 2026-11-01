@@ -59,6 +59,10 @@ model User {
   auditEntries       AuditLog[]       @relation("AuditActor")
   sessions           Session[]
   emailTokens        EmailToken[]
+  examCategories     ExamCategory[] @relation("ExamCategoryCreator")
+  exams              Exam[]        @relation("ExamCreator")
+  subjects           Subject[]     @relation("SubjectCreator")
+  topics             Topic[]       @relation("TopicCreator")
 
   @@map("users")
 }
@@ -198,3 +202,91 @@ model DomainEvent {
   @@index([occurredAt], map: "domain_events_occurred_at_idx")
   @@map("domain_events")
 }
+
+/// Phase 3: the catalog. Two levels of category, then exams, subjects and topics.
+/// Ownership is recorded here and enforced by the catalog service.
+model ExamCategory {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String
+  slug        String   @unique(map: "exam_categories_slug_key")
+  description String?
+  parentId    String?  @map("parent_id") @db.Uuid
+  logoKey     String?  @map("logo_key")
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  parent   ExamCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children ExamCategory[] @relation("CategoryTree")
+  creator  User           @relation("ExamCategoryCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  exams    Exam[]
+
+  @@index([parentId], map: "exam_categories_parent_id_idx")
+  @@map("exam_categories")
+}
+
+model Exam {
+  id          String   @id @default(uuid()) @db.Uuid
+  categoryId  String   @map("category_id") @db.Uuid
+  name        String
+  slug        String   @unique(map: "exams_slug_key")
+  description String?
+  logoKey     String?  @map("logo_key")
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  category ExamCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  creator  User         @relation("ExamCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  subjects Subject[]
+
+  @@index([categoryId], map: "exams_category_id_idx")
+  @@index([createdBy], map: "exams_created_by_idx")
+  @@map("exams")
+}
+
+model Subject {
+  id          String   @id @default(uuid()) @db.Uuid
+  examId      String   @map("exam_id") @db.Uuid
+  name        String
+  slug        String
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  exam    Exam    @relation(fields: [examId], references: [id], onDelete: Restrict)
+  creator User    @relation("SubjectCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  topics  Topic[]
+
+  @@unique([examId, slug], map: "subjects_exam_slug_key")
+  @@index([examId], map: "subjects_exam_id_idx")
+  @@map("subjects")
+}
+
+model Topic {
+  id          String   @id @default(uuid()) @db.Uuid
+  subjectId   String   @map("subject_id") @db.Uuid
+  name        String
+  slug        String
+  description String?
+  sortOrder   Int      @default(0) @map("sort_order")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdBy   String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
+  creator User    @relation("TopicCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@unique([subjectId, slug], map: "topics_subject_slug_key")
+  @@index([subjectId], map: "topics_subject_id_idx")
+  @@map("topics")
+}
+

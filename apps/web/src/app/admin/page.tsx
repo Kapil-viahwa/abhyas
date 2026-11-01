@@ -60,6 +60,9 @@ export default async function AdminOverviewPage(): Promise<ReactElement> {
           <Link href="/admin/users/new" className="text-sky-400 hover:text-sky-300">
             Create an editor
           </Link>
+          <Link href="/admin/catalog" className="text-sky-400 hover:text-sky-300">
+            Catalog
+          </Link>
         </div>
       </section>
     </AdminPage>

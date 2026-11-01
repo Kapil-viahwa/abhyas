@@ -16,7 +16,12 @@ export interface WebConfig {
   readonly turnstileSiteKey: string;
   /** True when the site key is one of Cloudflare's always-pass test keys. */
   readonly turnstileTestMode: boolean;
+  /** Accepted on /api/revalidate, the one route the API is allowed to call. */
+  readonly revalidateSecret: string;
 }
+
+const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
+const MIN_REVALIDATE_SECRET_LENGTH = 16;
 
 /** Cloudflare's documented always-pass site key. */
 export const TURNSTILE_TEST_SITE_KEY = '1x0000000000000000000000000000000AA';
@@ -51,6 +56,16 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
   }
 
   const turnstileSiteKey = configuredSiteKey === '' ? TURNSTILE_TEST_SITE_KEY : configuredSiteKey;
+  const revalidateSecret = env.REVALIDATE_SECRET?.trim() ?? '';
+
+  if (nodeEnv === 'production') {
+    if (revalidateSecret === '') {
+      throw new Error('REVALIDATE_SECRET is required in production: the API must prove itself before a page is dropped');
+    }
+    if (revalidateSecret.length < MIN_REVALIDATE_SECRET_LENGTH) {
+      throw new Error(`REVALIDATE_SECRET must be at least ${MIN_REVALIDATE_SECRET_LENGTH} characters`);
+    }
+  }
 
   return {
     nodeEnv,
@@ -58,5 +73,6 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
     webUrl,
     turnstileSiteKey,
     turnstileTestMode: TURNSTILE_TEST_SITE_KEY_PATTERN.test(turnstileSiteKey),
+    revalidateSecret: revalidateSecret === '' ? DEFAULT_REVALIDATE_SECRET : revalidateSecret,
   };
 }

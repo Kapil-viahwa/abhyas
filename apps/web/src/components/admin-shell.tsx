@@ -12,6 +12,7 @@ export function AdminNav({ csrf, current }: { readonly csrf: string; readonly cu
     { href: '/admin', label: 'Overview' },
     { href: '/admin/users', label: 'Users' },
     { href: '/admin/users/new', label: 'New editor' },
+    { href: '/admin/catalog', label: 'Catalog' },
   ];
 
   return (

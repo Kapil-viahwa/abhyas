@@ -106,7 +106,7 @@ describe('user administration over HTTP', () => {
     return app.inject(payload === undefined ? { method, url, headers } : { method, url, headers, payload });
   }
 
-  async function grant(flagCode: string, userId: string, grantedBy: string): Promise<void> {
+  async function grant(flagCode: string, userId: string, grantedBy: string | null): Promise<void> {
     const permission = await db.client.permission.findUniqueOrThrow({
       where: { code: flagCode },
       select: { id: true },
@@ -159,7 +159,7 @@ describe('user administration over HTTP', () => {
 
     it('accepts editor capability on an editor and clears it when the role changes', async () => {
       const editor = await makePerson('EDITOR');
-      await grant('tests.write', editor.id, editor.id);
+      await grant('tests.write', editor.id, null);
 
       expect(await codesOf(editor.id)).toEqual(['tests.write']);
 
