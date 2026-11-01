@@ -33,8 +33,13 @@ flowchart TB
   serving, which is exactly what the `compose-smoke` and `e2e` CI jobs rely on.
 - Database ports are published in development only, so host-side `pnpm db:migrate` and
   `pnpm test:db` work.
-- `ALLOW_DEV_LOGIN`, a Turnstile test key and the `fake` SMS provider are set here — and are
-  refused by the boot gate when `NODE_ENV=production`.
+- Two database roles (decision 0022): migrations connect as the owner
+  (`MIGRATION_DATABASE_URL`), while the API and the worker connect as `abhyas_app`
+  (`DATABASE_URL`, `APP_DATABASE_URL` for tests) — not a superuser, with `UPDATE`, `DELETE`
+  and `TRUNCATE` on `audit_logs` revoked. Development and CI create the role from
+  `docker/postgres-init/01-app-role.sql`; production creates it out of band with its own secret.
+- `ALLOW_DEV_LOGIN`, a Turnstile test key, the `fake` SMS provider and the console email outbox
+  are set here — and are refused by the boot gate when `NODE_ENV=production`.
 
 ## Production
 
@@ -59,7 +64,12 @@ flowchart TB
 Production invariants, asserted by `scripts/validate-compose-prod.mjs` in the `docker` CI job:
 
 - Postgres, Redis and the API publish **no** host ports; only the web tier is reachable.
-- `NODE_ENV=production` in every service; no `ALLOW_DEV_LOGIN`, no `fake`/`console` SMS.
+- `NODE_ENV=production` in every service; no `ALLOW_DEV_LOGIN`, no `fake`/`console` SMS, no
+  console email outbox.
+- Migrations run as the owner role (`MIGRATION_DATABASE_URL`); the API and the worker run as
+  `abhyas_app`, which cannot rewrite or erase `audit_logs`.
+- `EMAIL_PROVIDER` is required and cannot be `console`; `EMAIL_PROVIDER=smtp` additionally
+  requires `SMTP_URL`, and the transport still refuses to send until real delivery is wired.
 - Every secret is required by name (`${VAR:?message}`), so rendering the file without one fails
   before any container starts. A default secret is therefore impossible to deploy.
 - Named volumes only; no bind mounts of host paths.

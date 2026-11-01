@@ -81,8 +81,14 @@ without changing their role; those are always granted by an `ADMIN` and are audi
 
 ## Where this is implemented
 
-| Piece | Phase |
-| --- | --- |
-| `users`, `roles`, `permissions`, `user_permissions` tables and the seeded catalog | 1 (this phase) |
-| `role_permissions` table, authentication, guard that enforces the matrix | 2 |
-| Object-level rules per resource | with the resource (phases 3–4) |
+| Piece | Phase | State |
+| --- | --- | --- |
+| `users`, `roles`, `permissions`, `user_permissions` tables and the seeded catalog | 1 | Done |
+| `role_permissions` table seeded from the matrix above | 2a | Done, by migration |
+| Deny-by-default guard: every route declares `@Public`, `@Authenticated` or `@RequirePermissions`, and a test enumerates every handler and fails on an undeclared one | 2a | Done |
+| Permissions resolved from the database per request, never from a token | 2a | Done |
+| The matrix proven end to end over HTTP: 401 without a token, 403 for a `USER` and an `EDITOR` on a `users.read` route, 200 for an `ADMIN` | 2a | Done |
+| Refresh tokens, session list and revoke, password change and reset, deactivation | 2b | Not yet |
+| Web screens, cookies and CSRF protection | 2b | Not yet |
+| Object-level rules per resource | with the resource (phases 3–4) | Not yet |
+
