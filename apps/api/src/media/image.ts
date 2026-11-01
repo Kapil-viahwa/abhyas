@@ -10,6 +10,11 @@ import sharp from 'sharp';
  * content type: a renamed executable is simply not an image. The image is then decoded
  * and re-encoded, which drops EXIF, appended payloads and anything else the original
  * container carried, and the stored object is always WebP.
+ *
+ * Decoding an untrusted file is the expensive and dangerous step, so it is bounded three
+ * ways: a pixel limit (a decompression bomb is refused before it becomes memory), a
+ * wall-clock limit (a decode that never finishes is abandoned), and a concurrency limit
+ * (a burst of uploads cannot take every core and starve the rest of the API).
  */
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
@@ -17,6 +22,12 @@ export const MAX_EDGE_PIXELS = 2000;
 export const MAX_INPUT_PIXELS = 40_000_000;
 export const OUTPUT_MIME_TYPE = 'image/webp';
 export const OUTPUT_EXTENSION = 'webp';
+
+/** A decode that runs longer than this is abandoned rather than allowed to finish. */
+export const PROCESSING_TIMEOUT_MS = 10_000;
+
+/** How many images may be decoded at the same time, whatever the request count. */
+export const MAX_CONCURRENT_DECODES = 4;
 
 export type SniffedImageFormat = 'jpeg' | 'png' | 'webp';
 
@@ -26,6 +37,18 @@ export class ImageRejectedError extends Error {
     this.name = 'ImageRejectedError';
   }
 }
+
+/**
+ * The options every `sharp` call uses. `failOn: 'error'` makes a truncated stream an
+ * error instead of a best-effort decode, and `animated: false` reads a single frame even
+ * if a container somehow declares more (the frame count is rejected separately).
+ */
+const SHARP_INPUT_OPTIONS = {
+  limitInputPixels: MAX_INPUT_PIXELS,
+  failOn: 'error' as const,
+  sequentialRead: true,
+  animated: false,
+};
 
 /** Magic bytes, not extensions. SVG is text and is rejected along with everything else. */
 export function sniffImage(bytes: Buffer): SniffedImageFormat | null {
@@ -57,6 +80,79 @@ export function sniffImage(bytes: Buffer): SniffedImageFormat | null {
   return null;
 }
 
+/**
+ * A counting semaphore over the decode. The queue sits above `sharp`, so the limit holds
+ * for direct uploads and for the image entries of an import archive at the same time.
+ */
+export class DecodeLimiter {
+  private active = 0;
+  private readonly waiting: Array<() => void> = [];
+
+  constructor(private readonly limit: number = MAX_CONCURRENT_DECODES) {}
+
+  get running(): number {
+    return this.active;
+  }
+
+  get queued(): number {
+    return this.waiting.length;
+  }
+
+  async run<T>(work: () => Promise<T>): Promise<T> {
+    if (this.active >= this.limit) {
+      await new Promise<void>((resolve) => {
+        this.waiting.push(resolve);
+      });
+    }
+
+    this.active += 1;
+    try {
+      return await work();
+    } finally {
+      this.active -= 1;
+      const next = this.waiting.shift();
+      if (next !== undefined) {
+        next();
+      }
+    }
+  }
+}
+
+export const imageLimiter = new DecodeLimiter();
+
+/**
+ * One image is stored as one frame. A multi-frame container would let an upload become a
+ * short video or blow up the stored size for the same declared dimensions, and a question
+ * image has no use for frames.
+ */
+export function assertSingleFrame(pageCount: number | undefined): void {
+  if (pageCount !== undefined && pageCount > 1) {
+    throw new ImageRejectedError('Animated images are not accepted');
+  }
+}
+
+/**
+ * Abandons work that takes longer than the limit. The losing promise is still handled by
+ * `Promise.race`, so an abandoned decode cannot raise an unhandled rejection later.
+ */
+export async function withProcessingTimeout<T>(work: Promise<T>, timeoutMs: number = PROCESSING_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const expired = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new ImageRejectedError('The image took too long to process'));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([work, expired]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export interface ProcessedImage {
   readonly data: Buffer;
   readonly mimeType: typeof OUTPUT_MIME_TYPE;
@@ -81,17 +177,26 @@ export async function processImage(input: Buffer): Promise<ProcessedImage> {
   let output: { data: Buffer; info: { width: number; height: number } };
 
   try {
-    const metadata = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS }).metadata();
-    if (metadata.format !== format) {
-      // The bytes claim one container and decode as another: a polyglot, not an image.
-      throw new ImageRejectedError('The image could not be decoded as its declared type');
-    }
+    output = await imageLimiter.run(() =>
+      withProcessingTimeout(
+        (async () => {
+          const metadata = await sharp(input, SHARP_INPUT_OPTIONS).metadata();
+          if (metadata.format !== format) {
+            // The bytes claim one container and decode as another: a polyglot, not an image.
+            throw new ImageRejectedError('The image could not be decoded as its declared type');
+          }
+          assertSingleFrame(metadata.pages);
 
-    output = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS })
-      .rotate()
-      .resize({ width: MAX_EDGE_PIXELS, height: MAX_EDGE_PIXELS, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 82 })
-      .toBuffer({ resolveWithObject: true });
+          // No `withMetadata()` call anywhere: the encoder writes a bare WebP, so EXIF,
+          // ICC, IPTC and XMP from the upload never reach the stored object.
+          return sharp(input, SHARP_INPUT_OPTIONS)
+            .rotate()
+            .resize({ width: MAX_EDGE_PIXELS, height: MAX_EDGE_PIXELS, fit: 'inside', withoutEnlargement: true })
+            .webp({ quality: 82 })
+            .toBuffer({ resolveWithObject: true });
+        })(),
+      ),
+    );
   } catch (error) {
     if (error instanceof ImageRejectedError) {
       throw error;

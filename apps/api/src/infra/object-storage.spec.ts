@@ -6,6 +6,7 @@ import {
   DisabledObjectStorage,
   InMemoryObjectStorage,
   ObjectStorageUnavailableError,
+  PRESIGNED_URL_TTL_SECONDS,
   S3ObjectStorage,
   createObjectStorage,
   isQuestionImageKey,
@@ -82,5 +83,30 @@ describe('object storage', () => {
     expect((await storage.get(key)).toString()).toBe('bytes');
     await expect(storage.get(questionImageKey())).rejects.toThrow(ObjectStorageUnavailableError);
     expect(await storage.presignedGetUrl(key)).toMatch(/^memory:\/\/question-image\//);
+  });
+
+  it('signs a five-minute URL whose expiry and signature are in the query string', async () => {
+    expect(PRESIGNED_URL_TTL_SECONDS).toBe(5 * 60);
+
+    const storage = createObjectStorage(
+      config({
+        S3_ENDPOINT: 'https://storage.example.com',
+        S3_BUCKET: 'abhyas-media',
+        S3_ACCESS_KEY_ID: 'live-access-key',
+        S3_SECRET_ACCESS_KEY: 'live-secret-value-0123456789',
+        S3_FORCE_PATH_STYLE: false,
+      }),
+    );
+
+    const key = questionImageKey();
+    const url = new URL(await storage.presignedGetUrl(key));
+
+    // The key is ours, and the only way in is the signature.
+    expect(url.pathname).toContain(key);
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('300');
+    expect(url.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256');
+    expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/);
+    expect(url.searchParams.get('X-Amz-Credential')).toContain('live-access-key');
+    expect(url.searchParams.get('X-Amz-SignedHeaders')).toContain('host');
   });
 });

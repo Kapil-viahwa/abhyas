@@ -348,6 +348,7 @@ describe('questions and media over HTTP', () => {
     const url = await call('GET', `/v1/media/images/${asset.id}/url`, editorA.token);
     expect(url.statusCode).toBe(200);
     expect((url.json() as { url: string }).url).toContain('question-image/');
+    expect((url.json() as { expiresInSeconds: number }).expiresInSeconds).toBe(300);
 
     // Somebody else cannot ask for a signed URL, and a student cannot upload at all.
     const foreign = await call('GET', `/v1/media/images/${asset.id}/url`, editorB.token);
@@ -364,5 +365,43 @@ describe('questions and media over HTTP', () => {
     const response = await call('POST', '/v1/media/images', editorA.token, { dataBase64: exe.toString('base64') });
     expect(response.statusCode).toBe(400);
     expect(response.json().message).toMatch(/JPEG, PNG and WebP/);
+  });
+
+  it('reads the bytes, never the name or content type the client claims', async () => {
+    const exe = Buffer.from('MZ' + '\u0090'.repeat(2048), 'binary');
+
+    // A double extension and a content type that lies: neither reaches the decision.
+    const lie = await call('POST', '/v1/media/images', editorA.token, {
+      dataBase64: exe.toString('base64'),
+      fileName: 'diagram.png',
+      mimeType: 'image/png',
+    });
+    expect(lie.statusCode).toBe(400);
+    expect(lie.json().message).toMatch(/JPEG, PNG and WebP/);
+
+    // The same in reverse: a real image with an alarming name and type is accepted, and
+    // stored under a key the server generated.
+    const png = await sharp({ create: { width: 24, height: 24, channels: 3, background: '#abcdef' } })
+      .png()
+      .toBuffer();
+
+    const accepted = await call('POST', '/v1/media/images', editorA.token, {
+      dataBase64: png.toString('base64'),
+      fileName: 'notes.exe',
+      mimeType: 'application/x-msdownload',
+    });
+    expect(accepted.statusCode).toBe(201);
+
+    const body = accepted.json() as { id: string; width: number; height: number };
+    // The response describes the stored asset; no image bytes travel back.
+    expect(Object.keys(body).sort()).toEqual(['byteSize', 'createdAt', 'height', 'id', 'width']);
+
+    const stored = await db.client.mediaAsset.findUniqueOrThrow({
+      where: { id: body.id },
+      select: { objectKey: true, mimeType: true },
+    });
+    expect(stored.objectKey).toMatch(/^question-image\/[0-9a-f-]{36}\.webp$/);
+    expect(stored.objectKey).not.toContain('notes');
+    expect(stored.mimeType).toBe('image/webp');
   });
 });
