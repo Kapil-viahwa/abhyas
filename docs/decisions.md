@@ -172,6 +172,8 @@ A `BEFORE INSERT OR UPDATE` trigger sets `users.email` to `lower(btrim(...))` an
 
 **Why:** a seed with a default password is how "temporary" admin accounts become permanent back doors. Requiring the confirmation flag in production means the seeder cannot create an admin by accident there, while development still works with two obvious variables. The run is idempotent: it does nothing if any admin already exists, and it writes an `IDENTITY_ADMIN_SEEDED` audit row when it does create one.
 
+The account it creates is marked verified in the same transaction. Sign-in refuses an unverified address for everyone else, so a seeded administrator left unverified would be an account the platform created and then would not admit to; holding the deployment's environment is stronger proof of ownership than an emailed link. `seed-admin.test.ts` asserts the role, the hash, the `ACTIVE` status and the verification together.
+
 ## 0021 — Database test files run sequentially
 
 **Status:** accepted · **Phase:** 1

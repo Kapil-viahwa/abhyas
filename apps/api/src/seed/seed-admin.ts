@@ -9,7 +9,10 @@ import { hashPassword } from '../auth/password';
  * - there is no default email and no default password, in any environment;
  * - production additionally requires SEED_ADMIN_CONFIRM=create-first-admin;
  * - the run is idempotent: if any admin already exists, nothing is created;
- * - a successful run writes an audit row in the same transaction as the user.
+ * - a successful run writes an audit row in the same transaction as the user;
+ * - the account it creates is marked verified. Sign-in refuses an unverified
+ *   address, and the operator who ran the seed already proved ownership of the
+ *   deployment by holding its environment — stronger proof than an emailed link.
  */
 
 export const MIN_SEED_PASSWORD_LENGTH = 12;
@@ -127,6 +130,10 @@ export async function seedAdmin(client: PrismaClient, config: SeedAdminConfig): 
         passwordHash,
         roleId: role.id,
         status: 'ACTIVE',
+        // Verification is an email round trip the API refuses to skip for anyone
+        // else. A seeded administrator has no such round trip to make, and one left
+        // unverified could never sign in at all.
+        emailVerifiedAt: new Date(),
       },
       select: { id: true },
     });

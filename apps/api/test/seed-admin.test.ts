@@ -34,12 +34,17 @@ describe('admin seed', () => {
 
     const user = await db.client.user.findUniqueOrThrow({
       where: { email: 'seed.admin@example.com' },
-      select: { id: true, passwordHash: true, role: { select: { code: true } } },
+      select: { id: true, passwordHash: true, status: true, emailVerifiedAt: true, role: { select: { code: true } } },
     });
 
     expect(user.role.code).toBe('ADMIN');
     expect(user.passwordHash).not.toContain(config.password);
     expect(await verifyPassword(user.passwordHash, config.password)).toBe(true);
+
+    // Sign-in refuses an unverified address, so the account the seed creates must be
+    // one the administrator can actually use.
+    expect(user.status).toBe('ACTIVE');
+    expect(user.emailVerifiedAt).not.toBeNull();
 
     const audit = await db.client.auditLog.findMany({
       where: { action: 'IDENTITY_ADMIN_SEEDED', entityId: user.id },
