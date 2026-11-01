@@ -57,8 +57,8 @@ flowchart TB
     migrations --> pg
   end
 
-  api -.->|phase 5: presigned URLs| s3[("S3-compatible storage")]
-  nginx["Nginx — phase 5<br/>edge TLS and rate limiting"] -.-> web
+  api -.->|phase 4: presigned URLs| s3[("S3-compatible storage")]
+  nginx["Nginx — hardening phase<br/>edge TLS and rate limiting"] -.-> web
 ```
 
 Production invariants, asserted by `scripts/validate-compose-prod.mjs` in the `docker` CI job:
@@ -76,12 +76,13 @@ Production invariants, asserted by `scripts/validate-compose-prod.mjs` in the `d
 - Migrations run as a one-shot service that the API waits on, so a replica never serves against
   an unmigrated schema.
 
-## Planned edge and storage (phase 5)
+## Planned edge and storage
 
-Nginx will terminate TLS, serve the Next.js static assets and rate-limit the auth endpoints.
-Object storage will hold question media: the API issues presigned upload/download URLs and never
-proxies bytes. Both are drawn here because they change the deployment shape, and neither exists
-yet — they are listed as known gaps in `PROGRESS.md`.
+Nginx will terminate TLS, serve the Next.js static assets and rate-limit the auth endpoints; it
+belongs with the hardening phase. Object storage will hold question media in phase 4: the API
+issues presigned upload/download URLs and never proxies bytes. Both are drawn here because they
+change the deployment shape, and neither exists yet — they are listed as known gaps in
+`PROGRESS.md`.
 
 ## CI mapping
 

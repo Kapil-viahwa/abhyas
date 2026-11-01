@@ -262,7 +262,7 @@ guarantee the working rules forbid weakening. The workflow is the only one grant
 it is scoped to one branch, and its lifetime is one commit.
 
 
-## 0024 — A permanent, manual, non-main lockfile sync workflow
+## 0025 — A permanent, manual, non-main lockfile sync workflow
 
 **Status:** accepted · **Phase:** 2a · supersedes 0023
 
@@ -438,9 +438,9 @@ The web app never calls the API from the browser and never receives a token as d
   returning, and retries once; a page that finds no usable access token is sent through
   `/api/auth/refresh-and-return`, which can write cookies before rendering.
 - Every write is a form post to a route handler, guarded by an `Origin` check against
-  the configured web origin **and** a double-submit value: middleware sets a random
-  `abhyas_csrf` cookie and injects the same value as a request header, so the first
-  render's form carries a token the browser already holds.
+  the configured web origin **and** a double-submit value: middleware sets a random,
+  httpOnly `abhyas_csrf` cookie (`Secure` in production) and injects the same value as a
+  request header, so the first render's form carries a token the browser already holds.
 - The API's per-IP limits follow the person: the route handlers forward
   `X-Forwarded-For`, and the API runs with `trustProxy`.
 
@@ -451,11 +451,13 @@ opaque cookies that page scripts cannot read, and CSRF is answered by the double
 rather than by a CORS policy nobody tests.
 
 **Consequence:** the web is a BFF (backend for frontend) and its route handlers are part
-of the security surface; they are tested by the Playwright flows rather than by unit
-tests. `TURNSTILE_SITE_KEY` is required in production and refuses Cloudflare test keys,
-and in development/CI the widget is rendered with the test key while the form carries the
-token the API's test verifier accepts, so the flow does not depend on Cloudflare being
-reachable from a CI runner.
+of the security surface. The write guard is unit tested (`route-handler.spec.ts` covers a
+foreign origin, a missing origin, a missing or wrong form value, a missing cookie and a
+non-form body) and the whole path is covered by the Playwright flows. `TURNSTILE_SITE_KEY`
+is required in production and refuses Cloudflare test keys, and in development/CI the
+widget is rendered with the test key while the form carries the token the API's test
+verifier accepts, so the flow does not depend on Cloudflare being reachable from a CI
+runner.
 
 **CSP note:** the policy allows `'unsafe-inline'` for scripts because Next's bootstrap is
 inline; moving to a nonce-based policy belongs with the edge proxy work in the hardening

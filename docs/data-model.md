@@ -294,8 +294,7 @@ erDiagram
 | 1 | `users`, `roles`, `permissions`, `user_permissions`, `settings`, `audit_logs` | Identity foundation: who exists, who may do what, and a tamper-evident record |
 | 2 | `sessions`, `email_tokens`, `role_permissions`, `domain_events` | Authentication with opaque tokens, single-use email tokens, role→permission resolution and the transactional outbox that grants the signup bonus |
 | 3 | `exams`, `subjects`, `topics`, `questions`, `question_options`, `tests`, `test_sections`, `test_questions` | Content authoring and publishing |
-| 4 | `test_attempts`, `attempt_answers`, `coin_wallets`, `coin_ledger`, `daily_login_rewards` | Taking tests, server-authoritative timer and scoring, and the coin ledger that pays for attempts |
-| 5 | `media_assets` | Object storage for question media, behind Nginx |
+| 4 | `test_attempts`, `attempt_answers`, `coin_wallets`, `coin_ledger`, `daily_login_rewards`, `media_assets` | Taking tests, server-authoritative timer and scoring, the coin ledger that pays for attempts, and question media in object storage |
 
 ## Invariants the database enforces, not the application
 
