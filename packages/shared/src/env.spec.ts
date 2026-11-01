@@ -18,6 +18,10 @@ const production = {
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
   REVALIDATE_SECRET: 'r'.repeat(32),
+  S3_ENDPOINT: 'https://storage.example.com',
+  S3_BUCKET: 'abhyas-media',
+  S3_ACCESS_KEY_ID: 'live-access-key',
+  S3_SECRET_ACCESS_KEY: 'live-secret-value-0123456789',
 };
 
 describe('validateEnv', () => {
@@ -115,5 +119,71 @@ describe('validateEnv', () => {
         expect.arrayContaining(['DATABASE_URL', 'REDIS_URL', 'AUTH_SECRET', 'TURNSTILE_SECRET_KEY', 'SMS_PROVIDER']),
       );
     }
+  });
+
+  it('accepts the development stack pointing at a local MinIO', () => {
+    const env = validateEnv({
+      ...base,
+      S3_ENDPOINT: 'http://minio:9000',
+      S3_BUCKET: 'abhyas-media',
+      S3_ACCESS_KEY_ID: 'abhyas-dev',
+      S3_SECRET_ACCESS_KEY: 'abhyas-dev-secret',
+      S3_FORCE_PATH_STYLE: 'true',
+    });
+
+    expect(env.S3_ENDPOINT).toBe('http://minio:9000');
+    expect(env.S3_FORCE_PATH_STYLE).toBe(true);
+    expect(env.S3_PUBLIC_READ).toBe(false);
+  });
+
+  it('allows the in-memory store for the database tests', () => {
+    const env = validateEnv({
+      ...base,
+      S3_ENDPOINT: 'memory:',
+      S3_BUCKET: 'abhyas-media',
+      S3_ACCESS_KEY_ID: 'abhyas-dev',
+      S3_SECRET_ACCESS_KEY: 'abhyas-dev-secret',
+    });
+
+    expect(env.S3_ENDPOINT).toBe('memory:');
+  });
+
+  it('refuses the in-memory store in production', () => {
+    expect(() => validateEnv({ ...production, S3_ENDPOINT: 'memory:' })).toThrow(
+      /S3_ENDPOINT: the in-memory store is refused in production/,
+    );
+  });
+
+  it('requires an https S3 endpoint and its bucket in production', () => {
+    expect(() => validateEnv({ ...production, S3_ENDPOINT: 'http://minio:9000' })).toThrow(
+      /S3_ENDPOINT: must be an https endpoint in production/,
+    );
+    expect(() => validateEnv({ ...production, S3_ENDPOINT: '' })).toThrow(
+      /S3_ENDPOINT: is required in production/,
+    );
+    expect(() => validateEnv({ ...production, S3_BUCKET: '' })).toThrow(
+      /S3_BUCKET: is required in production/,
+    );
+  });
+
+  it('refuses the development S3 credentials in production', () => {
+    expect(() => validateEnv({ ...production, S3_ACCESS_KEY_ID: 'minioadmin' })).toThrow(
+      /S3_ACCESS_KEY_ID: development credentials are refused in production/,
+    );
+    expect(() =>
+      validateEnv({ ...production, S3_SECRET_ACCESS_KEY: 'abhyas-dev-secret-0123456789' }),
+    ).toThrow(/S3_SECRET_ACCESS_KEY: must be at least 16 characters and not a development credential/);
+  });
+
+  it('refuses a public bucket in every environment', () => {
+    expect(() => validateEnv({ ...base, S3_PUBLIC_READ: 'true' })).toThrow(
+      /S3_PUBLIC_READ: a public bucket is refused/,
+    );
+  });
+
+  it('refuses a half-configured store in development', () => {
+    expect(() => validateEnv({ ...base, S3_ENDPOINT: 'http://minio:9000' })).toThrow(
+      /S3_BUCKET: is required whenever S3_ENDPOINT is set/,
+    );
   });
 });

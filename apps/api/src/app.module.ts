@@ -22,13 +22,24 @@ import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
 import { DatabaseService } from './infra/database.service';
 import { EMAIL_SENDER, createEmailSender } from './infra/email-sender';
+import { OBJECT_STORAGE, createObjectStorage } from './infra/object-storage';
 import { RateLimiter } from './infra/rate-limiter';
 import { RedisService } from './infra/redis.service';
 import { DATABASE_PROBE, REDIS_PROBE } from './infra/tokens';
 import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-verifier';
+import { MediaController } from './media/media.controller';
+import { MediaService } from './media/media.service';
 
 @Module({
-  controllers: [HealthController, AuthController, AccountController, AdminController, CatalogController, PublicCatalogController],
+  controllers: [
+    HealthController,
+    AuthController,
+    AccountController,
+    AdminController,
+    CatalogController,
+    PublicCatalogController,
+    MediaController,
+  ],
   providers: [
     { provide: DATABASE_PROBE, useClass: DatabaseService },
     { provide: REDIS_PROBE, useClass: RedisService },
@@ -63,6 +74,11 @@ import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-v
     DashboardService,
     CatalogRevalidationService,
     CatalogService,
+    {
+      provide: OBJECT_STORAGE,
+      useFactory: () => createObjectStorage(loadConfig(process.env)),
+    },
+    MediaService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.
     { provide: APP_GUARD, useClass: AuthGuard },
   ],

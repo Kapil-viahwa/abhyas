@@ -557,3 +557,110 @@ exists to record.
 **Consequence:** the export is capped at 5,000 rows so one request cannot become a database dump,
 and the CSV is generated from the same filter function the viewer uses, so what is exported is
 what was on screen.
+
+
+## 0038 — A private S3-compatible bucket, and an upload pipeline that decides for itself
+
+**Status:** accepted · **Phase:** 4
+
+Storage is S3 behind `ObjectStorage` (`apps/api/src/infra/object-storage.ts`), and the
+bucket is private in every environment. Development and CI run MinIO (`minio/minio`
+`RELEASE.2024-05-10T01-41-38Z`) and the API creates the bucket at boot there; production
+points at an external service and creates nothing. `validateEnv` refuses, in production,
+an empty endpoint, a non-`https` endpoint, the in-memory store, development credentials,
+and a public-bucket flag (which is refused in every environment).
+
+Every image goes through `apps/api/src/media/image.ts`:
+
+- the type is decided by **magic bytes**, never the extension or the declared content
+  type, so a renamed executable or an SVG is not an image;
+- the file is decoded with `sharp` (pixel-count limit), rotated, resized to a 2000px
+  longest edge, and **re-encoded as WebP**, which strips EXIF and drops anything appended
+  to the original container — that is what defuses a polyglot;
+- the key is generated (`question-image/<uuid>.webp`) and the database CHECK refuses any
+  other shape, so a user-supplied name can never reach the store;
+- reads are presigned URLs that live five minutes, and only the uploader or an
+  administrator can ask for one.
+
+**Dependencies (exact versions):**
+
+- `@aws-sdk/client-s3` 3.699.0 — the S3 protocol client.
+- `@aws-sdk/s3-request-presigner` 3.699.0 — signed GET URLs; part of the same SDK line,
+  so a single version must not drift.
+- `sharp` 0.33.5 — decoding and re-encoding. It is the only maintained image library that
+  gives a pixel-count limit and a metadata-stripping re-encode without a shell-out.
+
+**Why:** a public bucket makes presigned URLs pointless, and deciding the type from the
+name is the oldest upload bug there is. Re-encoding rather than trusting the bytes means
+the store only ever holds a WebP the pipeline produced.
+
+**Consequence:** `S3_ENDPOINT=memory:` exists for the database test job, which has no
+object store. It is named like a protocol so it cannot be mistaken for a host, and
+production refuses it.
+
+## 0039 — Questions: a working version, an immutable published version, and server-side sanitising
+
+**Status:** accepted · **Phase:** 4
+
+A `questions` row points at the catalog (exam, subject, optional topic) and owns a
+`current_version`. Text lives in `question_versions`: an HTML subset sanitised on the
+server, an explanation, an optional LaTeX string rendered separately with KaTeX, marks and
+negative marks, language (`EN`/`HI`), difficulty, and the type. `question_options` rows
+hang off a version.
+
+Rules the database keeps, not the handler:
+
+- a version that has `published_at` cannot be updated or deleted (trigger), and neither
+  can its options;
+- a deferred constraint trigger checks the answer key at commit: an `MCQ` has two to six
+  options and exactly one correct one, a `NUMERICAL` has none and a numeric
+  `numerical_answer` matching `^-?[0-9]+(\.[0-9]{1,6})?$`;
+- a question's subject must belong to its exam and its topic to its subject (trigger);
+- editing a published question creates a new draft version, so history is never rewritten.
+
+Rich text arrives as TipTap's HTML and is sanitised with an allowlist (`sanitize-html`),
+never trusted. LaTeX is rendered with `katex` with `trust: false` and `strict: 'ignore'`
+on the render options, so `\href` and raw HTML cannot pass through.
+
+**Dependencies (exact versions):**
+
+- `sanitize-html` 2.13.1 (+ `@types/sanitize-html` 2.13.0) — the allowlist sanitiser.
+- `@tiptap/react`, `@tiptap/starter-kit`, `@tiptap/pm` 2.10.3 — the editor. TipTap is in
+  the fixed stack from phase 0.
+- `katex` 0.16.11 (+ `@types/katex` 0.16.7) — mathematical rendering, also named in the
+  fixed stack.
+
+**Why:** a rich-text editor that is trusted by the backend is an XSS engine with a
+database. Storing the sanitised HTML next to the numeric answer means a student preview
+and a printed paper see the same markup, and versioning means a published paper cannot
+change under a student who already sat it.
+
+## 0040 — Bulk import: a worker job, a staging table, and an all-or-nothing commit
+
+**Status:** accepted · **Phase:** 4
+
+An editor uploads a CSV or XLSX (and optionally a ZIP of images). The API stores the file
+in the private bucket and queues a job; the worker parses it, validates every row into
+`import_rows`, and never writes a question until the commit. A job with any invalid row is
+`REJECTED` and commits nothing. The commit writes drafts only, inside one transaction, and
+records `import_commits` first, so a worker that restarts finds the row and stops instead
+of importing twice.
+
+ZIP handling rejects, before reading any entry: more than 500 entries, more than 100 MB of
+uncompressed data, a compression ratio above 100:1, `../` or absolute paths, and symlinks.
+Each image entry then goes through the same `processImage` pipeline as a direct upload.
+
+**Dependencies (exact versions):**
+
+- `exceljs` 4.4.0 — reads XLSX and writes the template and the error report. It is used
+  by the API and the worker, so the template and the parser cannot disagree.
+- `yauzl` 3.2.0 (+ `@types/yauzl` 2.10.3) — streaming ZIP reading with entry metadata,
+  which is what makes the caps above enforceable before extracting anything.
+
+**Why:** a bulk import that half-succeeds leaves an editor with no idea which rows landed,
+and parsing a customer-supplied archive is the classic path to a zip bomb or a path
+traversal. Staging plus one transaction makes the answer to "what did this file do?"
+exactly one row in `import_jobs`.
+
+**Consequence:** the worker now owns a Prisma client and the same object-storage client as
+the API, and it generates the client from the API's schema so the two can never drift.

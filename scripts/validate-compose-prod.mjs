@@ -27,6 +27,10 @@ const requiredEnv = {
   EMAIL_PROVIDER: 'smtp',
   WEB_URL: 'https://abhyas.example.com',
   REVALIDATE_SECRET: 'r'.repeat(32),
+  S3_ENDPOINT: 'https://storage.example.com',
+  S3_BUCKET: 'abhyas-media',
+  S3_ACCESS_KEY_ID: 'live-access-key',
+  S3_SECRET_ACCESS_KEY: 'live-secret-value-0123456789',
 };
 
 function renderConfig(env) {

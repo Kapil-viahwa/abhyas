@@ -25,6 +25,14 @@ env:
   MIGRATION_DATABASE_URL: postgresql://abhyas:abhyas@localhost:5432/abhyas
   APP_DATABASE_URL: postgresql://abhyas_app:abhyas_app@localhost:5432/abhyas
   REDIS_URL: redis://localhost:6379
+  # The database job has no object store, so it uses the in-memory one, which the
+  # production environment refuses. The compose jobs use the real MinIO service.
+  S3_ENDPOINT: 'memory:'
+  S3_REGION: us-east-1
+  S3_BUCKET: abhyas-media
+  S3_ACCESS_KEY_ID: abhyas-dev
+  S3_SECRET_ACCESS_KEY: abhyas-dev-secret
+  S3_FORCE_PATH_STYLE: 'true'
 
 jobs:
   lint:

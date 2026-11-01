@@ -63,6 +63,10 @@ model User {
   exams              Exam[]        @relation("ExamCreator")
   subjects           Subject[]     @relation("SubjectCreator")
   topics             Topic[]       @relation("TopicCreator")
+  mediaAssets        MediaAsset[]   @relation("MediaUploader")
+  questions          Question[]     @relation("QuestionCreator")
+  questionVersions   QuestionVersion[] @relation("QuestionVersionAuthor")
+  importJobs         ImportJob[]    @relation("ImportJobCreator")
 
   @@map("users")
 }
@@ -243,6 +247,7 @@ model Exam {
   category ExamCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   creator  User         @relation("ExamCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   subjects Subject[]
+  questions Question[]  @relation("QuestionExam")
 
   @@index([categoryId], map: "exams_category_id_idx")
   @@index([createdBy], map: "exams_created_by_idx")
@@ -264,6 +269,7 @@ model Subject {
   exam    Exam    @relation(fields: [examId], references: [id], onDelete: Restrict)
   creator User    @relation("SubjectCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   topics  Topic[]
+  questions Question[] @relation("QuestionSubject")
 
   @@unique([examId, slug], map: "subjects_exam_slug_key")
   @@index([examId], map: "subjects_exam_id_idx")
@@ -284,9 +290,154 @@ model Topic {
 
   subject Subject @relation(fields: [subjectId], references: [id], onDelete: Restrict)
   creator User    @relation("TopicCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  questions Question[] @relation("QuestionTopic")
 
   @@unique([subjectId, slug], map: "topics_subject_slug_key")
   @@index([subjectId], map: "topics_subject_id_idx")
   @@map("topics")
+}
+
+/// Phase 4: one question in the authoring record. The catalog row it belongs to is
+/// where ownership starts; versions hold the text, so publishing one is immutable.
+model Question {
+  id             String   @id @default(uuid()) @db.Uuid
+  examId         String   @map("exam_id") @db.Uuid
+  subjectId      String   @map("subject_id") @db.Uuid
+  topicId        String?  @map("topic_id") @db.Uuid
+  createdBy      String   @map("created_by") @db.Uuid
+  status         String   @default("DRAFT")
+  currentVersion Int      @default(1) @map("current_version")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  exam      Exam            @relation("QuestionExam", fields: [examId], references: [id], onDelete: Restrict)
+  subject   Subject         @relation("QuestionSubject", fields: [subjectId], references: [id], onDelete: Restrict)
+  topic     Topic?          @relation("QuestionTopic", fields: [topicId], references: [id], onDelete: Restrict)
+  creator   User            @relation("QuestionCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  versions  QuestionVersion[]
+  importRows ImportRow[]
+
+  @@index([examId], map: "questions_exam_id_idx")
+  @@index([subjectId], map: "questions_subject_id_idx")
+  @@index([topicId], map: "questions_topic_id_idx")
+  @@index([createdBy], map: "questions_created_by_idx")
+  @@index([status], map: "questions_status_idx")
+  @@map("questions")
+}
+
+model QuestionVersion {
+  id              String   @id @default(uuid()) @db.Uuid
+  questionId      String   @map("question_id") @db.Uuid
+  version         Int
+  questionType    String   @map("question_type")
+  language        String
+  difficulty      String
+  contentHtml     String   @map("content_html")
+  explanationHtml String?  @map("explanation_html")
+  latex           String?
+  numericalAnswer String?  @map("numerical_answer")
+  marks           Decimal  @db.Decimal(6, 2)
+  negativeMarks   Decimal  @default(0) @map("negative_marks") @db.Decimal(6, 2)
+  publishedAt     DateTime? @map("published_at") @db.Timestamptz(6)
+  createdBy       String   @map("created_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  question Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  author   User             @relation("QuestionVersionAuthor", fields: [createdBy], references: [id], onDelete: Restrict)
+  options  QuestionOption[]
+
+  @@unique([questionId, version], map: "question_versions_question_version_key")
+  @@map("question_versions")
+}
+
+model QuestionOption {
+  id         String  @id @default(uuid()) @db.Uuid
+  versionId  String  @map("question_version_id") @db.Uuid
+  position   Int
+  optionHtml String  @map("option_html")
+  isCorrect  Boolean @default(false) @map("is_correct")
+  imageId    String? @map("image_id") @db.Uuid
+
+  version QuestionVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  image   MediaAsset?     @relation("OptionImage", fields: [imageId], references: [id], onDelete: SetNull)
+
+  @@unique([versionId, position], map: "question_options_version_position_key")
+  @@map("question_options")
+}
+
+/// Phase 4: a bulk import. The file lands in object storage, the worker validates every
+/// row into the staging table, and the commit is all or nothing.
+model ImportJob {
+  id                String    @id @default(uuid()) @db.Uuid
+  createdBy         String    @map("created_by") @db.Uuid
+  status            String    @default("QUEUED")
+  sourceKey         String    @map("source_key")
+  sourceName        String    @map("source_name")
+  imageKey          String?   @map("image_key")
+  totalRows         Int       @default(0) @map("total_rows")
+  validRows         Int       @default(0) @map("valid_rows")
+  invalidRows       Int       @default(0) @map("invalid_rows")
+  committedQuestions Int      @default(0) @map("committed_questions")
+  errorMessage      String?   @map("error_message")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt         DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt        DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  creator User        @relation("ImportJobCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  rows    ImportRow[]
+  commit  ImportCommit?
+
+  @@index([createdBy], map: "import_jobs_created_by_idx")
+  @@map("import_jobs")
+}
+
+model ImportRow {
+  id              String   @id @default(uuid()) @db.Uuid
+  jobId           String   @map("job_id") @db.Uuid
+  rowNumber       Int      @map("row_number")
+  externalId      String?  @map("external_id")
+  status          String   @default("PENDING")
+  errors          Json     @default("[]")
+  payload         Json     @default("{}")
+  questionId      String?  @map("question_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job      ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  question Question? @relation(fields: [questionId], references: [id], onDelete: SetNull)
+
+  @@unique([jobId, rowNumber], map: "import_rows_job_row_key")
+  @@map("import_rows")
+}
+
+/// One row per committed job: the idempotency key that makes a worker restart harmless.
+model ImportCommit {
+  jobId     String   @id @map("job_id") @db.Uuid
+  committedAt DateTime @default(now()) @map("committed_at") @db.Timestamptz(6)
+  questions Int
+
+  job ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("import_commits")
+}
+
+/// Phase 4: an image the API re-encoded and stored. The bucket is private, so the row
+/// records storage facts only; every read is a presigned URL with a short life.
+model MediaAsset {
+  id             String   @id @default(uuid()) @db.Uuid
+  bucket         String
+  objectKey      String   @unique(map: "media_assets_object_key_key") @map("object_key")
+  mimeType       String   @map("mime_type")
+  byteSize       Int      @map("byte_size")
+  width          Int
+  height         Int
+  checksumSha256 String   @map("checksum_sha256")
+  uploadedBy     String   @map("uploaded_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  uploader       User             @relation("MediaUploader", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  optionImages   QuestionOption[] @relation("OptionImage")
+
+  @@index([uploadedBy], map: "media_assets_uploaded_by_idx")
+  @@map("media_assets")
 }
 

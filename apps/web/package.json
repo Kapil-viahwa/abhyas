@@ -13,11 +13,16 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "@tiptap/pm": "2.10.3",
+    "@tiptap/react": "2.10.3",
+    "@tiptap/starter-kit": "2.10.3",
+    "katex": "0.16.11",
     "next": "^15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/katex": "0.16.7",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
