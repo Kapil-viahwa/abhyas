@@ -26,12 +26,16 @@ function apiLogs(): string {
 /** Waits for a link that appeared after `before`, so an older mail cannot match. */
 async function waitForLink(before: string, pattern: RegExp): Promise<string> {
   const deadline = Date.now() + 30_000;
+  // `matchAll` refuses a pattern without the global flag, and the call sites pass the
+  // smallest readable form of their pattern. Cloning it here keeps that a detail of the
+  // helper instead of something every caller has to remember.
+  const searchable = pattern.global ? pattern : new RegExp(pattern.source, `${pattern.flags}g`);
 
   while (Date.now() < deadline) {
     const logs = apiLogs();
     const start = logs.indexOf(before);
     const fresh = start >= 0 ? logs.slice(start + before.length) : logs;
-    const match = [...fresh.matchAll(pattern)].at(-1);
+    const match = [...fresh.matchAll(searchable)].at(-1);
     if (match?.[1] !== undefined) {
       return match[1];
     }
