@@ -2,13 +2,12 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
 
 import { HealthController } from '../health/health.controller';
-import { IS_PUBLIC_KEY, PERMISSIONS_KEY } from './access';
+import { IS_PUBLIC_KEY, AUTHENTICATED_KEY, PERMISSIONS_KEY } from './access';
 
 /**
  * Every controller the application module registers. Adding a controller means adding
- * it here, and the app module imports controllers from this list so the registry cannot
- * silently fall behind. The test then refuses any route handler that declares neither
- * @Public() nor @RequirePermissions(...).
+ * it here, so the registry cannot silently fall behind. The test then refuses any route
+ * handler that declares neither @Public(), @Authenticated() nor @RequirePermissions(...).
  */
 export const HTTP_CONTROLLERS = [HealthController];
 
@@ -21,7 +20,7 @@ describe('route access declarations', () => {
 
     for (const controller of HTTP_CONTROLLERS) {
       const basePath = (Reflect.getMetadata(PATH_METADATA, controller) as string | undefined) ?? '';
-      const prototype = controller.prototype as Record<string, Handler | undefined>;
+      const prototype = controller.prototype as unknown as Record<string, Handler | undefined>;
 
       for (const key of Object.getOwnPropertyNames(prototype)) {
         const handler = prototype[key];
@@ -37,10 +36,12 @@ describe('route access declarations', () => {
         routes += 1;
 
         const isPublic = Reflect.getMetadata(IS_PUBLIC_KEY, handler) === true;
+        const isAuthenticatedOnly = Reflect.getMetadata(AUTHENTICATED_KEY, handler) === true;
         const permissions = Reflect.getMetadata(PERMISSIONS_KEY, handler) as string[] | undefined;
-        const declared = isPublic || (Array.isArray(permissions) && permissions.length > 0);
+        const declared =
+          isPublic || isAuthenticatedOnly || (Array.isArray(permissions) && permissions.length > 0);
 
-        if (!isPublic && permissions !== undefined && permissions.length === 0) {
+        if (!isPublic && permissions !== undefined && permissions.length === 0 && !isAuthenticatedOnly) {
           undeclared.push(`${controller.name}.${key} declares an empty permission list`);
         } else if (!declared) {
           undeclared.push(`${controller.name}.${key} (${basePath || '/'})`);

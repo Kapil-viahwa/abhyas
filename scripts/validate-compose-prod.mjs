@@ -23,6 +23,7 @@ const requiredEnv = {
   AUTH_SECRET: 'c'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
+  EMAIL_PROVIDER: 'smtp',
 };
 
 function renderConfig(env) {

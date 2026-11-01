@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 
-import { IS_PUBLIC_KEY, PERMISSIONS_KEY, type AuthenticatedUser } from './access';
+import { IS_PUBLIC_KEY, AUTHENTICATED_KEY, PERMISSIONS_KEY, type AuthenticatedUser } from './access';
 import { PermissionsService } from './permissions.service';
 import { SESSIONS_SERVICE, type SessionsService } from './sessions.service';
 
@@ -53,7 +53,9 @@ export class AuthGuard implements CanActivate {
     }
 
     const required = this.reflector.getAllAndOverride<string[] | undefined>(PERMISSIONS_KEY, targets);
-    if (!required) {
+    const authenticatedOnly = this.reflector.getAllAndOverride<boolean>(AUTHENTICATED_KEY, targets) === true;
+
+    if (!required && !authenticatedOnly) {
       throw new ForbiddenException('Route access is not declared');
     }
 
@@ -73,7 +75,7 @@ export class AuthGuard implements CanActivate {
       throw new UnauthorizedException('Authentication required');
     }
 
-    const missing = required.filter((code) => !resolved.codes.has(code));
+    const missing = (required ?? []).filter((code) => !resolved.codes.has(code));
     if (missing.length > 0) {
       throw new ForbiddenException('Insufficient permissions');
     }

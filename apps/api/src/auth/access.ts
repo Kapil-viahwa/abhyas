@@ -9,6 +9,7 @@ import { createParamDecorator, SetMetadata, type ExecutionContext } from '@nestj
  */
 
 export const IS_PUBLIC_KEY = 'abhyas:isPublic';
+export const AUTHENTICATED_KEY = 'abhyas:authenticated';
 export const PERMISSIONS_KEY = 'abhyas:permissions';
 
 export interface AuthenticatedUser {
@@ -20,6 +21,9 @@ export interface AuthenticatedUser {
 }
 
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(IS_PUBLIC_KEY, true);
+
+/** Authenticated, but no permission required (for example: log out, read my own profile). */
+export const Authenticated = (): MethodDecorator & ClassDecorator => SetMetadata(AUTHENTICATED_KEY, true);
 
 export const RequirePermissions = (...codes: string[]): MethodDecorator & ClassDecorator =>
   SetMetadata(PERMISSIONS_KEY, codes);

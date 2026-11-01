@@ -42,6 +42,7 @@ services:
       AUTH_SECRET: dev-only-insecure-secret-please-change-32chars
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       SMS_PROVIDER: fake
+      EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
     ports:
       - '3001:3001'
@@ -100,6 +101,7 @@ services:
       AUTH_SECRET: dev-only-insecure-secret-please-change-32chars
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       SMS_PROVIDER: fake
+      EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
     depends_on:
       redis:

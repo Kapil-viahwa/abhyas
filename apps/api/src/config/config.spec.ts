@@ -12,6 +12,7 @@ const productionEnv = {
   AUTH_SECRET: 'b'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
+  EMAIL_PROVIDER: 'smtp',
 };
 
 describe('loadConfig', () => {
@@ -28,6 +29,7 @@ describe('loadConfig', () => {
         ...productionEnv,
         TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
         SMS_PROVIDER: 'fake',
+        EMAIL_PROVIDER: 'console',
         ALLOW_DEV_LOGIN: 'true',
       }),
     ).toThrow(EnvValidationError);

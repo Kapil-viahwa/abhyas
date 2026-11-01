@@ -25,6 +25,11 @@ export class RedisService implements OnModuleDestroy {
     return this.client.ping();
   }
 
+  /** Shared client for feature services (rate limiting and future queues). */
+  get redis(): Redis {
+    return this.client;
+  }
+
   async onModuleDestroy(): Promise<void> {
     await this.client.quit().catch(() => {
       this.client.disconnect();
