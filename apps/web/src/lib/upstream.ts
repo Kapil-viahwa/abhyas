@@ -45,6 +45,9 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
 
     if (options.tags !== undefined && options.tags.length > 0) {
       // Cached under a tag so /api/revalidate can drop it after a catalog write.
+      // `force-cache` is explicit: a page may be rendered per request and still read
+      // the payload from the data cache until the tag is revalidated.
+      init.cache = 'force-cache';
       init.next = { tags: [...options.tags] };
     } else {
       init.cache = 'no-store';

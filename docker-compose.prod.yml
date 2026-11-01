@@ -60,6 +60,8 @@ services:
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:?EMAIL_PROVIDER is required}
       WEB_URL: ${WEB_URL:?WEB_URL is required}
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
+      # The web container's own address: never route a cache drop through the public edge.
+      REVALIDATE_URL: http://web:3000/api/revalidate
     expose:
       - '3001'
     depends_on:

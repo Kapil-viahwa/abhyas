@@ -5,7 +5,9 @@ import { notFound } from 'next/navigation';
 import { examsInCategory, getPublicCatalog } from '../../../../lib/catalog';
 import { webConfig } from '../../../../lib/config';
 
-export const revalidate = 3600;
+// Rendered per request from the tagged catalog cache, as /exams is: the API's
+// revalidation call drops that cache after every catalog write.
+export const dynamic = 'force-dynamic';
 
 interface PageProps {
   readonly params: Promise<{ category: string; exam: string }>;

@@ -436,7 +436,7 @@ export class CatalogService {
 
     // Ownership lives on the exam, so creating a subject inside somebody else's exam
     // is the same denial as editing it.
-    await this.examOwner(input.examId);
+    this.assertOwner(actor, await this.examOwner(input.examId));
 
     try {
       const row = await this.prisma.subject.create({
@@ -467,7 +467,7 @@ export class CatalogService {
     if (!existing) {
       throw new NotFoundException('Unknown subject');
     }
-    await this.examOwner(existing.examId);
+    this.assertOwner(actor, await this.examOwner(existing.examId));
 
     const update = parseCatalogUpdateBody(body);
 
@@ -511,7 +511,7 @@ export class CatalogService {
     if (!existing) {
       throw new NotFoundException('Unknown subject');
     }
-    await this.examOwner(existing.examId);
+    this.assertOwner(actor, await this.examOwner(existing.examId));
 
     try {
       await this.prisma.subject.delete({ where: { id } });
@@ -525,7 +525,7 @@ export class CatalogService {
 
   async createTopic(actor: AuthenticatedUser, body: unknown, meta: AuditMeta = {}): Promise<TopicNode> {
     const input = parseTopicBody(body);
-    await this.subjectExamOwner(input.subjectId);
+    this.assertOwner(actor, await this.subjectExamOwner(input.subjectId));
 
     try {
       const row = await this.prisma.topic.create({
@@ -563,7 +563,7 @@ export class CatalogService {
     if (!existing) {
       throw new NotFoundException('Unknown topic');
     }
-    await this.subjectExamOwner(existing.subjectId);
+    this.assertOwner(actor, await this.subjectExamOwner(existing.subjectId));
 
     const update = parseCatalogUpdateBody(body);
 
@@ -603,7 +603,7 @@ export class CatalogService {
     if (!existing) {
       throw new NotFoundException('Unknown topic');
     }
-    await this.subjectExamOwner(existing.subjectId);
+    this.assertOwner(actor, await this.subjectExamOwner(existing.subjectId));
 
     try {
       await this.prisma.topic.delete({ where: { id } });

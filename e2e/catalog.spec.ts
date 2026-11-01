@@ -105,6 +105,13 @@ test.describe.serial('the exam catalog', () => {
     await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await expect(page).toHaveURL(/\/admin$/);
 
+    // Warm the public page's cache with the catalog as it stands. The next test's
+    // assertions only pass if this write drops that cache — which is the API's
+    // revalidation call doing its job.
+    await page.goto('/exams');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Exams');
+    await expect(page.getByRole('link', { name: categoryName })).toHaveCount(0);
+
     await page.goto('/admin/catalog');
     await page.getByText('Category', { exact: true }).click();
     await page.fill('form:has(input[name="type"][value="categories"]) input[name="name"]', categoryName);

@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { childCategories, getPublicCatalog, rootCategories } from '../../lib/catalog';
 import { webConfig } from '../../lib/config';
 
-// Cached, and dropped by the API's revalidation call after every catalog write.
-export const revalidate = 3600;
+// Rendered per request from the tagged catalog cache. The page is not baked at build
+// time — the API is not reachable while the image is built — and the API's revalidation
+// call drops the cached catalog payload after every write, so the next request re-fetches.
+export const dynamic = 'force-dynamic';
 
 const TITLE = 'Exams | Abhyas';
 const DESCRIPTION =

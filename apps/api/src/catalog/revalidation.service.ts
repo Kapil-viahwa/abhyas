@@ -20,7 +20,12 @@ export class CatalogRevalidationService {
 
   constructor() {
     const config = loadConfig(process.env);
-    this.endpoint = `${webUrlFor(config.NODE_ENV, process.env.WEB_URL)}/api/revalidate`;
+    // The web tier's public URL is not always reachable from inside the API container
+    // (in compose it is another service), so a deployment may name the internal
+    // endpoint outright. Production falls back to WEB_URL, which is the public https one.
+    const explicit = (process.env.REVALIDATE_URL ?? '').trim();
+    this.endpoint =
+      explicit === '' ? `${webUrlFor(config.NODE_ENV, process.env.WEB_URL)}/api/revalidate` : explicit;
     this.secret = config.REVALIDATE_SECRET;
   }
 
