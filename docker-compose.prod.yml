@@ -39,7 +39,7 @@ services:
       ['sh', '-c', 'cd /repo/apps/api && node node_modules/prisma/build/index.js migrate deploy']
     environment:
       NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?MIGRATION_DATABASE_URL is required}
     depends_on:
       postgres:
         condition: service_healthy

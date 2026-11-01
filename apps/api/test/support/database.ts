@@ -8,12 +8,21 @@ import { PrismaClient } from '@prisma/client';
 /**
  * Gives each database test an isolated schema with every migration applied, so tests
  * never share state and never need a second database server.
+ *
+ * Migrations are applied by the owner connection (MIGRATION_DATABASE_URL, falling back
+ * to DATABASE_URL). The application-role client (APP_DATABASE_URL) is the connection
+ * the API really uses, so tests can prove what that role may and may not do.
  */
 
 export interface TestDatabase {
   readonly schema: string;
+  /** Owner connection: migrations, fixtures, assertions about data. */
   readonly url: string;
   readonly client: PrismaClient;
+  /** Application-role connection: used to prove privileges, not to set data up. */
+  readonly appUrl: string;
+  readonly appClient: PrismaClient;
+  readonly hasAppRole: boolean;
   dispose(): Promise<void>;
 }
 
@@ -32,10 +41,13 @@ export function withSchema(url: string, schema: string): string {
 }
 
 export async function createMigratedTestDatabase(label: string): Promise<TestDatabase> {
-  const baseUrl = process.env.DATABASE_URL;
-  if (!baseUrl) {
-    throw new Error('DATABASE_URL must be set to run database tests');
+  const migrationUrl = process.env.MIGRATION_DATABASE_URL ?? process.env.DATABASE_URL;
+  if (!migrationUrl) {
+    throw new Error('DATABASE_URL or MIGRATION_DATABASE_URL must be set to run database tests');
   }
+
+  const appBaseUrl = process.env.APP_DATABASE_URL;
+  const hasAppRole = typeof appBaseUrl === 'string' && appBaseUrl.trim() !== '';
 
   const cwd = process.cwd();
   const prismaBin = resolveFromCwd([
@@ -51,9 +63,10 @@ export async function createMigratedTestDatabase(label: string): Promise<TestDat
     .toLowerCase()
     .replace(/[^a-z0-9_]/g, '_')
     .slice(0, 60);
-  const url = withSchema(baseUrl, schema);
+  const url = withSchema(migrationUrl, schema);
+  const appUrl = hasAppRole ? withSchema(appBaseUrl as string, schema) : url;
 
-  const bootstrap = new PrismaClient({ datasources: { db: { url: baseUrl } } });
+  const bootstrap = new PrismaClient({ datasources: { db: { url: migrationUrl } } });
   try {
     await bootstrap.$executeRawUnsafe(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
   } finally {
@@ -68,14 +81,21 @@ export async function createMigratedTestDatabase(label: string): Promise<TestDat
   });
 
   const client = new PrismaClient({ datasources: { db: { url } } });
+  const appClient = hasAppRole ? new PrismaClient({ datasources: { db: { url: appUrl } } }) : client;
 
   return {
     schema,
     url,
     client,
+    appUrl,
+    appClient,
+    hasAppRole,
     async dispose(): Promise<void> {
       await client.$disconnect();
-      const cleanup = new PrismaClient({ datasources: { db: { url: baseUrl } } });
+      if (appClient !== client) {
+        await appClient.$disconnect();
+      }
+      const cleanup = new PrismaClient({ datasources: { db: { url: migrationUrl } } });
       try {
         await cleanup.$executeRawUnsafe(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       } finally {

@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 
-import { hashPassword } from './password';
+import { hashPassword } from '../auth/password';
 
 /**
  * Creates the first Administrator from explicit environment variables.
@@ -117,7 +117,7 @@ export async function seedAdmin(client: PrismaClient, config: SeedAdminConfig): 
     return { created: false, outcome: 'admin-already-exists', userId: otherAdmin.id };
   }
 
-  const passwordHash = hashPassword(config.password);
+  const passwordHash = await hashPassword(config.password);
 
   return client.$transaction(async (tx): Promise<SeedAdminResult> => {
     const user = await tx.user.create({
