@@ -4,14 +4,15 @@ on:
   push:
     branches:
       - main
-      - 'phase-*'
   pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # Keyed by event as well as ref: a push and the pull-request run for the same
+  # commit are separate requests and must not cancel each other.
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
