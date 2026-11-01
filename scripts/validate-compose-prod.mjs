@@ -26,6 +26,7 @@ const requiredEnv = {
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
   WEB_URL: 'https://abhyas.example.com',
+  REVALIDATE_SECRET: 'r'.repeat(32),
 };
 
 function renderConfig(env) {
@@ -108,6 +109,7 @@ for (const [variable, label] of [
   ['TURNSTILE_SITE_KEY', 'TURNSTILE_SITE_KEY'],
   ['MIGRATION_DATABASE_URL', 'MIGRATION_DATABASE_URL'],
   ['WEB_URL', 'WEB_URL'],
+  ['REVALIDATE_SECRET', 'REVALIDATE_SECRET'],
 ]) {
   let refused = false;
   try {

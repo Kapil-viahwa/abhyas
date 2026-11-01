@@ -248,6 +248,9 @@ export function parseRoleChangeBody(body: unknown): string {
 
 export const USER_STATUSES = ['ACTIVE', 'SUSPENDED', 'DISABLED'] as const;
 
+/** The role filters an account list may use; anything else is a typo, not a filter. */
+export const USER_ROLE_FILTERS = ['ADMIN', 'EDITOR', 'USER'] as const;
+
 export type UserStatus = (typeof USER_STATUSES)[number];
 
 export const USER_LIST_DEFAULT_PAGE_SIZE = 20;
@@ -295,8 +298,12 @@ export function parseUserListQuery(query: Record<string, unknown>): UserListQuer
   const search = firstString(query.search).trim().slice(0, USER_SEARCH_MAX_LENGTH);
 
   const roleRaw = firstString(query.role).trim().toUpperCase();
-  if (roleRaw !== '' && !ROLE_CODE_PATTERN.test(roleRaw)) {
-    throw new BadRequestException('Choose a valid role filter');
+  let roleCode: string | undefined;
+  if (roleRaw !== '') {
+    if (!(USER_ROLE_FILTERS as readonly string[]).includes(roleRaw)) {
+      throw new BadRequestException('Choose a valid role filter');
+    }
+    roleCode = roleRaw;
   }
 
   const statusRaw = firstString(query.status).trim().toUpperCase();
@@ -310,7 +317,7 @@ export function parseUserListQuery(query: Record<string, unknown>): UserListQuer
 
   return {
     search: search === '' ? undefined : search,
-    roleCode: roleRaw === '' ? undefined : roleRaw,
+    roleCode,
     status,
     page: parsePositiveInteger(query.page, 1, 1, 10_000),
     pageSize: parsePositiveInteger(query.pageSize, USER_LIST_DEFAULT_PAGE_SIZE, 1, USER_LIST_MAX_PAGE_SIZE),

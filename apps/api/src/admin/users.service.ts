@@ -14,7 +14,6 @@ import {
   parseCreateEditorBody,
   parseEditorFlagsBody,
   parseRoleChangeBody,
-  parseUserListQuery,
   parseUserStatusBody,
   parseUuid,
   type UserListQueryInput,

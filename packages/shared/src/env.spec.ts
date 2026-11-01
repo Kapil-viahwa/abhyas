@@ -17,6 +17,7 @@ const production = {
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
+  REVALIDATE_SECRET: 'r'.repeat(32),
 };
 
 describe('validateEnv', () => {
@@ -92,6 +93,15 @@ describe('validateEnv', () => {
     expect(() =>
       validateEnv({ ...production, AUTH_SECRET: 'dev-only-insecure-secret-please-change-32chars' }),
     ).toThrow(/AUTH_SECRET: must not be a well-known default value/);
+  });
+
+  it('requires a revalidation secret of a usable length in production', () => {
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: '' })).toThrow(
+      /REVALIDATE_SECRET: is required in production/,
+    );
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: 'too-short' })).toThrow(
+      /REVALIDATE_SECRET: must be at least 16 characters/,
+    );
   });
 
   it('reports every problem at once', () => {

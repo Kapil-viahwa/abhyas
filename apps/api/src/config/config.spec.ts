@@ -13,6 +13,7 @@ const productionEnv = {
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
+  REVALIDATE_SECRET: 'c'.repeat(32),
 };
 
 describe('loadConfig', () => {
