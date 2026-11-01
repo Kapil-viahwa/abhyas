@@ -51,7 +51,7 @@ docs/         architecture, decisions, working rules
 
 The rules this repository is built under are in [docs/working-rules.md](docs/working-rules.md). They are not advisory: nothing is claimed as done until it has run, each phase is one branch and one pull request with green CI, and every phase ships migrations, API, web screens and tests together.
 
-Architecture: [docs/architecture.md](docs/architecture.md). Decisions and the reason for every dependency: [docs/decisions.md](docs/decisions.md). Honest per-phase status: [PROGRESS.md](PROGRESS.md).
+Architecture: [docs/architecture.md](docs/architecture.md). Decisions and the reason for every dependency: [docs/decisions.md](docs/decisions.md). Accepted advisories and why: [docs/security-exceptions.md](docs/security-exceptions.md). Honest per-phase status: [PROGRESS.md](PROGRESS.md).
 
 ## Getting started
 

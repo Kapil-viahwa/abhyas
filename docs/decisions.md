@@ -40,7 +40,7 @@ One pnpm workspace (`apps/*`, `packages/*`), one committed `pnpm-lock.yaml`, and
 
 **Why:** a single resolution of the dependency graph means CI, local development and every image run the same tree. `--frozen-lockfile` turns an accidental dependency edit into a loud failure instead of a silent upgrade.
 
-**Consequence:** the lockfile cannot be produced anywhere that has no package manager. `.github/workflows/lockfile-bootstrap.yml` (manual trigger) generates it in CI and commits it to the branch, so the frozen installs can run. It is the only workflow granted `contents: write`, and only for that job.
+**Consequence:** the lockfile cannot be produced anywhere that has no package manager. During phase 0 a temporary `lockfile-bootstrap` workflow (the only workflow ever granted `contents: write`, scoped to a single job) generated it in CI and committed it. That workflow has been deleted now that dependency changes are made with a local install; from phase 1 on, a dependency change is committed together with its lockfile and CI's frozen install is the check.
 
 ## 0005 — Hand-validated environment instead of a validation library
 
