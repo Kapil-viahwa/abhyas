@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+      # A phase branch is verified on push as well as on its pull request, so a
+      # slice is checked even before a PR exists. The concurrency key includes the
+      # event name, so the push and pull-request runs do not cancel each other.
+      - 'phase-*'
   pull_request:
 
 permissions:
