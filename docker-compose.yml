@@ -11,6 +11,7 @@ services:
       - '5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U abhyas -d abhyas']
       interval: 5s
@@ -35,11 +36,15 @@ services:
     environment:
       NODE_ENV: development
       PORT: '3001'
-      DATABASE_URL: postgresql://abhyas:abhyas@postgres:5432/abhyas
+      DATABASE_URL: postgresql://abhyas_app:abhyas_app@postgres:5432/abhyas
+      MIGRATION_DATABASE_URL: postgresql://abhyas:abhyas@postgres:5432/abhyas
       REDIS_URL: redis://redis:6379
       AUTH_SECRET: dev-only-insecure-secret-please-change-32chars
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       SMS_PROVIDER: fake
+      EMAIL_PROVIDER: console
+      # Public base URL of the web app, used for links in email.
+      WEB_URL: http://localhost:3000
       ALLOW_DEV_LOGIN: 'true'
     ports:
       - '3001:3001'
@@ -93,11 +98,12 @@ services:
       dockerfile: apps/worker/Dockerfile
     environment:
       NODE_ENV: development
-      DATABASE_URL: postgresql://abhyas:abhyas@postgres:5432/abhyas
+      DATABASE_URL: postgresql://abhyas_app:abhyas_app@postgres:5432/abhyas
       REDIS_URL: redis://redis:6379
       AUTH_SECRET: dev-only-insecure-secret-please-change-32chars
       TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
       SMS_PROVIDER: fake
+      EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
     depends_on:
       redis:

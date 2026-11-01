@@ -11,7 +11,6 @@ datasource db {
 }
 
 /// Phase 0 only: a trivial table so the migration pipeline has something real to apply.
-/// Future phases add their own tables in their own migrations.
 model AppMetadata {
   id        String   @id @default(uuid())
   key       String   @unique
@@ -33,7 +32,8 @@ model Role {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  users User[]
+  users           User[]
+  rolePermissions RolePermission[]
 
   @@map("roles")
 }
@@ -57,6 +57,8 @@ model User {
   grantedPermissions UserPermission[] @relation("GrantedPermissions")
   updatedSettings    Setting[]        @relation("SettingUpdates")
   auditEntries       AuditLog[]       @relation("AuditActor")
+  sessions           Session[]
+  emailTokens        EmailToken[]
 
   @@map("users")
 }
@@ -68,8 +70,23 @@ model Permission {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   userPermissions UserPermission[]
+  rolePermissions RolePermission[]
 
   @@map("permissions")
+}
+
+/// The role x permission matrix, seeded by migration from docs/permissions.md.
+model RolePermission {
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId], map: "role_permissions_permission_id_idx")
+  @@map("role_permissions")
 }
 
 model UserPermission {
@@ -79,9 +96,9 @@ model UserPermission {
   grantedBy    String?  @map("granted_by") @db.Uuid
   grantedAt    DateTime @default(now()) @map("granted_at") @db.Timestamptz(6)
 
-  user        User       @relation("UserPermissions", fields: [userId], references: [id], onDelete: Cascade)
-  permission  Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
-  grantedByUser User?    @relation("GrantedPermissions", fields: [grantedBy], references: [id], onDelete: SetNull)
+  user          User       @relation("UserPermissions", fields: [userId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+  grantedByUser User?      @relation("GrantedPermissions", fields: [grantedBy], references: [id], onDelete: SetNull)
 
   @@unique([userId, permissionId], map: "user_permissions_user_permission_key")
   @@map("user_permissions")
@@ -122,4 +139,60 @@ model AuditLog {
   @@index([occurredAt], map: "audit_logs_occurred_at_idx")
   @@index([entityType, entityId], map: "audit_logs_entity_idx")
   @@map("audit_logs")
+}
+
+/// Phase 2a: one row per refresh token. Rotation keeps the family id, so replaying an
+/// old token revokes every descendant in a single statement.
+model Session {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  familyId         String    @map("family_id") @db.Uuid
+  refreshTokenHash String    @unique(map: "sessions_refresh_token_hash_key") @map("refresh_token_hash")
+  accessTokenHash  String?   @unique(map: "sessions_access_token_hash_key") @map("access_token_hash")
+  accessExpiresAt  DateTime? @map("access_expires_at") @db.Timestamptz(6)
+  issuedAt         DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  rotatedAt        DateTime? @map("rotated_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revokeReason     String?   @map("revoke_reason")
+  ip               String?
+  userAgent        String?   @map("user_agent")
+  deviceLabel      String?   @map("device_label")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "sessions_user_id_idx")
+  @@index([familyId], map: "sessions_family_id_idx")
+  @@map("sessions")
+}
+
+/// Single-use verification and password-reset tokens, stored hashed.
+model EmailToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  purpose   String
+  tokenHash String    @unique(map: "email_tokens_token_hash_key") @map("token_hash")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  requestIp String?   @map("request_ip")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose], map: "email_tokens_user_purpose_idx")
+  @@map("email_tokens")
+}
+
+/// Transactional outbox. Registration publishes user.registered in the same
+/// transaction that creates the user, so a later wallet consumer cannot miss it.
+model DomainEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String
+  payload     Json      @default("{}")
+  occurredAt  DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  publishedAt DateTime? @map("published_at") @db.Timestamptz(6)
+  attempts    Int       @default(0)
+
+  @@index([occurredAt], map: "domain_events_occurred_at_idx")
+  @@map("domain_events")
 }

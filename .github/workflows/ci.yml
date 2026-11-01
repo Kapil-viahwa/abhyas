@@ -21,7 +21,9 @@ concurrency:
 
 env:
   # Used by `prisma generate` (which never connects) and by the database job.
-  DATABASE_URL: postgresql://abhyas:abhyas@localhost:5432/abhyas
+  DATABASE_URL: postgresql://abhyas_app:abhyas_app@localhost:5432/abhyas
+  MIGRATION_DATABASE_URL: postgresql://abhyas:abhyas@localhost:5432/abhyas
+  APP_DATABASE_URL: postgresql://abhyas_app:abhyas_app@localhost:5432/abhyas
   REDIS_URL: redis://localhost:6379
 
 jobs:
@@ -183,6 +185,13 @@ jobs:
         run: |
           set -o pipefail
           pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Create the application database role
+        shell: bash
+        env:
+          PGPASSWORD: abhyas
+        run: |
+          set -o pipefail
+          psql -h localhost -U abhyas -d abhyas -v ON_ERROR_STOP=1 -f docker/postgres-init/01-app-role.sql 2>&1 | tee "$RUNNER_TEMP/app-role.log"
       - name: Migration test against Postgres 16
         shell: bash
         run: |

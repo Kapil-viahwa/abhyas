@@ -17,11 +17,14 @@ const requiredEnv = {
   POSTGRES_USER: 'abhyas',
   POSTGRES_PASSWORD: 'compose-check-password',
   POSTGRES_DB: 'abhyas',
-  DATABASE_URL: 'postgresql://abhyas:compose-check-password@postgres:5432/abhyas',
+  DATABASE_URL: 'postgresql://abhyas_app:app-password@postgres:5432/abhyas',
+  MIGRATION_DATABASE_URL: 'postgresql://abhyas:compose-check-password@postgres:5432/abhyas',
   REDIS_URL: 'redis://redis:6379',
   AUTH_SECRET: 'c'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
+  EMAIL_PROVIDER: 'smtp',
+  WEB_URL: 'https://abhyas.example.com',
 };
 
 function renderConfig(env) {
@@ -101,6 +104,8 @@ for (const [name, service] of Object.entries(services)) {
 for (const [variable, label] of [
   ['AUTH_SECRET', 'AUTH_SECRET'],
   ['TURNSTILE_SECRET_KEY', 'TURNSTILE_SECRET_KEY'],
+  ['MIGRATION_DATABASE_URL', 'MIGRATION_DATABASE_URL'],
+  ['WEB_URL', 'WEB_URL'],
 ]) {
   let refused = false;
   try {

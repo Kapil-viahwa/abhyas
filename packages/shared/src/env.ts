@@ -11,9 +11,13 @@ export type NodeEnv = 'development' | 'test' | 'production';
 
 export type SmsProvider = 'fake' | 'console' | 'msg91' | 'twilio' | 'ses';
 
+export type EmailProvider = 'console' | 'smtp';
+
 const NODE_ENVS: readonly NodeEnv[] = ['development', 'test', 'production'];
 
 const SMS_PROVIDERS: readonly SmsProvider[] = ['fake', 'console', 'msg91', 'twilio', 'ses'];
+
+const EMAIL_PROVIDERS: readonly EmailProvider[] = ['console', 'smtp'];
 
 const FORBIDDEN_PRODUCTION_SECRETS: readonly string[] = [
   'secret',
@@ -60,6 +64,7 @@ export interface AppEnv {
   readonly AUTH_SECRET: string;
   readonly TURNSTILE_SECRET_KEY: string;
   readonly SMS_PROVIDER: SmsProvider;
+  readonly EMAIL_PROVIDER: EmailProvider;
   readonly ALLOW_DEV_LOGIN: boolean;
 }
 
@@ -155,6 +160,27 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
   }
 
+  const emailRaw = read(raw, 'EMAIL_PROVIDER').toLowerCase();
+  let emailProvider: EmailProvider = 'console';
+  if (emailRaw === '') {
+    if (isProduction) {
+      issues.push({ variable: 'EMAIL_PROVIDER', message: 'is required in production' });
+    }
+  } else if (!EMAIL_PROVIDERS.includes(emailRaw as EmailProvider)) {
+    issues.push({
+      variable: 'EMAIL_PROVIDER',
+      message: `must be one of ${EMAIL_PROVIDERS.join(', ')}`,
+    });
+  } else {
+    emailProvider = emailRaw as EmailProvider;
+    if (isProduction && emailProvider === 'console') {
+      issues.push({
+        variable: 'EMAIL_PROVIDER',
+        message: 'the console outbox is refused in production',
+      });
+    }
+  }
+
   const allowDevLogin = read(raw, 'ALLOW_DEV_LOGIN').toLowerCase() === 'true';
   if (isProduction && allowDevLogin) {
     issues.push({
@@ -175,6 +201,7 @@ export function validateEnv(raw: RawEnv): AppEnv {
     AUTH_SECRET: authSecret,
     TURNSTILE_SECRET_KEY: turnstileSecret,
     SMS_PROVIDER: smsProvider,
+    EMAIL_PROVIDER: emailProvider,
     ALLOW_DEV_LOGIN: allowDevLogin,
   };
 }

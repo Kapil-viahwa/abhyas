@@ -2,6 +2,7 @@ import { Controller, Get, Inject, Res } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiServiceUnavailableResponse, ApiTags } from '@nestjs/swagger';
 import type { FastifyReply } from 'fastify';
 
+import { Public } from '../auth/access';
 import { HealthService, type HealthReport } from './health.service';
 
 @ApiTags('system')
@@ -9,6 +10,7 @@ import { HealthService, type HealthReport } from './health.service';
 export class HealthController {
   constructor(@Inject(HealthService) private readonly health: HealthService) {}
 
+  @Public()
   @Get('health')
   @ApiOperation({ summary: 'Report whether Postgres and Redis are reachable' })
   @ApiOkResponse({ description: 'Every dependency answered' })

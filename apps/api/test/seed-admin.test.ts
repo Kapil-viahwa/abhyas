@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { verifyPassword } from '../src/seed/password';
+import { verifyPassword } from '../src/auth/password';
 import { PRODUCTION_CONFIRMATION, resolveSeedAdminConfig, seedAdmin } from '../src/seed/seed-admin';
 import { createMigratedTestDatabase, type TestDatabase } from './support/database';
 
@@ -39,7 +39,7 @@ describe('admin seed', () => {
 
     expect(user.role.code).toBe('ADMIN');
     expect(user.passwordHash).not.toContain(config.password);
-    expect(verifyPassword(config.password, user.passwordHash)).toBe(true);
+    expect(await verifyPassword(user.passwordHash, config.password)).toBe(true);
 
     const audit = await db.client.auditLog.findMany({
       where: { action: 'IDENTITY_ADMIN_SEEDED', entityId: user.id },

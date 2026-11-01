@@ -60,9 +60,14 @@ Requires Node 22, pnpm 9 and Docker.
 ```bash
 cp .env.example .env
 pnpm install
-pnpm db:migrate            # applies apps/api/prisma/migrations to DATABASE_URL
+docker compose up -d postgres redis   # creates both database roles on a fresh volume
+pnpm db:migrate            # applies apps/api/prisma/migrations as the owner role
 docker compose up --build  # web :3000, api :3001, worker, postgres, redis
 ```
+
+Two database roles: migrations connect as the owner (`MIGRATION_DATABASE_URL`) and the API
+and worker connect as `abhyas_app` (`DATABASE_URL`), which is not a superuser and cannot
+rewrite `audit_logs`. `docker/postgres-init/01-app-role.sql` creates it in development and CI.
 
 The first Administrator is created from environment variables, never from a default
 password. Set `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` (12+ characters, at least one
@@ -76,7 +81,8 @@ pnpm db:seed:admin         # idempotent: does nothing if an admin already exists
 seeder cannot create an admin in production by accident.
 
 The home page at http://localhost:3000 renders the API's `/health` result, and the API's
-OpenAPI document is at http://localhost:3001/api/docs.
+OpenAPI document is at http://localhost:3001/api/docs in development and CI. It is not mounted
+when `NODE_ENV=production`: in production both `/api/docs` and `/api/docs-json` answer 404.
 
 Local commands (each one is what CI runs):
 

@@ -16,6 +16,7 @@ const production = {
   AUTH_SECRET: 'a'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   SMS_PROVIDER: 'msg91',
+  EMAIL_PROVIDER: 'smtp',
 };
 
 describe('validateEnv', () => {
@@ -66,6 +67,15 @@ describe('validateEnv', () => {
   it('refuses the fake SMS provider in production', () => {
     expect(() => validateEnv({ ...production, SMS_PROVIDER: 'fake' })).toThrow(
       /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+  });
+
+  it('refuses the console email outbox in production', () => {
+    expect(() => validateEnv({ ...production, EMAIL_PROVIDER: 'console' })).toThrow(
+      /EMAIL_PROVIDER: the console outbox is refused in production/,
+    );
+    expect(() => validateEnv({ ...production, EMAIL_PROVIDER: '' })).toThrow(
+      /EMAIL_PROVIDER: is required in production/,
     );
   });
 

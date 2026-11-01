@@ -16,6 +16,7 @@ erDiagram
   USERS ||--o{ USER_PERMISSIONS : "extra grant"
   PERMISSIONS ||--o{ USER_PERMISSIONS : "granted by"
   USERS ||--o{ SESSIONS : has
+  USERS ||--o{ EMAIL_TOKENS : "confirms with"
   USERS ||--o{ AUDIT_LOGS : "acted"
   USERS ||--|| COIN_WALLETS : holds
   USERS ||--o{ COIN_LEDGER : "ledger entries"
@@ -114,12 +115,37 @@ erDiagram
   SESSIONS {
     uuid id PK
     uuid user_id FK
-    text token_hash UK
+    uuid family_id
+    text refresh_token_hash UK
+    text access_token_hash UK
+    timestamptz access_expires_at
     inet ip
     text user_agent
-    timestamptz created_at
+    text device_label
+    timestamptz issued_at
     timestamptz expires_at
+    timestamptz rotated_at
     timestamptz revoked_at
+    text revoke_reason
+  }
+
+  EMAIL_TOKENS {
+    uuid id PK
+    uuid user_id FK
+    text purpose "VERIFY_EMAIL | RESET_PASSWORD"
+    text token_hash UK
+    timestamptz expires_at
+    timestamptz used_at
+    inet request_ip
+  }
+
+  DOMAIN_EVENTS {
+    uuid id PK
+    text name "user.registered | ..."
+    jsonb payload
+    timestamptz occurred_at
+    timestamptz published_at
+    integer attempts
   }
 
   EXAMS {
@@ -266,7 +292,7 @@ erDiagram
 | Phase | Tables | Why now |
 | --- | --- | --- |
 | 1 | `users`, `roles`, `permissions`, `user_permissions`, `settings`, `audit_logs` | Identity foundation: who exists, who may do what, and a tamper-evident record |
-| 2 | `sessions`, `role_permissions` | Authentication and role→permission resolution, with the enforcement layer |
+| 2 | `sessions`, `email_tokens`, `role_permissions`, `domain_events` | Authentication with opaque tokens, single-use email tokens, role→permission resolution and the transactional outbox that grants the signup bonus |
 | 3 | `exams`, `subjects`, `topics`, `questions`, `question_options`, `tests`, `test_sections`, `test_questions` | Content authoring and publishing |
 | 4 | `test_attempts`, `attempt_answers`, `coin_wallets`, `coin_ledger`, `daily_login_rewards` | Taking tests, server-authoritative timer and scoring, and the coin ledger that pays for attempts |
 | 5 | `media_assets` | Object storage for question media, behind Nginx |
@@ -282,6 +308,14 @@ erDiagram
   single CHECK constraint.
 - **Audit log** rows can be inserted and read, never updated, deleted or truncated: a trigger
   raises for every session, and the application's database role has those privileges revoked.
+- **Sessions** store only the SHA-256 hash of a token pair, never the token itself, with one row
+  per pair and a CHECK that keeps `revoked_at` and `revoke_reason` in step. Presenting a refresh
+  token that was already rotated revokes the whole family as `REUSE_DETECTED`.
+- **Email tokens** are hashed, purpose-scoped, single use and expire 30 minutes after issue. A new
+  verification link marks the previous one used, so exactly one link works at a time.
+- **Domain events** are written in the same transaction as the row they describe, so an account
+  cannot exist without its `user.registered` event. `published_at` and `attempts` are the worker's
+  outbox bookkeeping.
 - **Coins** (phase 4) will be append-only with `amount <> 0`, `balance_after >= 0`, a unique
   idempotency key, and writes taken under a `SELECT … FOR UPDATE` on the wallet row.
 
