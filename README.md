@@ -34,26 +34,51 @@ pnpm monorepo · Node 22
 
 No dependency on any vendor's hosting or managed database: everything runs from this repo.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
-apps/mobile?  no
-apps/api      HTTP API, business rules, persistence
-apps/web      student + editor + admin UI
+apps/api      NestJS (Fastify) REST API, Prisma schema and migrations, tests
+apps/web      Next.js App Router UI for students, editors and admins
 apps/worker   BullMQ background jobs
-packages/     shared types, config, UI kit, API client
-infra/        Docker Compose, Nginx, local S3/Postgres/Redis
-docs/         decisions, working rules, runbooks
-.github/      CI (lint, typecheck, test, Playwright, build)
+packages/     shared environment validation and cross-cutting types
+e2e           Playwright user flows against the running stack
+scripts       CI helpers (failure summary, production compose validation)
+docs/         architecture, decisions, working rules
+.github/      CI (lint, typecheck, unit, database, docker, smoke, e2e, gitleaks, audit)
 ```
 
 ## Working rules
 
 The rules this repository is built under are in [docs/working-rules.md](docs/working-rules.md). They are not advisory: nothing is claimed as done until it has run, each phase is one branch and one pull request with green CI, and every phase ships migrations, API, web screens and tests together.
 
-Architecture decisions and the reason for every dependency: [docs/decisions.md](docs/decisions.md).
-Honest per-phase status: [PROGRESS.md](PROGRESS.md).
+Architecture: [docs/architecture.md](docs/architecture.md). Decisions and the reason for every dependency: [docs/decisions.md](docs/decisions.md). Honest per-phase status: [PROGRESS.md](PROGRESS.md).
 
 ## Getting started
 
-The scaffold does not exist yet. Phase 0 creates the monorepo, pinned toolchain, Docker Compose stack and CI pipeline. Until then there is nothing to install.
+Requires Node 22, pnpm 9 and Docker.
+
+```bash
+cp .env.example .env
+pnpm install
+pnpm db:migrate            # applies apps/api/prisma/migrations to DATABASE_URL
+docker compose up --build  # web :3000, api :3001, worker, postgres, redis
+```
+
+The home page at http://localhost:3000 renders the API's `/health` result, and the API's
+OpenAPI document is at http://localhost:3001/api/docs.
+
+Local commands (each one is what CI runs):
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test:unit
+pnpm test:db        # needs a reachable DATABASE_URL
+pnpm test:e2e       # needs the compose stack up
+pnpm compose:validate
+```
+
+Production topology is `docker-compose.prod.yml`: it publishes only the web port, requires
+every secret from the environment by name, and is checked in CI by
+`scripts/validate-compose-prod.mjs`.
+

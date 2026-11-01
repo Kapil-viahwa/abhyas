@@ -1,0 +1,107 @@
+name: abhyas
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: abhyas
+      POSTGRES_PASSWORD: abhyas
+      POSTGRES_DB: abhyas
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U abhyas -d abhyas']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      NODE_ENV: development
+      PORT: '3001'
+      DATABASE_URL: postgresql://abhyas:abhyas@postgres:5432/abhyas
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: dev-only-insecure-secret-please-change-32chars
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+      SMS_PROVIDER: fake
+      ALLOW_DEV_LOGIN: 'true'
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      NODE_ENV: development
+      API_INTERNAL_URL: http://api:3001
+      NEXT_TELEMETRY_DISABLED: '1'
+    ports:
+      - '3000:3000'
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://abhyas:abhyas@postgres:5432/abhyas
+      REDIS_URL: redis://redis:6379
+      AUTH_SECRET: dev-only-insecure-secret-please-change-32chars
+      TURNSTILE_SECRET_KEY: 1x0000000000000000000000000000000AA
+      SMS_PROVIDER: fake
+      ALLOW_DEV_LOGIN: 'true'
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

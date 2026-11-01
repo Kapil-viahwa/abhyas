@@ -1,0 +1,31 @@
+{
+  "name": "abhyas",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22 <23",
+    "pnpm": ">=9.15 <10"
+  },
+  "scripts": {
+    "build:shared": "pnpm --filter @abhyas/shared run build",
+    "build": "pnpm run build:shared && pnpm -r --filter '!@abhyas/shared' run build",
+    "lint": "eslint . --ext .ts,.tsx,.js,.cjs,.mjs",
+    "typecheck": "pnpm run build:shared && pnpm -r run typecheck",
+    "test:unit": "pnpm run build:shared && pnpm -r run test",
+    "test:db": "pnpm --filter @abhyas/api run test:db",
+    "test:e2e": "playwright test",
+    "db:migrate": "pnpm --filter @abhyas/api exec prisma migrate deploy",
+    "compose:validate": "node scripts/validate-compose-prod.mjs",
+    "compose:up": "docker compose up -d --build --wait",
+    "compose:down": "docker compose down -v"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@typescript-eslint/eslint-plugin": "^8.18.1",
+    "@typescript-eslint/parser": "^8.18.1",
+    "eslint": "^8.57.1",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
