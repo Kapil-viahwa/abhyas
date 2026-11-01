@@ -1,19 +1,14 @@
 name: Lockfile bootstrap
 
 # A repository with no pnpm-lock.yaml cannot run a frozen install, and a lockfile
-# can only be produced by a package manager. Until the first lockfile is
-# committed, this workflow also runs on push to the phase branch: it generates
-# the lockfile and commits it. That push trigger is temporary and is removed as
-# soon as the lockfile exists; afterwards this workflow is manual-only
-# (workflow_dispatch) for dependency changes made without a local install.
+# can only be produced by a package manager. The first lockfile is now committed,
+# so this workflow is manual-only again: run it by hand after a dependency change
+# that was made without a local install.
 #
 # Read-only by default; only the generating job is granted write access.
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - phase-0
 
 permissions:
   contents: read
