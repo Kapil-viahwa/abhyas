@@ -62,6 +62,13 @@ const NON_TEXT_TAGS = [
   'math',
   'template',
   'form',
+  // Metadata and fallback containers: their text is markup instructions, not prose, and a
+  // browser that later parses it as HTML would act on it.
+  'xmp',
+  'noembed',
+  'noframes',
+  'title',
+  'head',
 ];
 
 const VOID_TAGS = new Set(['br', 'img', 'hr']);
@@ -86,6 +93,13 @@ const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 // eslint-disable-next-line no-control-regex -- listing these code points is the point; none is typed literally.
 const C0_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
+/** C1 controls, the zero-width space, the word joiner and the byte-order mark. */
+const INVISIBLE_CHARACTERS = /[\u0080-\u009f\u200b\u2060\ufeff]/g;
+
+/** Unicode tag characters, the private-use block a model-facing payload can hide text in. */
+// eslint-disable-next-line no-control-regex -- the range is the thing being removed, typed by code point.
+const TAG_CHARACTERS = /[\u{e0000}-\u{e007f}]/gu;
+
 const NAMED_ENTITIES: Record<string, string> = {
   amp: '&',
   lt: '<',
@@ -103,12 +117,21 @@ export class ContentRejectedError extends Error {
 }
 
 /**
- * Text as it will be stored: composed (NFC), with control characters, null bytes and
- * bidirectional overrides removed. A bidi override renders one string and reads as another,
- * so it has no place in a question a student is answering.
+ * Text as it will be stored: composed (NFC), with control characters, null bytes, Unicode
+ * tag characters, zero-width filler and bidirectional overrides removed. A bidi override
+ * renders one string and reads as another, so it has no place in a question a student is
+ * answering.
+ *
+ * The zero-width joiner (U+200C) and non-joiner (U+200D) are deliberately kept: Devanagari
+ * conjuncts are written with them, so removing them would change the Hindi an author typed.
  */
 export function normalizeText(value: string): string {
-  return value.normalize('NFC').replace(BIDI_CONTROLS, '').replace(C0_CONTROLS, '');
+  return value
+    .normalize('NFC')
+    .replace(BIDI_CONTROLS, '')
+    .replace(C0_CONTROLS, '')
+    .replace(INVISIBLE_CHARACTERS, '')
+    .replace(TAG_CHARACTERS, '');
 }
 
 /**
@@ -260,7 +283,13 @@ export function decodeEntities(value: string): string {
   });
 }
 
-/** The string a search runs against: tags out, then entities decoded to real characters. */
+/**
+ * The string a search runs against, and the string a list screen shows.
+ *
+ * The result is plain text and must never be rendered as HTML: React escapes it when it is
+ * placed in a text node, and `questionPreview` on the web side is the only consumer that
+ * puts it on a page. Anything that needs markup goes through `sanitizeStoredContent` instead.
+ */
 export function plainText(html: string): string {
   const stripped = sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} });
   return decodeEntities(stripped).replace(/\s+/g, ' ').trim();

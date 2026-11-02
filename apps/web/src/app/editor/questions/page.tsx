@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
 import { listQuestions } from '../../../lib/questions-api';
+import { questionPreview } from '../../../lib/question-preview';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -84,7 +85,7 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
         {(result?.items ?? []).map((item) => (
           <li key={item.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
             <div className="min-w-0">
-              <p className="truncate text-sm text-slate-100">{item.version.contentHtml.replace(/<[^>]*>/g, ' ').slice(0, 120)}</p>
+              <p className="truncate text-sm text-slate-100">{questionPreview(item.version.contentHtml)}</p>
               <p className="mt-1 text-xs text-slate-500">
                 {item.version.questionType} · {item.version.language} · {item.version.difficulty} · v{item.currentVersion} · {item.status}
               </p>

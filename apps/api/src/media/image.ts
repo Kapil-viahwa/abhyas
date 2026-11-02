@@ -132,23 +132,81 @@ export class DecodeLimiter {
 
 export const imageLimiter = new DecodeLimiter();
 
-const PNG_ANIMATION_CHUNK = Buffer.from('acTL', 'ascii');
-const WEBP_ANIMATION_CHUNK = Buffer.from('ANIM', 'ascii');
-const WEBP_FRAME_CHUNK = Buffer.from('ANMF', 'ascii');
+const PNG_SIGNATURE_LENGTH = 8;
+const PNG_CHUNK_HEADER = 8;
+const PNG_CHUNK_OVERHEAD = 12;
+const WEBP_RIFF_HEADER = 12;
+const WEBP_CHUNK_HEADER = 8;
+
+/**
+ * An APNG is a PNG whose animation control chunk (`acTL`) comes before the first frame
+ * (`IDAT`). Walking the chunks says exactly that; searching the bytes for "acTL" would also
+ * match a text chunk or a comment that merely mentions it, and would let a real animation
+ * through whenever the four bytes happened to be split across a chunk boundary.
+ */
+export function pngIsAnimated(bytes: Buffer): boolean {
+  let offset = PNG_SIGNATURE_LENGTH;
+
+  while (offset + PNG_CHUNK_HEADER <= bytes.length) {
+    const length = bytes.readUInt32BE(offset);
+    const type = bytes.toString('ascii', offset + 4, offset + 8);
+
+    if (type === 'acTL') {
+      return true;
+    }
+    // The animation control chunk must precede the first frame; once a frame is here,
+    // nothing later can make this file an APNG.
+    if (type === 'IDAT' || type === 'IEND') {
+      return false;
+    }
+    if (!/^[A-Za-z]{4}$/.test(type)) {
+      return false;
+    }
+
+    offset += PNG_CHUNK_OVERHEAD + length;
+  }
+
+  return false;
+}
+
+/** A WebP is animated when its RIFF chunk list holds an `ANIM` or `ANMF` chunk. */
+export function webpIsAnimated(bytes: Buffer): boolean {
+  let offset = WEBP_RIFF_HEADER;
+
+  while (offset + WEBP_CHUNK_HEADER <= bytes.length) {
+    const type = bytes.toString('ascii', offset, offset + 4);
+    const length = bytes.readUInt32LE(offset + 4);
+
+    if (type === 'ANIM' || type === 'ANMF') {
+      return true;
+    }
+    if (!/^[A-Za-z ]{4}$/.test(type)) {
+      return false;
+    }
+
+    // RIFF chunks are padded to an even length.
+    const padded = length + (length % 2);
+    if (padded < 0 || offset + WEBP_CHUNK_HEADER + padded <= offset) {
+      return false;
+    }
+    offset += WEBP_CHUNK_HEADER + padded;
+  }
+
+  return false;
+}
 
 /**
  * The container's own declaration, read before any of it is decoded.
  *
- * An animated PNG carries an `acTL` chunk and an animated WebP carries `ANIM`/`ANMF`
- * chunks; both are refused here, so the decision does not depend on what libvips reports
- * about the frame count afterwards. The rule is rejection, not flattening: a question
- * image is one still picture, and a container that describes more is not one.
+ * The chunk lists are parsed rather than scanned, so the decision follows the format and not
+ * a coincidence of bytes. The rule is rejection, not flattening: a question image is one
+ * still picture, and a container that describes more is not one.
  */
 export function assertNotAnimatedContainer(bytes: Buffer, format: SniffedImageFormat): void {
-  if (format === 'png' && bytes.includes(PNG_ANIMATION_CHUNK)) {
+  if (format === 'png' && pngIsAnimated(bytes)) {
     throw new ImageRejectedError('Animated images are not accepted');
   }
-  if (format === 'webp' && bytes.includes(WEBP_ANIMATION_CHUNK) && bytes.includes(WEBP_FRAME_CHUNK)) {
+  if (format === 'webp' && webpIsAnimated(bytes)) {
     throw new ImageRejectedError('Animated images are not accepted');
   }
 }

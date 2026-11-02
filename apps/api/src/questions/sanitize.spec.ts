@@ -60,6 +60,12 @@ const PAYLOADS: readonly Payload[] = [
   { name: 'less-than entity', input: '<p>a &lt; b</p>', expected: '<p>a &lt; b</p>' },
   { name: 'bare ampersand', input: '<p>plain & bold</p>', expected: '<p>plain &amp; bold</p>' },
   { name: 'javascript URL in an image attribute', input: '<p>see</p><img data-media-id="not-a-uuid" src="javascript:alert(1)">', expected: '<p>see</p>' },
+  { name: 'xmp fallback container', input: '<xmp><img src=x onerror=alert(1)></xmp>', expected: null },
+  { name: 'noembed fallback container', input: '<noembed><img src=x onerror=alert(1)></noembed>', expected: null },
+  { name: 'noframes fallback container', input: '<noframes><script>alert(1)</script></noframes>', expected: null },
+  { name: 'title element', input: '<title>alert(1)</title>', expected: null },
+  { name: 'head with a script', input: '<head><title>x</title><script>alert(1)</script></head>', expected: null },
+  { name: 'zero-width space inside text', input: '<p>safe\u200btext</p>', expected: '<p>safetext</p>' },
 ];
 
 const IMAGE_ID = '9f1b7a3e-0c2d-4e5f-8a9b-1c2d3e4f5a6b';
@@ -186,5 +192,40 @@ describe('question content sanitiser', () => {
   it('re-applies the rules on output, so an old row cannot reach a student unsanitised', () => {
     expect(sanitizeStoredContent('<p>old</p><iframe src="https://evil"></iframe>')).toBe('<p>old</p>');
     expect(sanitizeStoredContent('<p onclick="alert(1)">old</p>')).toBe('<p>old</p>');
+  });
+
+  it('normalises an image reference however the author wrote the attribute', () => {
+    const encoded = `&#57;${IMAGE_ID.slice(1)}`;
+    const upperCased = IMAGE_ID.toUpperCase();
+
+    for (const input of [
+      `<p>See</p><img data-media-id='${encoded}'>`,
+      `<p>See</p><img DATA-MEDIA-ID="${upperCased}">`,
+    ]) {
+      const stored = sanitizeQuestionContent(input);
+
+      // Single quotes, entity-encoded digits, an upper-case attribute name and upper-case
+      // hex all end at the same reference — the value the ownership check then looks up.
+      expect(mediaIdsIn(stored)).toEqual([IMAGE_ID]);
+      expect(stored).not.toContain('src=');
+    }
+  });
+
+  it('strips C1 controls, Unicode tag characters and invisible filler', () => {
+    expect(normalizeText('a\u0085b')).toBe('ab');
+    expect(normalizeText('a\u009fb')).toBe('ab');
+    expect(normalizeText('a\u{e0041}b')).toBe('ab');
+    expect(normalizeText('a\u200bb')).toBe('ab');
+    expect(normalizeText('a\u2060b')).toBe('ab');
+    expect(normalizeText('a\ufeffb')).toBe('ab');
+  });
+
+  it('keeps the joiners Devanagari conjuncts need', () => {
+    const withZwj = '\u0915\u094d\u200d\u0937';
+    const withZwnj = '\u0915\u094d\u200c\u0937';
+
+    expect(normalizeText(withZwj)).toBe(withZwj);
+    expect(normalizeText(withZwnj)).toBe(withZwnj);
+    expect(sanitizeQuestionContent(`<p>${withZwj} and ${withZwnj}</p>`)).toBe(`<p>${withZwj} and ${withZwnj}</p>`);
   });
 });

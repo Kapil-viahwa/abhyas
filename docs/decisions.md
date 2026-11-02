@@ -853,3 +853,33 @@ as `a &lt; b` or `R&amp;D` is found by searching for what the author typed.
 not in its command list and cannot produce a link, an image or a class attribute with trust
 disabled; the renderer shows the expression as escaped text, and a hard failure is escaped
 by the renderer itself before it reaches the page.
+
+
+## 0046 — Animation is decided by the chunk list, and the sanitiser strips what cannot be read
+
+**Status:** accepted · **Phase:** 4
+
+**Chunks, not bytes.** The first version of the animation guard searched the file for the
+four bytes `acTL` (PNG) and `ANIM`/`ANMF` (WebP). That is wrong in both directions: a text
+chunk or a caption that merely mentions `acTL` was refused, and a real animation whose
+chunk type was split across the search window could pass. Both formats are chunk lists, so
+the guard now walks them: for a PNG it reads each chunk header from the signature and
+refuses the file when an `acTL` chunk appears before the first `IDAT`; for a WebP it walks
+the RIFF chunks and refuses `ANIM` or `ANMF`. The tests keep a PNG carrying `acTL` inside a
+text chunk and a WebP carrying `ANIMANMF` inside a metadata chunk, and both are accepted.
+
+**Invisible characters.** `normalizeText` removes C0 controls (except tab, line feed and
+carriage return), DEL, C1 controls (U+0080–U+009F), Unicode tag characters
+(U+E0000–U+E007F), the zero-width space, the word joiner and the byte-order mark, after
+composing to NFC. It deliberately keeps the zero-width joiner (U+200C) and non-joiner
+(U+200D): Devanagari conjuncts are written with them, so removing them would silently
+change the Hindi an author typed, and there is a test with conjuncts that would break.
+
+**Metadata containers.** `xmp`, `noembed`, `noframes`, `title` and `head` join the list of
+tags whose *content* is dropped, not just the tag: their text is an instruction to a
+browser that parses it later, so keeping it as prose is the bug.
+
+**List screens show text.** `plainText` is documented as the string a list screen may show,
+never as HTML, and the web side has one `questionPreview` that strips markup and decodes
+entities to a plain string rendered in a text node. The test feeds it
+`<img src=x onerror=alert(1)>` and asserts the result carries no tag at all.

@@ -11,8 +11,10 @@ import {
   MAX_INPUT_PIXELS,
   MAX_UPLOAD_BYTES,
   assertSingleFrame,
+  pngIsAnimated,
   processImage,
   sniffImage,
+  webpIsAnimated,
   withProcessingTimeout,
 } from './image';
 
@@ -100,6 +102,21 @@ function animatedGif(): Buffer {
     imageData,
     trailer,
   ]);
+}
+
+/**
+ * A still WebP with one extra RIFF chunk, so a test can plant bytes the decoder ignores.
+ * The container length is repaired, so the file stays a valid WebP.
+ */
+function webpWithChunk(input: Buffer, type: string, payload: Buffer): Buffer {
+  const header = Buffer.from(type.padEnd(4, ' ').slice(0, 4), 'ascii');
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(payload.length, 4);
+  const padded = payload.length % 2 === 0 ? Buffer.alloc(0) : Buffer.alloc(1);
+
+  const whole = Buffer.concat([input, header, length, payload, padded]);
+  whole.writeUInt32LE(whole.length - 8, 4);
+  return whole;
 }
 
 /** A still WebP's image bitstream, chunk header and padding included. */
@@ -372,5 +389,40 @@ describe('image pipeline', () => {
     // stays inside the container's memory (decision 0045).
     expect(MAX_INPUT_PIXELS).toBe(16_000_000);
     expect(MAX_CONCURRENT_DECODES).toBe(2);
+  });
+
+  it('accepts a PNG that merely mentions acTL, because the chunk list decides', async () => {
+    const still = await png(60, 40);
+    const notice = pngChunk('tEXt', Buffer.from('Comment\u0000acTL ANIM ANMF in a caption', 'latin1'));
+    // A text chunk before IEND, which is where a PNG puts its metadata.
+    const withText = Buffer.concat([still.subarray(0, still.length - 12), notice, still.subarray(still.length - 12)]);
+
+    expect(sniffImage(withText)).toBe('png');
+    expect(pngIsAnimated(withText)).toBe(false);
+
+    const processed = await processImage(withText);
+    expect(processed.mimeType).toBe('image/webp');
+  });
+
+  it('accepts a still WebP carrying a chunk whose payload names the animation chunks', async () => {
+    const still = await sharp({ create: { width: 20, height: 20, channels: 3, background: '#fff' } })
+      .webp()
+      .toBuffer();
+    const withChunk = webpWithChunk(still, 'XMP ', Buffer.from('ANIMANMF mentioned in metadata', 'latin1'));
+
+    expect(sniffImage(withChunk)).toBe('webp');
+    expect(webpIsAnimated(withChunk)).toBe(false);
+
+    const processed = await processImage(withChunk);
+    expect(processed.mimeType).toBe('image/webp');
+  });
+
+  it('does not treat an animation chunk that comes after the first frame as animation', async () => {
+    const still = await png(30, 20);
+    const acTl = pngChunk('acTL', Buffer.from([0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00]));
+    const late = Buffer.concat([still.subarray(0, still.length - 12), acTl, still.subarray(still.length - 12)]);
+
+    expect(pngIsAnimated(late)).toBe(false);
+    await expect(processImage(late)).resolves.toMatchObject({ mimeType: 'image/webp' });
   });
 });
