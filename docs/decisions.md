@@ -883,3 +883,32 @@ browser that parses it later, so keeping it as prose is the bug.
 never as HTML, and the web side has one `questionPreview` that strips markup and decodes
 entities to a plain string rendered in a text node. The test feeds it
 `<img src=x onerror=alert(1)>` and asserts the result carries no tag at all.
+
+
+## 0047 — The repository is public temporarily, and carries no real secret
+
+**Status:** accepted · **Phase:** 4
+
+The repository is **public for now**, because GitHub Actions for a private repository were
+blocked on billing and public repositories get free runners. That is a temporary arrangement,
+not the intended state.
+
+- **Make it private again before any real user data, production secret or live customer
+  exists.** Nothing in the history can be unpublished: once something is pushed to a public
+  repository it must be treated as published for ever, and removing it from the latest commit
+  does not remove it from earlier ones.
+- **Production secrets never live in this repository.** They are set as GitHub encrypted
+  secrets (CI) and in the server environment (deployment), read by name through
+  `docker-compose.prod.yml`'s `${VAR:?}` requirements. `.env.example` holds development
+  placeholders only, and `validateEnv` refuses the development values in production.
+- **What the working tree and history were checked for** when the repository became public:
+  real passwords, tokens, API keys, private keys, real addresses or phone numbers, server IPs
+  and hostnames, and personal data. The findings were the expected ones — documented
+  development placeholders in `.env.example`, throwaway `example.com` accounts and obvious
+  test passwords in the browser suite, and the repository owner's handle in `PROGRESS.md`
+  proof links — and no real credential. The `gitleaks` job scans the full history on every
+  push, so an accidental commit is caught as it arrives rather than later.
+- **Repository settings that matter more now than they did in private**: fork pull requests
+  require approval before workflows run, secret scanning with push protection is on, and
+  Dependabot alerts and security updates are enabled. Those are toggles in the repository's
+  own settings, not files, so they are recorded here rather than enforced by CI.
