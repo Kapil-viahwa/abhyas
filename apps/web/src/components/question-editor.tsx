@@ -2,10 +2,10 @@
 
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
-import katex from 'katex';
 import { useMemo, useState, type ReactElement } from 'react';
 
 import { buttonClass, inputClass, labelClass, secondaryButtonClass } from './auth-shell';
+import { renderLatex } from '../lib/latex';
 import type { CatalogChoices, QuestionDraftPayload, QuestionView } from '../lib/questions-api';
 
 /**
@@ -28,17 +28,6 @@ interface Props {
   readonly catalog: CatalogChoices;
   readonly question: QuestionView | null;
   readonly cancelHref: string;
-}
-
-function renderLatex(latex: string): string {
-  if (latex.trim() === '') {
-    return '';
-  }
-  try {
-    return katex.renderToString(latex, { throwOnError: false, trust: false, strict: 'ignore', displayMode: true });
-  } catch {
-    return '';
-  }
 }
 
 export function QuestionEditor({ action, csrfToken, catalog, question, cancelHref }: Props): ReactElement {

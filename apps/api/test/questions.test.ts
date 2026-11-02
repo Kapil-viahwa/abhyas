@@ -426,4 +426,39 @@ describe('questions and media over HTTP', () => {
     expect(accepted.statusCode).toBe(201);
     expect((accepted.json() as { width: number }).width).toBe(700);
   });
+
+  it('refuses an image that belongs to another editor, and stores the reference to its own', async () => {
+    const logo = await sharp({ create: { width: 20, height: 20, channels: 3, background: '#654321' } })
+      .png()
+      .toBuffer();
+
+    const upload = await call('POST', '/v1/media/images', editorA.token, { dataBase64: logo.toString('base64') });
+    expect(upload.statusCode).toBe(201);
+    const assetId = (upload.json() as { id: string }).id;
+
+    const content = `<p>See the diagram</p><img data-media-id="${assetId}">`;
+
+    // Editor B cannot point a question at editor A's upload.
+    const foreign = await call('POST', '/v1/questions', editorB.token, mcq({ contentHtml: content }));
+    expect(foreign.statusCode).toBe(400);
+    expect(foreign.json().message).toMatch(/not available to you/);
+
+    // An id that does not exist is refused with the same words, so the route cannot be
+    // used to discover which images exist.
+    const invented = await call(
+      'POST',
+      '/v1/questions',
+      editorB.token,
+      mcq({ contentHtml: `<p>See the diagram</p><img data-media-id="${randomUUID()}">` }),
+    );
+    expect(invented.statusCode).toBe(400);
+    expect(invented.json().message).toMatch(/not available to you/);
+
+    // The owner may use it, and the stored markup keeps the reference and nothing else.
+    const mine = await call('POST', '/v1/questions', editorA.token, mcq({ contentHtml: content }));
+    expect(mine.statusCode).toBe(201);
+    const storedContent = (mine.json() as { version: { contentHtml: string } }).version.contentHtml;
+    expect(storedContent).toContain(`data-media-id="${assetId}"`);
+    expect(storedContent).not.toContain('src=');
+  });
 });

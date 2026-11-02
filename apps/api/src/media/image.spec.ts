@@ -102,6 +102,65 @@ function animatedGif(): Buffer {
   ]);
 }
 
+/** A still WebP's image bitstream, chunk header and padding included. */
+async function webpBitstream(): Promise<Buffer> {
+  const still = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#ff0000' } })
+    .webp()
+    .toBuffer();
+
+  let offset = 12;
+  while (offset + 8 <= still.length) {
+    const fourcc = still.toString('ascii', offset, offset + 4);
+    const size = still.readUInt32LE(offset + 4);
+    const padded = size + (size % 2);
+    if (fourcc === 'VP8 ' || fourcc === 'VP8L') {
+      return still.subarray(offset, offset + 8 + padded);
+    }
+    offset += 8 + padded;
+  }
+
+  throw new Error('The still WebP fixture has no image bitstream');
+}
+
+function riffChunk(fourcc: string, data: Buffer): Buffer {
+  const header = Buffer.alloc(8);
+  header.write(fourcc, 0, 'ascii');
+  header.writeUInt32LE(data.length, 4);
+  const padding = data.length % 2 === 0 ? Buffer.alloc(0) : Buffer.from([0]);
+  return Buffer.concat([header, data, padding]);
+}
+
+function u24(value: number): Buffer {
+  const buffer = Buffer.alloc(3);
+  buffer.writeUIntLE(value, 0, 3);
+  return buffer;
+}
+
+/**
+ * A genuinely animated WebP: the extended container with the animation flag in VP8X, an
+ * ANIM chunk and two ANMF frames, each carrying a real VP8 bitstream taken from a still
+ * WebP. libwebp counts two frames in it, so it is the thing the pipeline must refuse.
+ */
+async function animatedWebp(): Promise<Buffer> {
+  const frame = await webpBitstream();
+  const size = 2;
+
+  const vp8x = riffChunk('VP8X', Buffer.concat([Buffer.from([0x02, 0x00, 0x00, 0x00]), u24(size - 1), u24(size - 1)]));
+  const anim = riffChunk('ANIM', Buffer.from([0xff, 0xff, 0xff, 0xff, 0x00, 0x00]));
+  const animate = (): Buffer =>
+    riffChunk(
+      'ANMF',
+      Buffer.concat([u24(0), u24(0), u24(size - 1), u24(size - 1), u24(100), Buffer.from([0x02]), frame]),
+    );
+
+  const body = Buffer.concat([Buffer.from('WEBP', 'ascii'), vp8x, anim, animate(), animate()]);
+  const header = Buffer.alloc(8);
+  header.write('RIFF', 0, 'ascii');
+  header.writeUInt32LE(body.length, 4);
+
+  return Buffer.concat([header, body]);
+}
+
 describe('image pipeline', () => {
   it('decides the type from the first bytes, not the name', async () => {
     const bytes = await png();
@@ -296,14 +355,16 @@ describe('image pipeline', () => {
   });
 
   it('refuses a real animated WebP, not just a container that calls itself one', async () => {
-    const animatedWebp = await sharp(animatedGif(), { animated: true }).webp({ loop: 0 }).toBuffer();
+    const animated = await animatedWebp();
 
-    // The fixture is genuinely animated before the pipeline is asked about it.
-    const metadata = await sharp(animatedWebp, { animated: true }).metadata();
+    // The container declares the animation and libwebp reads two frames out of it.
+    expect(animated.includes(Buffer.from('ANIM', 'ascii'))).toBe(true);
+    expect(animated.includes(Buffer.from('ANMF', 'ascii'))).toBe(true);
+    const metadata = await sharp(animated, { animated: true }).metadata();
     expect(metadata.pages ?? 1).toBeGreaterThan(1);
 
-    expect(sniffImage(animatedWebp)).toBe('webp');
-    await expect(processImage(animatedWebp)).rejects.toThrow(/Animated images are not accepted/);
+    expect(sniffImage(animated)).toBe('webp');
+    await expect(processImage(animated)).rejects.toThrow(/Animated images are not accepted/);
   });
 
   it('keeps the decode budget small enough for one small VPS', () => {

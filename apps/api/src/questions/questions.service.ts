@@ -6,7 +6,7 @@ import { writeIdentityAudit } from '../auth/audit';
 import type { RequestMetadata } from '../auth/request';
 import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
-import { plainText } from './sanitize';
+import { mediaIdsIn, plainText, sanitizeStoredContent } from './sanitize';
 import type { QuestionInput, QuestionListQuery } from './validation';
 
 const PAGE_SIZE = 20;
@@ -99,8 +99,8 @@ function toView(question: QuestionRow, version: VersionRow): QuestionView {
       questionType: version.questionType,
       language: version.language,
       difficulty: version.difficulty,
-      contentHtml: version.contentHtml,
-      explanationHtml: version.explanationHtml,
+      contentHtml: sanitizeStoredContent(version.contentHtml),
+      explanationHtml: version.explanationHtml === null ? null : sanitizeStoredContent(version.explanationHtml),
       latex: version.latex,
       numericalAnswer: version.numericalAnswer,
       marks: version.marks.toString(),
@@ -109,7 +109,7 @@ function toView(question: QuestionRow, version: VersionRow): QuestionView {
     },
     options: version.options.map((option) => ({
       position: option.position,
-      optionHtml: option.optionHtml,
+      optionHtml: sanitizeStoredContent(option.optionHtml),
       isCorrect: option.isCorrect,
       imageId: option.imageId,
     })),
@@ -205,6 +205,7 @@ export class QuestionsService {
 
   async create(actor: AuthenticatedUser, input: QuestionInput, meta: RequestMetadata = {}): Promise<QuestionView> {
     await this.assertCatalogAlignment(input.examId, input.subjectId, input.topicId);
+    await this.assertMediaOwnership(actor, input);
 
     const created = await this.prisma.$transaction(async (tx) => {
       const question = await tx.question.create({
@@ -275,6 +276,7 @@ export class QuestionsService {
       throw new BadRequestException('A question cannot be moved to another exam or subject');
     }
     await this.assertCatalogAlignment(input.examId, input.subjectId, input.topicId);
+    await this.assertMediaOwnership(actor, input);
 
     const targetVersion = current.publishedAt === null ? current.version : current.version + 1;
 
@@ -477,6 +479,52 @@ export class QuestionsService {
       const topic = await this.prisma.topic.findUnique({ where: { id: topicId }, select: { subjectId: true } });
       if (!topic || topic.subjectId !== subjectId) {
         throw new BadRequestException('The topic does not belong to that subject');
+      }
+    }
+  }
+
+  /**
+   * Every image a question refers to must exist and be one this editor may use.
+   *
+   * The id travels in the content, so this runs on save and on every later save: an editor
+   * cannot point a question at somebody else's upload, and a made-up id is refused with
+   * the same words as a foreign one, so the route cannot be used to probe which ids exist.
+   */
+  private async assertMediaOwnership(actor: AuthenticatedUser, input: QuestionInput): Promise<void> {
+    const ids = new Set<string>(mediaIdsIn(input.contentHtml));
+    if (input.explanationHtml !== null) {
+      for (const id of mediaIdsIn(input.explanationHtml)) {
+        ids.add(id);
+      }
+    }
+    for (const option of input.options) {
+      for (const id of mediaIdsIn(option.optionHtml)) {
+        ids.add(id);
+      }
+      if (option.imageId !== null) {
+        ids.add(option.imageId);
+      }
+    }
+
+    if (ids.size === 0) {
+      return;
+    }
+
+    const assets = await this.prisma.mediaAsset.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, mimeType: true, uploadedBy: true },
+    });
+    const byId = new Map(assets.map((asset) => [asset.id, asset]));
+
+    for (const id of ids) {
+      const asset = byId.get(id);
+      const usable =
+        asset !== undefined &&
+        asset.mimeType === 'image/webp' &&
+        (actor.roleCode === 'ADMIN' || asset.uploadedBy === actor.id);
+
+      if (!usable) {
+        throw new BadRequestException('An image in this question is not available to you');
       }
     }
   }

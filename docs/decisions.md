@@ -809,3 +809,47 @@ header test asserts.
 chunk and an animated WebP declares `ANIM`/`ANMF`; both are refused before the decoder runs,
 and `metadata.pages > 1` refuses anything else that still declares more than one frame. A
 question image is one still picture, and a container that describes more is not one.
+
+
+## 0046 — Authored content is a fixed point of one allowlist, and an image is a reference
+
+**Status:** accepted · **Phase:** 4
+
+One function in `apps/api/src/questions/sanitize.ts` decides what authored content is, and
+it runs on three occasions: on save, on every later save, and again when the row is read
+back, so a version written under older rules can never reach a student unsanitised.
+
+**The allowlist.** Paragraphs, line breaks, emphasis, lists, sub/superscript, code and a
+blockquote. No links — a question has no use for one, and a link is the easiest way to
+smuggle a scheme — and no `style`, `class`, `id` or `on*` attribute anywhere: only `img`
+carries attributes at all, and only `data-media-id` and `alt`. The containers whose content
+is not prose (`script`, `style`, `textarea`, `option`, `noscript`, `iframe`, `object`,
+`embed`, `svg`, `math`, `template`, `form`) are dropped whole rather than unwrapped, because
+their text is the payload: the classic `<math><mtext><table><mglyph><style><img onerror…>`
+needs the namespace to be discarded, not read.
+
+**An image is a reference.** Content names an upload by its `media_assets` id and nothing
+else; an `img` without one, or with a URL where one belongs, is removed, and a second pass
+over the cleaned markup removes anything the parser left behind. On save the service checks
+every referenced id: it must exist, be a WebP and be the caller's own upload (an
+Administrator may use any). A foreign id and an invented one are refused with the same
+words, so the route cannot be used to discover which images exist.
+
+**A fixed point.** `sanitize(sanitize(x))` must equal `sanitize(x)`, and the save refuses a
+value that moves on the second pass. A sanitiser whose output is not its own input cannot be
+reasoned about; the tests hold every payload to it.
+
+**Characters.** Text is composed to NFC, and C0 controls (except tab, newline and carriage
+return), null bytes, bidirectional overrides and isolates are removed. A bidi override
+renders one string and reads as another, which has no place in a question a student answers.
+Depth is bounded at 50 tags: 20,000 nested tags would be flattened by the parser only after
+it had built the tree, so the raw string is measured first and refused.
+
+**Search text.** `plainText` strips tags and then decodes entities, so a question authored
+as `a &lt; b` or `R&amp;D` is found by searching for what the author typed.
+
+**LaTeX.** KaTeX renders with `trust: false`, `strict: 'error'`, `throwOnError: false`,
+`maxSize: 50` and `maxExpand: 1000`. `\href`, `\url`, `\includegraphics` and `\htmlClass` are
+not in its command list and cannot produce a link, an image or a class attribute with trust
+disabled; the renderer shows the expression as escaped text, and a hard failure is escaped
+by the renderer itself before it reaches the page.
