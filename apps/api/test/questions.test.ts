@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
 import { hashPassword } from '../src/auth/password';
+import { RATE_LIMITS } from '../src/infra/rate-limiter';
 import { imageLimiter, MAX_CONCURRENT_DECODES, MAX_QUEUED_DECODES } from '../src/media/image';
 import { boundUploadBody, UPLOAD_BODY_LIMIT_BYTES, type RouteHookHost } from '../src/media/upload-limit';
 
@@ -449,14 +450,42 @@ describe('questions and media over HTTP', () => {
     expect(refused.statusCode).toBe(503);
     expect(refused.headers['retry-after']).toBe('1');
 
-    for (const release of releases) {
-      release();
+    // Drain the queue: releasing a running decode lets the next queued one start, which
+    // pushes its own release, until every held job has settled and the limiter is empty.
+    while (imageLimiter.running > 0 || imageLimiter.queued > 0) {
+      const pending = releases.shift();
+      if (pending === undefined) {
+        break;
+      }
+      pending();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
     await Promise.all(held);
 
     // Once the queue drains the same request is accepted again.
     const accepted = await call('POST', '/v1/media/images', editorA.token, { dataBase64: png.toString('base64') });
     expect(accepted.statusCode).toBe(201);
+  });
+
+  it('meters uploads per account and answers 429 once the window is spent', async () => {
+    const limitedEditor = await makePerson('EDITOR', true, admin.id);
+    const png = await sharp({ create: { width: 16, height: 16, channels: 3, background: '#0f0' } })
+      .png()
+      .toBuffer();
+    const limit = RATE_LIMITS.mediaUploadPerUser.limit;
+
+    for (let attempt = 0; attempt < limit; attempt += 1) {
+      const accepted = await call('POST', '/v1/media/images', limitedEditor.token, { dataBase64: png.toString('base64') });
+      expect(accepted.statusCode, `upload ${String(attempt + 1)} of ${String(limit)}`).toBe(201);
+    }
+
+    const refused = await call('POST', '/v1/media/images', limitedEditor.token, { dataBase64: png.toString('base64') });
+    expect(refused.statusCode).toBe(429);
+    expect(refused.headers['retry-after']).toBe('60');
+
+    // A different editor has their own window.
+    const other = await call('POST', '/v1/media/images', editorA.token, { dataBase64: png.toString('base64') });
+    expect(other.statusCode).toBe(201);
   });
 
   it('refuses an image that belongs to another editor, and stores the reference to its own', async () => {

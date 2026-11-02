@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req, Res, ServiceUnavailableException } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpException, Inject, Param, Post, Req, Res, ServiceUnavailableException } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
@@ -18,6 +18,7 @@ import type { FastifyReply } from 'fastify';
 
 /** How long a refused upload is told to wait before it is worth trying again. */
 const RETRY_AFTER_SECONDS = '1';
+const RETRY_AFTER_RATE_LIMITED_SECONDS = '60';
 
 /**
  * Question media. Uploading needs `content.write` (the editor's manage-questions flag);
@@ -49,6 +50,8 @@ export class MediaController {
       // A busy decode queue is not a failure of the request: say when to come back.
       if (error instanceof ServiceUnavailableException) {
         reply.header('retry-after', RETRY_AFTER_SECONDS);
+      } else if (error instanceof HttpException && error.getStatus() === 429) {
+        reply.header('retry-after', RETRY_AFTER_RATE_LIMITED_SECONDS);
       }
       throw error;
     }

@@ -318,7 +318,9 @@ export async function processImage(input: Buffer): Promise<ProcessedImage> {
   try {
     output = await withProcessingTimeout(decoding);
   } catch (error) {
-    if (error instanceof ImageRejectedError) {
+    // A full queue is a "come back later", not a bad image: it keeps its own type so the
+    // route can answer 503 with a Retry-After instead of 400.
+    if (error instanceof ImageQueueFullError || error instanceof ImageRejectedError) {
       throw error;
     }
     throw new ImageRejectedError('The image is corrupt or too large to decode');

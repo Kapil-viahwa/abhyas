@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Inject,
   Injectable,
   Logger,
@@ -22,8 +24,12 @@ import {
   type ObjectStorage,
 } from '../infra/object-storage';
 import { DATABASE_PROBE } from '../infra/tokens';
+import { RATE_LIMITS, RateLimiter, userRateLimitKey } from '../infra/rate-limiter';
 import { ImageQueueFullError, ImageRejectedError, processImage, type ProcessedImage } from './image';
 import { parseImageUploadBody } from './validation';
+
+/** How long a rate-limited upload is told to wait before it is worth trying again. */
+export const UPLOAD_RETRY_AFTER_SECONDS = 60;
 
 export interface MediaAssetResult {
   readonly id: string;
@@ -55,6 +61,7 @@ export class MediaService implements OnModuleInit {
   constructor(
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    @Inject(RateLimiter) private readonly limiter: RateLimiter,
   ) {
     const config = loadConfig(process.env);
     this.bucket = config.S3_BUCKET;
@@ -83,6 +90,17 @@ export class MediaService implements OnModuleInit {
   }
 
   async upload(actor: AuthenticatedUser, body: unknown, meta: RequestMetadata = {}): Promise<MediaAssetResult> {
+    // Uploading is the only route that runs a native decoder, so it is metered per account
+    // before the body is even parsed: a burst is slowed, never queued or run.
+    const decision = await this.limiter.consume({
+      key: userRateLimitKey('media-upload', actor.id),
+      limit: RATE_LIMITS.mediaUploadPerUser.limit,
+      windowSeconds: RATE_LIMITS.mediaUploadPerUser.windowSeconds,
+    });
+    if (!decision.allowed) {
+      throw new HttpException('Too many image uploads. Please try again later.', HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     const input = parseImageUploadBody(body);
 
     let processed: ProcessedImage;
