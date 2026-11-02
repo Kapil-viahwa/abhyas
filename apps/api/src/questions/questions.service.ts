@@ -14,6 +14,7 @@ const PAGE_SIZE = 20;
 export interface OptionView {
   readonly position: number;
   readonly optionHtml: string;
+  readonly latex: string | null;
   readonly isCorrect: boolean;
   readonly imageId: string | null;
 }
@@ -110,6 +111,7 @@ function toView(question: QuestionRow, version: VersionRow): QuestionView {
     options: version.options.map((option) => ({
       position: option.position,
       optionHtml: sanitizeStoredContent(option.optionHtml),
+      latex: option.latex,
       isCorrect: option.isCorrect,
       imageId: option.imageId,
     })),
@@ -238,6 +240,7 @@ export class QuestionsService {
             create: input.options.map((option, index) => ({
               position: index + 1,
               optionHtml: option.optionHtml,
+              latex: option.latex,
               isCorrect: option.isCorrect,
               imageId: option.imageId,
             })),
@@ -305,6 +308,7 @@ export class QuestionsService {
               versionId: current.id,
               position: index + 1,
               optionHtml: option.optionHtml,
+              latex: option.latex,
               isCorrect: option.isCorrect,
               imageId: option.imageId,
             })),
@@ -335,6 +339,7 @@ export class QuestionsService {
               versionId: next.id,
               position: index + 1,
               optionHtml: option.optionHtml,
+              latex: option.latex,
               isCorrect: option.isCorrect,
               imageId: option.imageId,
             })),

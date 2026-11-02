@@ -355,6 +355,7 @@ model QuestionOption {
   versionId  String  @map("question_version_id") @db.Uuid
   position   Int
   optionHtml String  @map("option_html")
+  latex      String?
   isCorrect  Boolean @default(false) @map("is_correct")
   imageId    String? @map("image_id") @db.Uuid
 

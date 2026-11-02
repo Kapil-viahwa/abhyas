@@ -295,19 +295,19 @@ export function plainText(html: string): string {
   return decodeEntities(stripped).replace(/\s+/g, ' ').trim();
 }
 
-export function sanitizeLatex(value: unknown): string | null {
+export function sanitizeLatex(value: unknown, field = 'latex'): string | null {
   if (value === undefined || value === null || value === '') {
     return null;
   }
   if (typeof value !== 'string') {
-    throw new ContentRejectedError('latex must be text');
+    throw new ContentRejectedError(`${field} must be text`);
   }
 
   // Backslashes are the point of LaTeX, so no escaping happens here. The renderer runs
   // with trust disabled, which is where markup would have to come from.
   const trimmed = normalizeText(value).trim();
   if (trimmed.length > MAX_LATEX_LENGTH) {
-    throw new ContentRejectedError(`latex must be ${MAX_LATEX_LENGTH} characters or fewer`);
+    throw new ContentRejectedError(`${field} must be ${MAX_LATEX_LENGTH} characters or fewer`);
   }
 
   return trimmed === '' ? null : trimmed;

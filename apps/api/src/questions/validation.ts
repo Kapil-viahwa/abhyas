@@ -16,6 +16,7 @@ export type QuestionDifficulty = (typeof DIFFICULTIES)[number];
 
 export interface OptionInput {
   readonly optionHtml: string;
+  readonly latex: string | null;
   readonly isCorrect: boolean;
   readonly imageId: string | null;
 }
@@ -107,6 +108,9 @@ function parseOptions(value: unknown, questionType: QuestionType): OptionInput[]
     const record = asRecord(entry);
     return {
       optionHtml: content(() => sanitizeQuestionContent(record.optionHtml, `option ${index + 1}`)),
+      // Same limit and same sanitiser as the question's own LaTeX: an option is prose plus
+      // an optional formula, never a second place to smuggle markup.
+      latex: content(() => sanitizeLatex(record.latex, `option ${index + 1} latex`)),
       isCorrect: record.isCorrect === true,
       imageId:
         record.imageId === undefined || record.imageId === null || record.imageId === ''

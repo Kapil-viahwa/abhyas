@@ -8,6 +8,7 @@ import { apiCall } from './upstream';
 export interface OptionView {
   readonly position: number;
   readonly optionHtml: string;
+  readonly latex: string | null;
   readonly isCorrect: boolean;
   readonly imageId: string | null;
 }
@@ -157,5 +158,5 @@ export interface QuestionDraftPayload {
   readonly numericalAnswer: string | null;
   readonly marks: string;
   readonly negativeMarks: string;
-  readonly options: readonly { optionHtml: string; isCorrect: boolean; imageId: string | null }[];
+  readonly options: readonly { optionHtml: string; latex: string | null; isCorrect: boolean; imageId: string | null }[];
 }

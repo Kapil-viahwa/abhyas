@@ -18,6 +18,7 @@ import type { CatalogChoices, QuestionDraftPayload, QuestionView } from '../lib/
 
 interface OptionDraft {
   optionHtml: string;
+  latex: string;
   isCorrect: boolean;
   imageId: string;
 }
@@ -45,12 +46,13 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
     question !== null && question.options.length > 0
       ? question.options.map((option) => ({
           optionHtml: option.optionHtml,
+          latex: option.latex ?? '',
           isCorrect: option.isCorrect,
           imageId: option.imageId ?? '',
         }))
       : [
-          { optionHtml: '', isCorrect: true, imageId: '' },
-          { optionHtml: '', isCorrect: false, imageId: '' },
+          { optionHtml: '', latex: '', isCorrect: true, imageId: '' },
+          { optionHtml: '', latex: '', isCorrect: false, imageId: '' },
         ],
   );
 
@@ -91,6 +93,7 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
       questionType === 'MCQ'
         ? options.map((option) => ({
             optionHtml: option.optionHtml,
+            latex: option.latex.trim() === '' ? null : option.latex,
             isCorrect: option.isCorrect,
             imageId: option.imageId === '' ? null : option.imageId,
           }))
@@ -231,6 +234,19 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
                   )
                 }
               />
+              <input
+                className={`${inputClass} w-40`}
+                value={option.latex}
+                placeholder="LaTeX"
+                aria-label={`Option ${String.fromCharCode(65 + index)} LaTeX`}
+                onChange={(event) =>
+                  setOptions((current) =>
+                    current.map((entry, position) =>
+                      position === index ? { ...entry, latex: event.target.value } : entry,
+                    ),
+                  )
+                }
+              />
               <label className="flex items-center gap-1 text-xs text-slate-400">
                 <input
                   type="checkbox"
@@ -249,7 +265,7 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
             <button
               type="button"
               className={secondaryButtonClass}
-              onClick={() => setOptions((current) => [...current, { optionHtml: '', isCorrect: false, imageId: '' }])}
+              onClick={() => setOptions((current) => [...current, { optionHtml: '', latex: '', isCorrect: false, imageId: '' }])}
             >
               Add option
             </button>
@@ -278,6 +294,9 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
             {options.map((option, index) => (
               <li key={String(index)}>
                 {String.fromCharCode(65 + index)}. {option.optionHtml.replace(/<[^>]*>/g, ' ').trim()}
+                {renderLatex(option.latex) !== '' ? (
+                  <span className="ml-1" dangerouslySetInnerHTML={{ __html: renderLatex(option.latex) }} />
+                ) : null}
               </li>
             ))}
           </ol>

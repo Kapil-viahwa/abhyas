@@ -258,6 +258,31 @@ describe('questions and media over HTTP', () => {
     expect(withOptions.statusCode).toBe(400);
   });
 
+  it('stores an option LaTeX formula under the same limit as the question one', async () => {
+    const created = await call('POST', '/v1/questions', editorA.token, {
+      ...mcq(),
+      options: [
+        { optionHtml: '<p>144</p>', latex: '\\frac{12}{1}', isCorrect: true },
+        { optionHtml: '<p>288</p>', isCorrect: false },
+      ],
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json() as { options: Array<{ latex: string | null; position: number }> };
+    expect(body.options[0]?.latex).toBe('\\frac{12}{1}');
+    expect(body.options[1]?.latex).toBeNull();
+
+    // The same 4000-character ceiling, and the same sanitiser, as the question's own LaTeX.
+    const tooLong = await call('POST', '/v1/questions', editorA.token, {
+      ...mcq(),
+      options: [
+        { optionHtml: '<p>a</p>', latex: 'x'.repeat(4_001), isCorrect: true },
+        { optionHtml: '<p>b</p>', isCorrect: false },
+      ],
+    });
+    expect(tooLong.statusCode).toBe(400);
+    expect(tooLong.json().message).toMatch(/option 1 latex must be 4000 characters or fewer/);
+  });
+
   it('creates a new draft version after publish, and a published version cannot be changed', async () => {
     const created = await call('POST', '/v1/questions', editorA.token, mcq());
     const id = (created.json() as { id: string }).id;

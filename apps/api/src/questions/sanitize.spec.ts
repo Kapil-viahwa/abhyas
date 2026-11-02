@@ -189,6 +189,16 @@ describe('question content sanitiser', () => {
     expect(sanitizeLatex('   ')).toBeNull();
   });
 
+  it('applies the same length limit to an option that it applies to a question', () => {
+    const atLimit = 'x'.repeat(4_000);
+
+    expect(sanitizeLatex(atLimit, 'option 1 latex')).toBe(atLimit);
+    expect(() => sanitizeLatex('x'.repeat(4_001), 'option 1 latex')).toThrow(
+      /option 1 latex must be 4000 characters or fewer/,
+    );
+    expect(sanitizeLatex(undefined, 'option 2 latex')).toBeNull();
+  });
+
   it('re-applies the rules on output, so an old row cannot reach a student unsanitised', () => {
     expect(sanitizeStoredContent('<p>old</p><iframe src="https://evil"></iframe>')).toBe('<p>old</p>');
     expect(sanitizeStoredContent('<p onclick="alert(1)">old</p>')).toBe('<p>old</p>');
