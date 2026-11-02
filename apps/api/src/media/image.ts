@@ -37,12 +37,30 @@ export const PROCESSING_TIMEOUT_MS = 10_000;
 /** How many images may be decoded at the same time, whatever the request count. */
 export const MAX_CONCURRENT_DECODES = 2;
 
+/**
+ * How many decodes may wait for a slot before the API answers "busy" instead of queueing.
+ * A queue is memory that has not been taken yet, so it is bounded like everything else.
+ */
+export const MAX_QUEUED_DECODES = 20;
+
 export type SniffedImageFormat = 'jpeg' | 'png' | 'webp';
 
 export class ImageRejectedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ImageRejectedError';
+  }
+}
+
+/**
+ * The decode queue is full. Nothing is queued without limit: the request is refused with a
+ * 503 and a `Retry-After`, which is honest about a server that is busy rather than silently
+ * holding a promise that may never run.
+ */
+export class ImageQueueFullError extends Error {
+  constructor(message = 'Too many images are waiting to be processed') {
+    super(message);
+    this.name = 'ImageQueueFullError';
   }
 }
 
@@ -100,7 +118,10 @@ export class DecodeLimiter {
   private active = 0;
   private readonly waiting: Array<() => void> = [];
 
-  constructor(private readonly limit: number = MAX_CONCURRENT_DECODES) {}
+  constructor(
+    private readonly limit: number = MAX_CONCURRENT_DECODES,
+    private readonly maxQueued: number = MAX_QUEUED_DECODES,
+  ) {}
 
   get running(): number {
     return this.active;
@@ -112,6 +133,10 @@ export class DecodeLimiter {
 
   async run<T>(work: () => Promise<T>): Promise<T> {
     if (this.active >= this.limit) {
+      if (this.waiting.length >= this.maxQueued) {
+        throw new ImageQueueFullError();
+      }
+
       await new Promise<void>((resolve) => {
         this.waiting.push(resolve);
       });

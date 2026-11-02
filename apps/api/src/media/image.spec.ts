@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DecodeLimiter,
+  ImageQueueFullError,
   ImageRejectedError,
   MAX_CONCURRENT_DECODES,
   MAX_EDGE_PIXELS,
@@ -382,6 +383,31 @@ describe('image pipeline', () => {
 
     expect(sniffImage(animated)).toBe('webp');
     await expect(processImage(animated)).rejects.toThrow(/Animated images are not accepted/);
+  });
+
+  it('refuses to queue without limit, and recovers when a slot frees', async () => {
+    const limiter = new DecodeLimiter(1, 2);
+    let release: () => void = () => undefined;
+
+    const first = limiter.run(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => resolve();
+        }),
+    );
+    const second = limiter.run(async () => 'second');
+    const third = limiter.run(async () => 'third');
+
+    // Two may wait; the third is refused rather than held, and the refusal is its own
+    // error so the route can answer 503 with a Retry-After instead of a 400.
+    await expect(limiter.run(async () => 'fourth')).rejects.toBeInstanceOf(ImageQueueFullError);
+    expect(limiter.queued).toBe(2);
+
+    release();
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).resolves.toBe('second');
+    await expect(third).resolves.toBe('third');
+    await expect(limiter.run(async () => 'after')).resolves.toBe('after');
   });
 
   it('keeps the decode budget small enough for one small VPS', () => {

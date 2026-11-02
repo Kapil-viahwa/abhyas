@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Param, Post, Req, Res, ServiceUnavailableException } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiCreatedResponse,
@@ -14,6 +14,10 @@ import { Authenticated, CurrentUser, RequirePermissions, type AuthenticatedUser 
 import { requestMeta, type RequestLike } from '../auth/request';
 import { parseUuid } from '../auth/validation';
 import { MediaService, type MediaAssetResult, type SignedUrlResult } from './media.service';
+import type { FastifyReply } from 'fastify';
+
+/** How long a refused upload is told to wait before it is worth trying again. */
+const RETRY_AFTER_SECONDS = '1';
 
 /**
  * Question media. Uploading needs `content.write` (the editor's manage-questions flag);
@@ -32,12 +36,22 @@ export class MediaController {
   @ApiCreatedResponse({ description: 'The stored image, re-encoded and stripped of metadata' })
   @ApiBadRequestResponse({ description: 'Not an allowed image, too large, or corrupt' })
   @ApiForbiddenResponse({ description: 'The caller cannot author content' })
+  @ApiServiceUnavailableResponse({ description: 'The decode queue is full, or the store is unreachable' })
   async upload(
     @CurrentUser() actor: AuthenticatedUser,
     @Body() body: unknown,
     @Req() request: RequestLike,
+    @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<MediaAssetResult> {
-    return this.media.upload(actor, body, requestMeta(request));
+    try {
+      return await this.media.upload(actor, body, requestMeta(request));
+    } catch (error) {
+      // A busy decode queue is not a failure of the request: say when to come back.
+      if (error instanceof ServiceUnavailableException) {
+        reply.header('retry-after', RETRY_AFTER_SECONDS);
+      }
+      throw error;
+    }
   }
 
   @Authenticated()

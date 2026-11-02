@@ -22,7 +22,7 @@ import {
   type ObjectStorage,
 } from '../infra/object-storage';
 import { DATABASE_PROBE } from '../infra/tokens';
-import { ImageRejectedError, processImage, type ProcessedImage } from './image';
+import { ImageQueueFullError, ImageRejectedError, processImage, type ProcessedImage } from './image';
 import { parseImageUploadBody } from './validation';
 
 export interface MediaAssetResult {
@@ -89,6 +89,10 @@ export class MediaService implements OnModuleInit {
     try {
       processed = await processImage(Buffer.from(input.dataBase64, 'base64'));
     } catch (error) {
+      if (error instanceof ImageQueueFullError) {
+        // The decode queue is bounded, so a burst is refused rather than queued for ever.
+        throw new ServiceUnavailableException('Image processing is busy. Please try again.');
+      }
       if (error instanceof ImageRejectedError) {
         throw new BadRequestException(error.message);
       }

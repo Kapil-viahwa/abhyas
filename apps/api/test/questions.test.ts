@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
 import { hashPassword } from '../src/auth/password';
+import { imageLimiter, MAX_CONCURRENT_DECODES, MAX_QUEUED_DECODES } from '../src/media/image';
 import { boundUploadBody, UPLOAD_BODY_LIMIT_BYTES, type RouteHookHost } from '../src/media/upload-limit';
 
 import { createMigratedTestDatabase, type TestDatabase } from './support/database';
@@ -425,6 +426,37 @@ describe('questions and media over HTTP', () => {
     const accepted = await call('POST', '/v1/media/images', editorA.token, { dataBase64: big.toString('base64') });
     expect(accepted.statusCode).toBe(201);
     expect((accepted.json() as { width: number }).width).toBe(700);
+  });
+
+  it('answers 503 with Retry-After when the decode queue is full', async () => {
+    const png = await sharp({ create: { width: 16, height: 16, channels: 3, background: '#fff' } })
+      .png()
+      .toBuffer();
+
+    // Fill every slot the limiter has: the running decodes and the whole waiting queue.
+    const releases: Array<() => void> = [];
+    const held = Array.from({ length: MAX_CONCURRENT_DECODES + MAX_QUEUED_DECODES }, () =>
+      imageLimiter.run(
+        () =>
+          new Promise<void>((resolve) => {
+            releases.push(() => resolve());
+          }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const refused = await call('POST', '/v1/media/images', editorA.token, { dataBase64: png.toString('base64') });
+    expect(refused.statusCode).toBe(503);
+    expect(refused.headers['retry-after']).toBe('1');
+
+    for (const release of releases) {
+      release();
+    }
+    await Promise.all(held);
+
+    // Once the queue drains the same request is accepted again.
+    const accepted = await call('POST', '/v1/media/images', editorA.token, { dataBase64: png.toString('base64') });
+    expect(accepted.statusCode).toBe(201);
   });
 
   it('refuses an image that belongs to another editor, and stores the reference to its own', async () => {
