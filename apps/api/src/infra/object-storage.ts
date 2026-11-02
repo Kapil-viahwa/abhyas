@@ -26,6 +26,17 @@ export const QUESTION_IMAGE_PREFIX = 'question-image';
 
 export const PRESIGNED_URL_TTL_SECONDS = 5 * 60;
 
+/**
+ * What a stored question image is, and how anything may cache it.
+ *
+ * The type is a fact about the pipeline, not about the caller: every object in the bucket
+ * is a WebP produced by `processImage`. The cache rule is private and short — long enough
+ * for one page render, never shared between users by a proxy.
+ */
+export const MEDIA_CONTENT_TYPE = 'image/webp';
+export const MEDIA_CACHE_CONTROL = 'private, max-age=300';
+export const SIGNED_URL_CACHE_CONTROL = 'private, max-age=300';
+
 export class ObjectStorageUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -36,7 +47,8 @@ export class ObjectStorageUnavailableError extends Error {
 export interface ObjectStorage {
   /** Creates the bucket when it is missing. Development and CI only. */
   ensureBucket(): Promise<void>;
-  put(key: string, body: Buffer, contentType: string): Promise<void>;
+  /** Stores a processed image. The content type is always WebP and is set here. */
+  put(key: string, body: Buffer): Promise<void>;
   get(key: string): Promise<Buffer>;
   remove(key: string): Promise<void>;
   presignedGetUrl(key: string, expiresInSeconds?: number): Promise<string>;
@@ -76,13 +88,15 @@ export class S3ObjectStorage implements ObjectStorage {
     }
   }
 
-  async put(key: string, body: Buffer, contentType: string): Promise<void> {
+  async put(key: string, body: Buffer): Promise<void> {
     await this.client.send(
       new PutObjectCommand({
         Bucket: this.bucket,
         Key: key,
         Body: body,
-        ContentType: contentType,
+        // The pipeline only ever writes WebP, so the caller does not choose the type.
+        ContentType: MEDIA_CONTENT_TYPE,
+        CacheControl: MEDIA_CACHE_CONTROL,
         // No ACL is set on purpose: the bucket is private and policy decides access.
       }),
     );
@@ -103,9 +117,19 @@ export class S3ObjectStorage implements ObjectStorage {
   }
 
   async presignedGetUrl(key: string, expiresInSeconds = PRESIGNED_URL_TTL_SECONDS): Promise<string> {
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: expiresInSeconds,
-    });
+    return getSignedUrl(
+      this.client,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        // The store answers with the type and the cache rule we chose, not with whatever
+        // a proxy guessed: an image is only ever WebP, and only the requesting browser
+        // may keep it, for the life of the URL.
+        ResponseContentType: MEDIA_CONTENT_TYPE,
+        ResponseCacheControl: SIGNED_URL_CACHE_CONTROL,
+      }),
+      { expiresIn: expiresInSeconds },
+    );
   }
 }
 

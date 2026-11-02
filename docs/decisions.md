@@ -756,3 +756,56 @@ real production S3-compatible service: a URL with an edited signature, an expire
 a URL for a key that does not exist must each be refused. `PROGRESS.md` records this as a
 known gap.
 
+
+
+## 0045 — Decoding a question image is bounded by pixels, threads and a body limit
+
+**Status:** accepted · **Phase:** 4
+
+Three limits decide how much memory one upload may cost, and they are chosen for the
+smallest box the platform is meant to run on (a two-core VPS with 2 GB of memory), not for
+the machine it was written on.
+
+**Pixels.** `MAX_INPUT_PIXELS` is 16,000,000. libvips decodes to four bytes per pixel
+(RGBA) before it resizes, so one decode peaks at about 64 MB: 16e6 × 4 bytes. A file that
+declares more is refused by `limitInputPixels` before any of it is decoded, which is what
+makes a decompression bomb cheap to reject — an 8000 × 8000 PNG of a few kilobytes is
+64 megapixels and never allocates them.
+
+**Threads and cache.** `sharp.cache(false)` drops libvips' operation cache, which otherwise
+keeps decoded tiles alive after the request that needed them — memory held by history
+rather than by work. `sharp.concurrency(1)` stops one decode from fanning out over every
+core, so two decodes use two threads and that is the ceiling. `MAX_CONCURRENT_DECODES` is
+2, matching the two cores: two decodes ≤ 2 × 64 MB = 128 MB of pixel data, plus the stored
+WebP (≤ 5 MB each) and the Node heap. Everything else in the API is single-threaded
+JavaScript and does not compete for that memory.
+
+**A slot belongs to the decode, not to the caller.** The limiter's slot is taken around the
+native work; the ten-second timeout only stops the caller from waiting. An abandoned decode
+keeps its slot until libvips actually finishes, so a slow decode cannot be abandoned into
+starting a third one beside it — the bound is on real memory, not on requests in flight.
+
+**The body limit.** Every route keeps the Fastify adapter's 1 MB `bodyLimit`. The upload
+route carries a base64 image, which is 4/3 of the file plus the JSON envelope, so it gets
+the single per-route exception: `ceil(5 MB × 4 / 3) + 8 KB` (about 6.99 MB), applied
+through Fastify's `onRoute` hook before routes are registered. Fastify stops reading at the
+limit and answers 413, so an oversized upload is refused without being buffered; a body
+between 5 MB and 6.99 MB is refused by the parser with the image-size message. The hook is
+attached in `main.ts` and in the HTTP test, so the test exercises the same limit the server
+runs with.
+
+**Stored images and the browser.** `PutObject` always writes `ContentType: image/webp` and a
+private, short cache rule; the presigned `GET` asks the store to answer with
+`response-content-type=image/webp` and `response-cache-control=private, max-age=300`, so a
+proxy cannot decide either. A signed URL is the only way in, and the object is never public.
+
+**CSP.** The web app loads question images from the storage origin, so that exact origin —
+validated as an origin with no path and no credentials — joins `img-src` through
+`MEDIA_ORIGIN`. It is added to `img-src` and to nothing else; `script-src`, `connect-src`,
+`frame-src` and the rest are byte-identical to the policy without it, and that is what the
+header test asserts.
+
+**Animated containers are refused, not flattened.** An animated PNG declares an `acTL`
+chunk and an animated WebP declares `ANIM`/`ANMF`; both are refused before the decoder runs,
+and `metadata.pages > 1` refuses anything else that still declares more than one frame. A
+question image is one still picture, and a container that describes more is not one.

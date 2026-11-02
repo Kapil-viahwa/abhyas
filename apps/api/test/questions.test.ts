@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
 import { hashPassword } from '../src/auth/password';
+import { boundUploadBody, UPLOAD_BODY_LIMIT_BYTES, type RouteHookHost } from '../src/media/upload-limit';
 
 import { createMigratedTestDatabase, type TestDatabase } from './support/database';
 
@@ -69,6 +70,8 @@ describe('questions and media over HTTP', () => {
     app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
       logger: ['error'],
     });
+    // The upload route gets the same per-route body limit the real entry point sets.
+    boundUploadBody(app.getHttpAdapter().getInstance() as unknown as RouteHookHost);
     await app.init();
     await waitUntilHealthy(app);
 
@@ -403,5 +406,24 @@ describe('questions and media over HTTP', () => {
     expect(stored.objectKey).toMatch(/^question-image\/[0-9a-f-]{36}\.webp$/);
     expect(stored.objectKey).not.toContain('notes');
     expect(stored.mimeType).toBe('image/webp');
+  });
+
+  it('stops reading an oversized upload at its own limit, and takes a normal photograph', async () => {
+    // Every other route accepts 1 MB. The upload route takes a base64 image, so it has its
+    // own limit and Fastify answers 413 instead of buffering a body it will refuse.
+    const oversize = 'A'.repeat(UPLOAD_BODY_LIMIT_BYTES + 1_048_576);
+
+    const refused = await call('POST', '/v1/media/images', editorA.token, { dataBase64: oversize });
+    expect(refused.statusCode).toBe(413);
+
+    // A 1.5 MB image is an ordinary upload, and its base64 envelope is larger than the
+    // general limit, which is exactly what the route's own limit is for.
+    const noise = randomBytes(700 * 700 * 3);
+    const big = await sharp(noise, { raw: { width: 700, height: 700, channels: 3 } }).png().toBuffer();
+    expect(big.length).toBeGreaterThan(1_048_576);
+
+    const accepted = await call('POST', '/v1/media/images', editorA.token, { dataBase64: big.toString('base64') });
+    expect(accepted.statusCode).toBe(201);
+    expect((accepted.json() as { width: number }).width).toBe(700);
   });
 });

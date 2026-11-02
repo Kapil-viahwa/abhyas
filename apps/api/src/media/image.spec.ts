@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 import {
   DecodeLimiter,
   ImageRejectedError,
+  MAX_CONCURRENT_DECODES,
   MAX_EDGE_PIXELS,
+  MAX_INPUT_PIXELS,
   MAX_UPLOAD_BYTES,
   assertSingleFrame,
   processImage,
@@ -244,5 +246,70 @@ describe('image pipeline', () => {
     expect(peak).toBe(2);
     expect(limiter.running).toBe(0);
     expect(limiter.queued).toBe(0);
+  });
+
+  it('keeps the slot of an abandoned decode until the real work settles', async () => {
+    const limiter = new DecodeLimiter(1);
+    let release: () => void = () => undefined;
+
+    const decode = limiter.run(
+      () =>
+        new Promise<string>((resolve) => {
+          release = () => resolve('late');
+        }),
+    );
+
+    // The caller stops waiting after 5ms, exactly as `processImage` does after its own
+    // timeout, but the decode inside sharp is still running and still uses memory.
+    await expect(withProcessingTimeout(decode, 5)).rejects.toThrow(/took too long/);
+
+    expect(limiter.running).toBe(1);
+
+    // A second upload queues behind it: the abandoned decode did not hand its slot over.
+    let secondStarted = false;
+    const second = limiter.run(async () => {
+      secondStarted = true;
+      return 'second';
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(secondStarted).toBe(false);
+    expect(limiter.queued).toBe(1);
+
+    release();
+    await expect(decode).resolves.toBe('late');
+    await expect(second).resolves.toBe('second');
+    expect(secondStarted).toBe(true);
+    expect(limiter.running).toBe(0);
+  });
+
+  it('refuses an animated PNG: a PNG container that declares an animation', async () => {
+    const still = await png(40, 30);
+    // The signature and the IHDR chunk are 8 + 25 bytes; an APNG declares its animation
+    // in an acTL chunk that must precede the first frame.
+    const ihdrEnd = 8 + 25;
+    const acTl = pngChunk('acTL', Buffer.from([0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00]));
+    const apng = Buffer.concat([still.subarray(0, ihdrEnd), acTl, still.subarray(ihdrEnd)]);
+
+    expect(sniffImage(apng)).toBe('png');
+    await expect(processImage(apng)).rejects.toThrow(/Animated images are not accepted/);
+  });
+
+  it('refuses a real animated WebP, not just a container that calls itself one', async () => {
+    const animatedWebp = await sharp(animatedGif(), { animated: true }).webp({ loop: 0 }).toBuffer();
+
+    // The fixture is genuinely animated before the pipeline is asked about it.
+    const metadata = await sharp(animatedWebp, { animated: true }).metadata();
+    expect(metadata.pages ?? 1).toBeGreaterThan(1);
+
+    expect(sniffImage(animatedWebp)).toBe('webp');
+    await expect(processImage(animatedWebp)).rejects.toThrow(/Animated images are not accepted/);
+  });
+
+  it('keeps the decode budget small enough for one small VPS', () => {
+    // 16 megapixels at 4 bytes per pixel is 64 MB per decode; two decodes and no cache
+    // stays inside the container's memory (decision 0045).
+    expect(MAX_INPUT_PIXELS).toBe(16_000_000);
+    expect(MAX_CONCURRENT_DECODES).toBe(2);
   });
 });

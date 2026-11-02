@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CONTENT_SECURITY_POLICY, SECURITY_HEADERS, headerRules } from './security-headers';
+import { CONTENT_SECURITY_POLICY, SECURITY_HEADERS, contentSecurityPolicy, headerRules, mediaOrigin } from './security-headers';
 
 describe('security headers', () => {
   it('sends the four headers the phase asks for', () => {
@@ -35,5 +35,37 @@ describe('security headers', () => {
     expect(rules).toHaveLength(1);
     expect(rules[0]?.source).toBe('/:path*');
     expect(rules[0]?.headers).toEqual([...SECURITY_HEADERS]);
+  });
+
+  it('adds the storage origin to img-src and to nothing else', () => {
+    const origin = 'https://media.example.com';
+    const policy = contentSecurityPolicy(origin);
+    const directives = new Map(policy.split('; ').map((directive) => [directive.split(' ')[0], directive]));
+
+    expect(directives.get('img-src')).toBe(`img-src 'self' data: ${origin}`);
+
+    // Every other directive is unchanged: the storage origin is not a script, frame or
+    // connection host, only a place an image may be loaded from.
+    for (const [name, directive] of directives) {
+      if (name !== 'img-src') {
+        expect(CONTENT_SECURITY_POLICY).toContain(directive);
+      }
+    }
+  });
+
+  it('accepts an origin and refuses a URL that carries more than one', () => {
+    expect(mediaOrigin('  https://media.example.com  ')).toBe('https://media.example.com');
+    expect(mediaOrigin('')).toBe('');
+    expect(mediaOrigin(undefined)).toBe('');
+
+    expect(() => mediaOrigin('https://media.example.com/bucket')).toThrow(/without a path/);
+    expect(() => mediaOrigin('data:text/html,alert(1)')).toThrow(/http or https/);
+    expect(() => mediaOrigin('https://user:pass@media.example.com')).toThrow(/without a path/);
+  });
+
+  it('leaves img-src without a third-party host when no origin is configured', () => {
+    const imgSrc = contentSecurityPolicy().split('; ').find((directive) => directive.startsWith('img-src'));
+
+    expect(imgSrc).toBe("img-src 'self' data:");
   });
 });

@@ -5,8 +5,11 @@ import type { AppEnv } from '@abhyas/shared';
 import {
   DisabledObjectStorage,
   InMemoryObjectStorage,
+  MEDIA_CACHE_CONTROL,
+  MEDIA_CONTENT_TYPE,
   ObjectStorageUnavailableError,
   PRESIGNED_URL_TTL_SECONDS,
+  SIGNED_URL_CACHE_CONTROL,
   S3ObjectStorage,
   createObjectStorage,
   isQuestionImageKey,
@@ -55,9 +58,7 @@ describe('object storage', () => {
     const storage = createObjectStorage(config());
 
     expect(storage).toBeInstanceOf(DisabledObjectStorage);
-    await expect(storage.put(questionImageKey(), Buffer.from('x'), 'image/webp')).rejects.toThrow(
-      ObjectStorageUnavailableError,
-    );
+    await expect(storage.put(questionImageKey(), Buffer.from('x'))).rejects.toThrow(ObjectStorageUnavailableError);
     await expect(storage.presignedGetUrl('question-image/elsewhere.webp')).rejects.toThrow(/not configured/);
     await expect(storage.ensureBucket()).rejects.toThrow(ObjectStorageUnavailableError);
   });
@@ -78,7 +79,7 @@ describe('object storage', () => {
     expect(storage).toBeInstanceOf(InMemoryObjectStorage);
 
     const key = questionImageKey();
-    await storage.put(key, Buffer.from('bytes'), 'image/webp');
+    await storage.put(key, Buffer.from('bytes'));
 
     expect((await storage.get(key)).toString()).toBe('bytes');
     await expect(storage.get(questionImageKey())).rejects.toThrow(ObjectStorageUnavailableError);
@@ -108,5 +109,18 @@ describe('object storage', () => {
     expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/);
     expect(url.searchParams.get('X-Amz-Credential')).toContain('live-access-key');
     expect(url.searchParams.get('X-Amz-SignedHeaders')).toContain('host');
+
+    // The store is told what the object is and how it may be cached, so a proxy cannot
+    // decide either. Both are private and short; neither is a bucket-wide setting.
+    expect(url.searchParams.get('response-content-type')).toBe('image/webp');
+    expect(url.searchParams.get('response-cache-control')).toBe('private, max-age=300');
+  });
+
+  it('writes every object as WebP with a private cache rule', () => {
+    // The pipeline writes WebP only, so the store's content type is a constant, not a
+    // parameter a caller could set to something else.
+    expect(MEDIA_CONTENT_TYPE).toBe('image/webp');
+    expect(MEDIA_CACHE_CONTROL.startsWith('private')).toBe(true);
+    expect(SIGNED_URL_CACHE_CONTROL).toBe(MEDIA_CACHE_CONTROL);
   });
 });

@@ -98,7 +98,7 @@ export class MediaService implements OnModuleInit {
     const key = questionImageKey();
 
     try {
-      await this.storage.put(key, processed.data, processed.mimeType);
+      await this.storage.put(key, processed.data);
     } catch (error) {
       this.logger.error(`Object storage refused an upload: ${error instanceof Error ? error.message : String(error)}`);
       throw new ServiceUnavailableException('Image storage is unavailable. Please try again.');

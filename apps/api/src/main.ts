@@ -7,6 +7,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { AppModule } from './app.module';
 import { configureApiDocs } from './config/api-docs';
 import { loadConfig } from './config/config';
+import { boundUploadBody, type RouteHookHost } from './media/upload-limit';
 
 async function bootstrap(): Promise<void> {
   const logger = new Logger('bootstrap');
@@ -22,6 +23,10 @@ async function bootstrap(): Promise<void> {
   );
 
   app.enableShutdownHooks();
+
+  // Every route keeps the adapter's 1 MB body limit; the base64 image upload gets its own,
+  // so an oversized upload is refused with 413 before Fastify buffers it (decision 0045).
+  boundUploadBody(app.getHttpAdapter().getInstance() as unknown as RouteHookHost);
 
   // Development and CI only: in production the OpenAPI UI and document are not
   // mounted at all, so /api/docs and /api/docs-json answer 404 (decision 0028).

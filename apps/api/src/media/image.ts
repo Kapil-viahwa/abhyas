@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 
+// Two limits live outside `sharp`'s per-call options because they are process-wide: the
+// operation cache keeps decoded tiles after the request that needed them, and the thread
+// count decides how far one decode may fan out. On the four-core VPS one thread per decode
+// and no cache keeps the worst case (two 16-megapixel decodes) inside the container's
+// memory; decision 0045 records the arithmetic.
+sharp.cache(false);
+sharp.concurrency(1);
+
 /**
  * The one image pipeline. Every uploaded image passes through it, and so does every
  * image inside an import archive, so there is a single place that decides what is an
@@ -19,7 +27,7 @@ import sharp from 'sharp';
 
 export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
 export const MAX_EDGE_PIXELS = 2000;
-export const MAX_INPUT_PIXELS = 40_000_000;
+export const MAX_INPUT_PIXELS = 16_000_000;
 export const OUTPUT_MIME_TYPE = 'image/webp';
 export const OUTPUT_EXTENSION = 'webp';
 
@@ -27,7 +35,7 @@ export const OUTPUT_EXTENSION = 'webp';
 export const PROCESSING_TIMEOUT_MS = 10_000;
 
 /** How many images may be decoded at the same time, whatever the request count. */
-export const MAX_CONCURRENT_DECODES = 4;
+export const MAX_CONCURRENT_DECODES = 2;
 
 export type SniffedImageFormat = 'jpeg' | 'png' | 'webp';
 
@@ -83,6 +91,10 @@ export function sniffImage(bytes: Buffer): SniffedImageFormat | null {
 /**
  * A counting semaphore over the decode. The queue sits above `sharp`, so the limit holds
  * for direct uploads and for the image entries of an import archive at the same time.
+ *
+ * A slot belongs to the decode itself, not to the caller waiting for it: `processImage`
+ * gives up after the timeout, but the slot is released only when the native work settles,
+ * so abandoning a decode never allows a second one to start beside it.
  */
 export class DecodeLimiter {
   private active = 0;
@@ -119,6 +131,27 @@ export class DecodeLimiter {
 }
 
 export const imageLimiter = new DecodeLimiter();
+
+const PNG_ANIMATION_CHUNK = Buffer.from('acTL', 'ascii');
+const WEBP_ANIMATION_CHUNK = Buffer.from('ANIM', 'ascii');
+const WEBP_FRAME_CHUNK = Buffer.from('ANMF', 'ascii');
+
+/**
+ * The container's own declaration, read before any of it is decoded.
+ *
+ * An animated PNG carries an `acTL` chunk and an animated WebP carries `ANIM`/`ANMF`
+ * chunks; both are refused here, so the decision does not depend on what libvips reports
+ * about the frame count afterwards. The rule is rejection, not flattening: a question
+ * image is one still picture, and a container that describes more is not one.
+ */
+export function assertNotAnimatedContainer(bytes: Buffer, format: SniffedImageFormat): void {
+  if (format === 'png' && bytes.includes(PNG_ANIMATION_CHUNK)) {
+    throw new ImageRejectedError('Animated images are not accepted');
+  }
+  if (format === 'webp' && bytes.includes(WEBP_ANIMATION_CHUNK) && bytes.includes(WEBP_FRAME_CHUNK)) {
+    throw new ImageRejectedError('Animated images are not accepted');
+  }
+}
 
 /**
  * One image is stored as one frame. A multi-frame container would let an upload become a
@@ -174,29 +207,33 @@ export async function processImage(input: Buffer): Promise<ProcessedImage> {
     throw new ImageRejectedError('Only JPEG, PNG and WebP images are accepted');
   }
 
+  assertNotAnimatedContainer(input, format);
+
+  const decode = async (): Promise<{ data: Buffer; info: { width: number; height: number } }> => {
+    const metadata = await sharp(input, SHARP_INPUT_OPTIONS).metadata();
+    if (metadata.format !== format) {
+      // The bytes claim one container and decode as another: a polyglot, not an image.
+      throw new ImageRejectedError('The image could not be decoded as its declared type');
+    }
+    assertSingleFrame(metadata.pages);
+
+    // No `withMetadata()` call anywhere: the encoder writes a bare WebP, so EXIF,
+    // ICC, IPTC and XMP from the upload never reach the stored object.
+    return sharp(input, SHARP_INPUT_OPTIONS)
+      .rotate()
+      .resize({ width: MAX_EDGE_PIXELS, height: MAX_EDGE_PIXELS, fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 82 })
+      .toBuffer({ resolveWithObject: true });
+  };
+
+  // The slot is taken around the decode, never around the wait: the timeout stops this
+  // caller, and the native work keeps its slot until it has really finished.
+  const decoding = imageLimiter.run(decode);
+
   let output: { data: Buffer; info: { width: number; height: number } };
 
   try {
-    output = await imageLimiter.run(() =>
-      withProcessingTimeout(
-        (async () => {
-          const metadata = await sharp(input, SHARP_INPUT_OPTIONS).metadata();
-          if (metadata.format !== format) {
-            // The bytes claim one container and decode as another: a polyglot, not an image.
-            throw new ImageRejectedError('The image could not be decoded as its declared type');
-          }
-          assertSingleFrame(metadata.pages);
-
-          // No `withMetadata()` call anywhere: the encoder writes a bare WebP, so EXIF,
-          // ICC, IPTC and XMP from the upload never reach the stored object.
-          return sharp(input, SHARP_INPUT_OPTIONS)
-            .rotate()
-            .resize({ width: MAX_EDGE_PIXELS, height: MAX_EDGE_PIXELS, fit: 'inside', withoutEnlargement: true })
-            .webp({ quality: 82 })
-            .toBuffer({ resolveWithObject: true });
-        })(),
-      ),
-    );
+    output = await withProcessingTimeout(decoding);
   } catch (error) {
     if (error instanceof ImageRejectedError) {
       throw error;
