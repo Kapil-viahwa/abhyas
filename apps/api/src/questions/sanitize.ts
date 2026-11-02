@@ -66,6 +66,12 @@ const NON_TEXT_TAGS = [
 
 const VOID_TAGS = new Set(['br', 'img', 'hr']);
 
+/** The one shape a tag transform may return, so both branches of one have the same type. */
+interface TransformedTag {
+  readonly tagName: string;
+  readonly attribs: Record<string, string>;
+}
+
 /**
  * An uploaded image is referenced by its row id and nothing else. An `img` without one, or
  * with a URL where one belongs, is removed: a question never loads anything from a third
@@ -77,6 +83,7 @@ const MEDIA_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 const BIDI_CONTROLS = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
 /** C0 controls and DEL, except tab, line feed and carriage return. */
+// eslint-disable-next-line no-control-regex -- listing these code points is the point; none is typed literally.
 const C0_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g;
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -140,7 +147,7 @@ function fragment(value: string): string {
     allowedClasses: {},
     parser: { lowerCaseAttributeNames: true },
     transformTags: {
-      img: (_tagName, attribs) => {
+      img: (_tagName: string, attribs: Record<string, string>): TransformedTag => {
         const id = String(attribs['data-media-id'] ?? '')
           .trim()
           .toLowerCase();
@@ -184,10 +191,12 @@ export function sanitizeQuestionContent(value: unknown, field = 'content'): stri
   }
 
   const text = normalizeText(value);
+  // Depth first: the limit that gives the specific answer is the structural one, and the
+  // scan is linear, so it costs nothing on input that is merely long.
+  assertNesting(text, field);
   if (text.length > MAX_CONTENT_LENGTH) {
     throw new ContentRejectedError(`${field} must be ${MAX_CONTENT_LENGTH} characters or fewer`);
   }
-  assertNesting(text, field);
 
   const clean = fragmentAtFixedPoint(text, field);
   if (clean === '' || plainText(clean) === '') {
@@ -207,10 +216,10 @@ export function sanitizeOptionalContent(value: unknown, field: string): string |
   }
 
   const text = normalizeText(value);
+  assertNesting(text, field);
   if (text.length > MAX_CONTENT_LENGTH) {
     throw new ContentRejectedError(`${field} must be ${MAX_CONTENT_LENGTH} characters or fewer`);
   }
-  assertNesting(text, field);
 
   const clean = fragmentAtFixedPoint(text, field);
   return clean === '' ? null : clean;
