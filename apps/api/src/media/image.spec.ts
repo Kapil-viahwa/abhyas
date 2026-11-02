@@ -111,7 +111,7 @@ function animatedGif(): Buffer {
 function webpWithChunk(input: Buffer, type: string, payload: Buffer): Buffer {
   const header = Buffer.from(type.padEnd(4, ' ').slice(0, 4), 'ascii');
   const length = Buffer.alloc(4);
-  length.writeUInt32LE(payload.length, 4);
+  length.writeUInt32LE(payload.length, 0);
   const padded = payload.length % 2 === 0 ? Buffer.alloc(0) : Buffer.alloc(1);
 
   const whole = Buffer.concat([input, header, length, payload, padded]);
