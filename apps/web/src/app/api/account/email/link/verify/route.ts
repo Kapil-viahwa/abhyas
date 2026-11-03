@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 
-import { guardFormPost, redirectTo, stringField } from '../../../../../lib/route-handler';
-import { tokensFromCookies } from '../../../../../lib/session';
-import { apiCall, clientIpFrom, errorMessage } from '../../../../../lib/upstream';
+import { guardFormPost, redirectTo, stringField } from '../../../../../../lib/route-handler';
+import { tokensFromCookies } from '../../../../../../lib/session';
+import { apiCall, clientIpFrom, errorMessage } from '../../../../../../lib/upstream';
 
 export const dynamic = 'force-dynamic';
 
