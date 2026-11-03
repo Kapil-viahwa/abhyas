@@ -124,9 +124,15 @@ OTP introduces **no new permission codes**, because it introduces no privileged 
 - The sign-up and sign-in routes are `@Public()`: they exist to hand out a first session.
 - Every OTP route also carries `OtpGuard`, which answers **404** when `OTP_ENABLED` is false.
   The switch is not a permission, and no role can be given it.
-- Linking a mobile to an account is `@Authenticated()` and re-checks the current password (or a
-  session signed in within the last ten minutes); it is never `@Public` and never takes the
-  account id from the body — the id comes from the session.
+- Linking a mobile to an account is `@Authenticated()` and re-proves the holder through
+  `ReauthenticationService` — the current password, a code sent to the account's own verified
+  number, or (for an account with no email) a sign-in from the last fifteen minutes; it is never
+  `@Public` and never takes the account id from the body — the id comes from the session.
+- Linking and unlinking an email is `@Authenticated()` and re-proves the holder the same way;
+  taking away the last identifier an account has is refused, so an account can never become
+  unreachable.
+- The same rule covers every other change to how somebody signs in: changing a password and
+  deactivating an account both ask for the current password (or a code, or the fresh session).
 - `signup_grant_requirement` is an ordinary setting row, so changing it needs `settings.write`
   and is audited as `SETTINGS_CHANGED` like every other setting.
 - The alert counter and the daily SMS budget are not exposed as routes; they are read from Redis

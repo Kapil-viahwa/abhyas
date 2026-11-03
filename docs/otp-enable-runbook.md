@@ -91,6 +91,12 @@ GET redis: otp:alerts:SMS_BUDGET_EXHAUSTED:<YYYY-MM-DD>
 
 ## 5. Turn the switch on
 
+One variable is a test fixture and must never appear here: `OTP_FAKE_FIXED_CODE` makes every
+code the same six digits so the browser suite can type one it knows (decision 0051). It is
+honoured only by the fake provider outside production, and the production boot refuses it — but
+do not set it, do not copy `docker-compose.otp.yml` into any deployment, and treat its presence
+as an incident.
+
 Deploy with `OTP_ENABLED=true`. The API and the web tier must be deployed together: a web tier
 that still hides the mobile UI hides working routes, which is harmless, but an API with the
 switch off answers 404 to a web tier that shows the buttons, which is confusing.
