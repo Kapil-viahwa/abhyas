@@ -74,6 +74,18 @@ export interface AppEnv {
   readonly SMS_PROVIDER: SmsProvider;
   readonly EMAIL_PROVIDER: EmailProvider;
   readonly ALLOW_DEV_LOGIN: boolean;
+  /**
+   * Which proxies may state a client's address. `false` (the default) means forwarding
+   * headers are ignored and the socket address is used; a list of addresses or CIDR blocks,
+   * or a hop count, means only those may. `true` trusts any source and is refused in
+   * production (decision 0052).
+   */
+  readonly TRUST_PROXY: boolean | number | readonly string[];
+  /**
+   * Development and CI only: let the web tier believe a browser-supplied forwarding header,
+   * so the browser suite can use a fresh address per test. Refused in production.
+   */
+  readonly TRUST_FORWARDED_IP_FOR_TESTS: boolean;
   /** Shared with the web tier, which accepts it on its cache-revalidation route. */
   readonly REVALIDATE_SECRET: string;
   /** S3-compatible object storage: empty in development means media is disabled. */
@@ -426,10 +438,54 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
   }
 
+  // Client-address trust (decision 0052). Nothing is trusted unless it is named, and
+  // "trust everything" is a development convenience that production refuses outright.
+  const trustProxyRaw = read(raw, 'TRUST_PROXY');
+  let trustProxy: boolean | number | readonly string[] = false;
+
+  if (trustProxyRaw === '') {
+    trustProxy = false;
+  } else if (trustProxyRaw === 'true' || trustProxyRaw === '*') {
+    if (isProduction) {
+      issues.push({
+        variable: 'TRUST_PROXY',
+        message: 'is refused in production: name the proxy addresses or a hop count',
+      });
+    } else {
+      trustProxy = true;
+    }
+  } else if (/^[0-9]+$/.test(trustProxyRaw)) {
+    const hops = Number(trustProxyRaw);
+    if (hops < 1 || hops > 10) {
+      issues.push({ variable: 'TRUST_PROXY', message: 'a hop count must be between 1 and 10' });
+    } else {
+      trustProxy = hops;
+    }
+  } else {
+    const entries = trustProxyRaw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '');
+    const invalid = entries.filter((entry) => !/^[0-9a-fA-F:.]{2,45}(\/[0-9]{1,3})?$/.test(entry));
+
+    if (entries.length === 0 || invalid.length > 0) {
+      issues.push({
+        variable: 'TRUST_PROXY',
+        message: `"${invalid[0] ?? trustProxyRaw}" is not an address or CIDR block`,
+      });
+    } else {
+      trustProxy = entries;
+    }
+  }
+
+  const trustForwardedForTests = read(raw, 'TRUST_FORWARDED_IP_FOR_TESTS').toLowerCase() === 'true';
+  if (trustForwardedForTests && isProduction) {
+    issues.push({ variable: 'TRUST_FORWARDED_IP_FOR_TESTS', message: 'is refused in production' });
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
-
   return {
     NODE_ENV: nodeEnv,
     PORT: port,
@@ -440,6 +496,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
     SMS_PROVIDER: smsProvider,
     EMAIL_PROVIDER: emailProvider,
     ALLOW_DEV_LOGIN: allowDevLogin,
+    TRUST_PROXY: trustProxy,
+    TRUST_FORWARDED_IP_FOR_TESTS: trustForwardedForTests,
     REVALIDATE_SECRET: revalidateRaw === '' ? DEFAULT_REVALIDATE_SECRET : revalidateRaw,
     S3_ENDPOINT: s3Endpoint,
     S3_REGION: s3Region,

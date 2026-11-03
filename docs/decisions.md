@@ -1067,3 +1067,44 @@ mobile registration, mobile sign-in, linking a number from the account page with
 the wrong-code lockout, the resend countdown and the identical answer for a number nobody has. No
 job was added; the job's timeout was raised from fifteen minutes to twenty with the reason written
 beside it.
+
+
+## 0052 — The client address is the socket address unless a named proxy says otherwise
+
+**Status:** accepted · **Phase:** 2c
+
+Every per-IP counter — OTP requests, registration, sign-in, password reset — is only as good
+as the address it counts. Fastify was started with `trustProxy: true`, so any request that
+carried an `X-Forwarded-For` chose its own address, and the web tier forwarded whatever the
+browser sent. A single client could therefore present a fresh address per attempt and never
+meet a cap.
+
+The rule now:
+
+- `TRUST_PROXY` is unset by default, and unset means **the forwarding headers are ignored**
+  and the socket address is the client.
+- It may name the proxies that are believed: a comma-separated list of addresses or CIDR
+  blocks, or a hop count (1–10). Only those may state a client address.
+- `true` and `*` are development conveniences and **production boot refuses them.** There is
+  no configuration in which a production API believes an address from anybody who asks.
+- The web tier follows the same rule in its own right (`webConfig().trustForwardedIp`): it
+  reads the edge's header only when `TRUST_PROXY` names an edge, and otherwise forwards no
+  address at all, so a browser-supplied header cannot reach the API as a claim.
+- The browser suite needs a fresh address per test, and it gets one through a **separate**
+  switch, `TRUST_FORWARDED_IP_FOR_TESTS`, which production boot refuses. It is deliberately
+  not the fixed-code switch: one is about where a message goes, the other about who is
+  counting, and sharing a knob between them would make a test convenience look like a
+  sending policy.
+
+Nginx must **overwrite** `X-Forwarded-For` and `X-Real-IP` with the address it actually sees,
+never append to what the browser sent; `docs/deployment.md` says so where the proxy is
+configured. Even with a wrong Nginx config the API's rule holds — it believes only the
+configured proxy, and Nginx is the one configured — so the failure is a shared counter rather
+than an open one, and that is the direction to fail in.
+
+`apps/api/test/client-ip.test.ts` boots the real API twice, differing only in the policy: with
+no proxy trusted, twenty-one sign-ins and six registrations that each claim a different
+address still hit the production ceiling (21st 429, 6th 429); with a trusted proxy, twenty-five
+forwarded addresses are twenty-five counters and none is refused. `env.spec.ts` refuses
+trust-everything and the test switch in production, and `apps/web/src/lib/client-ip.spec.ts`
+proves the web tier ignores a header it was not told to trust.

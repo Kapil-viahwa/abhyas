@@ -18,7 +18,9 @@ async function bootstrap(): Promise<void> {
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ trustProxy: true, bodyLimit: 1_048_576 }),
+    // A forwarded address is believed only when the proxy in front is named in TRUST_PROXY.
+    // Unset means the socket address is used and any X-Forwarded-For is ignored (decision 0052).
+    new FastifyAdapter({ trustProxy: config.TRUST_PROXY, bodyLimit: 1_048_576 }),
     { logger: ['error', 'warn', 'log'] },
   );
 

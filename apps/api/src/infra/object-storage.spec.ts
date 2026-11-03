@@ -27,6 +27,8 @@ function config(overrides: Partial<AppEnv> = {}): AppEnv {
     SMS_PROVIDER: 'fake',
     EMAIL_PROVIDER: 'console',
     ALLOW_DEV_LOGIN: true,
+    TRUST_PROXY: false,
+    TRUST_FORWARDED_IP_FOR_TESTS: false,
     REVALIDATE_SECRET: 'dev-only-revalidate-secret',
     S3_ENDPOINT: '',
     S3_REGION: 'us-east-1',

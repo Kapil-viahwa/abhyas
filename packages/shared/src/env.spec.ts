@@ -354,3 +354,55 @@ describe('the fixed OTP code', () => {
     );
   });
 });
+
+
+/**
+ * Client-address trust (decision 0052). The per-IP limits are only as good as the address
+ * they count, so nothing is trusted unless it is named, and "trust everything" is a
+ * development convenience that production refuses at boot.
+ */
+describe('client address trust', () => {
+  const devEnv = {
+    ...base,
+    TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
+    SMS_PROVIDER: 'fake',
+  };
+
+  it('trusts nothing by default', () => {
+    expect(validateEnv(devEnv).TRUST_PROXY).toBe(false);
+    expect(validateEnv(devEnv).TRUST_FORWARDED_IP_FOR_TESTS).toBe(false);
+  });
+
+  it('accepts named proxy addresses, CIDR blocks and a hop count', () => {
+    expect(validateEnv({ ...devEnv, TRUST_PROXY: '127.0.0.1,10.0.0.0/8' }).TRUST_PROXY).toEqual([
+      '127.0.0.1',
+      '10.0.0.0/8',
+    ]);
+    expect(validateEnv({ ...devEnv, TRUST_PROXY: '2' }).TRUST_PROXY).toBe(2);
+    expect(validateEnv({ ...devEnv, TRUST_PROXY: 'true' }).TRUST_PROXY).toBe(true);
+  });
+
+  it('refuses trust-everything in production', () => {
+    expect(() => validateEnv({ ...production, TRUST_PROXY: 'true' })).toThrow(
+      /TRUST_PROXY: is refused in production/,
+    );
+    expect(() => validateEnv({ ...production, TRUST_PROXY: '*' })).toThrow(
+      /TRUST_PROXY: is refused in production/,
+    );
+  });
+
+  it('refuses a malformed entry and an impossible hop count', () => {
+    expect(() => validateEnv({ ...devEnv, TRUST_PROXY: 'not-an-address' })).toThrow(
+      /TRUST_PROXY: "not-an-address" is not an address or CIDR block/,
+    );
+    expect(() => validateEnv({ ...devEnv, TRUST_PROXY: '0' })).toThrow(
+      /TRUST_PROXY: a hop count must be between 1 and 10/,
+    );
+  });
+
+  it('refuses the browser-suite switch in production', () => {
+    expect(() => validateEnv({ ...production, TRUST_FORWARDED_IP_FOR_TESTS: 'true' })).toThrow(
+      /TRUST_FORWARDED_IP_FOR_TESTS: is refused in production/,
+    );
+  });
+});

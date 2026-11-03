@@ -92,3 +92,37 @@ change the deployment shape, and neither exists yet — they are listed as known
 | Production topology has no shortcuts | `docker` (`validate-compose-prod.mjs`) |
 | The stack comes up and serves health and docs | `compose-smoke` |
 | A user can open the home page against the running stack | `e2e` |
+
+
+## The proxy in front of the API, and the client address
+
+The API and the web tier believe a client address from a forwarding header **only** when
+`TRUST_PROXY` names the proxy that sent it (a comma-separated list of addresses or CIDR
+blocks, or a hop count). Unset — the default — means the header is ignored and the socket
+address is used; `true` and `*` are refused at boot in production (decision 0052).
+
+So the edge proxy must both **overwrite** the header and be **named**:
+
+```nginx
+# Nginx, on the server that fronts web:3000 and api:3001
+proxy_set_header X-Real-IP        $remote_addr;
+proxy_set_header X-Forwarded-For  $remote_addr;   # $remote_addr, NOT $proxy_add_x_forwarded_for
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+`$proxy_add_x_forwarded_for` appends what the browser sent, which is the one thing that must
+not happen. With `proxy_set_header X-Forwarded-For $remote_addr` the browser's own value is
+discarded and the address Nginx actually accepted the connection from is the only one the
+API can see.
+
+Set the variable to the proxy's address, not to `true`:
+
+```bash
+TRUST_PROXY=172.17.0.2            # the Nginx container's address
+# or a block, for a proxy fleet:
+TRUST_PROXY=10.0.0.0/8,172.17.0.2
+```
+
+If the value is wrong in the safe direction — unset, or naming an address the proxy does not
+have — per-IP limits key on the web container's own address: every visitor shares one
+counter. That is a degraded but safe failure; the unsafe direction is refused at boot.

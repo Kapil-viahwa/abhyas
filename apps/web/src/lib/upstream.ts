@@ -90,8 +90,20 @@ export function errorMessage(body: unknown): string {
   return 'Something went wrong. Please try again.';
 }
 
-/** The end user's address as the proxy chain reported it, if it reported one. */
+/**
+ * The end user's address, as the edge proxy stated it.
+ *
+ * Only read when this tier is configured to trust that edge (TRUST_PROXY), or, in
+ * development and CI only, when TRUST_FORWARDED_IP_FOR_TESTS lets the browser suite choose
+ * a fresh address per test. Otherwise a browser could name any address it liked and step
+ * out of the API's per-IP counters, so the header is ignored and no address is forwarded at
+ * all (decision 0052).
+ */
 export function clientIpFrom(request: Request): string | undefined {
+  if (!webConfig().trustForwardedIp) {
+    return undefined;
+  }
+
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded !== null) {
     const first = forwarded.split(',')[0]?.trim();

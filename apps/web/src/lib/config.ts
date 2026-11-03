@@ -19,6 +19,12 @@ export interface WebConfig {
   /** Accepted on /api/revalidate, the one route the API is allowed to call. */
   readonly revalidateSecret: string;
   /**
+   * True when the edge proxy in front of this tier is trusted to state the client's address.
+   * With it false a browser-supplied header is ignored, so no request can choose its own
+   * address for the API's per-IP limits (decision 0052).
+   */
+  readonly trustForwardedIp: boolean;
+  /**
    * True when the API serves the mobile OTP routes. The mobile screens and their web
    * routes are hidden and answer 404 when this is false, so the switch cannot be flipped
    * in the API alone and leave a screen that posts into nothing.
@@ -64,6 +70,16 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
   const turnstileSiteKey = configuredSiteKey === '' ? TURNSTILE_TEST_SITE_KEY : configuredSiteKey;
   const revalidateSecret = env.REVALIDATE_SECRET?.trim() ?? '';
 
+  // The address a browser claims for itself is only believed when the thing in front of
+  // this tier is named (TRUST_PROXY, meaning "behind a proxy that overwrites the header").
+  // The second switch exists so the browser suite can use a fresh address per test, and
+  // production refuses it.
+  const trustForwardedIpForTests = (env.TRUST_FORWARDED_IP_FOR_TESTS ?? '').trim().toLowerCase() === 'true';
+  if (nodeEnv === 'production' && trustForwardedIpForTests) {
+    throw new Error('TRUST_FORWARDED_IP_FOR_TESTS is refused in production: a client cannot choose its own address');
+  }
+  const trustForwardedIp = (env.TRUST_PROXY ?? '').trim() !== '' || trustForwardedIpForTests;
+
   if (nodeEnv === 'production') {
     if (revalidateSecret === '') {
       throw new Error('REVALIDATE_SECRET is required in production: the API must prove itself before a page is dropped');
@@ -81,5 +97,6 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
     turnstileTestMode: TURNSTILE_TEST_SITE_KEY_PATTERN.test(turnstileSiteKey),
     revalidateSecret: revalidateSecret === '' ? DEFAULT_REVALIDATE_SECRET : revalidateSecret,
     otpEnabled: (env.OTP_ENABLED ?? '').trim().toLowerCase() === 'true',
+    trustForwardedIp,
   };
 }

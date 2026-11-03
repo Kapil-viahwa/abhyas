@@ -25,9 +25,10 @@ These cannot be proven in CI and must be done before real students use the platf
 
 - A manual staging test with a real SMS provider (Phase 2c runbook, `docs/otp-enable-runbook.md` §7): a real
   Indian number and a real DLT-approved template, run by the owner, with the result recorded in `PROGRESS.md`.
-- Nginx in front of the API, overwriting (never appending to) `X-Forwarded-For` and `X-Real-IP`, with the API's
-  trusted-proxy policy configured to match. Until then the API trusts a forwarded address it is given, so a browser
-  can move out of a per-IP counter; this is why OTP stays switched off in production (Known gaps in `PROGRESS.md`).
+- Nginx in front of the API, **overwriting** (never appending to) `X-Forwarded-For` and `X-Real-IP`, with
+  `TRUST_PROXY` on the API naming Nginx's address. The application rule is now in place (decision 0052): with
+  `TRUST_PROXY` unset, forwarding headers are ignored and production refuses trust-everything. Until the proxy
+  exists, per-IP limits collapse onto the web container's address — secure, but shared.
 - A real SMTP provider delivering verification and reset mail.
 - An integration test against the production S3-compatible service proving a tampered or
   expired presigned URL is refused (decision 0044).
