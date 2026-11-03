@@ -161,12 +161,12 @@ export class HttpSmsProvider implements SmsProvider {
         port,
         path: `${this.target.pathname}${this.target.search}`,
         headers,
-        // One address, decided here. `autoSelectFamily` would make Node run its own
-        // resolve-and-race path, so it is turned off and the pinned answer is the only one.
-        autoSelectFamily: false,
+        // The pinned answer: the connection goes to the address that was checked, and
+        // Node's own resolver is never consulted again for this request.
         lookup: (_hostname, lookupOptions, callback) => {
-          // Node asks for every answer (`all: true`) on some paths and for one on others;
-          // both shapes come back with the address that was checked, never a fresh lookup.
+          // Node asks for every answer (`all: true`) on the family-selection path and for
+          // one on the plain path; both shapes answer with the checked address, never a
+          // fresh lookup.
           if (lookupOptions.all === true) {
             callback(null, [{ address: address.address, family: address.family }], address.family);
             return;

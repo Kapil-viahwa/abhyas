@@ -412,10 +412,12 @@ export class OtpService {
   private async recordAlarm(action: string, metadata: Prisma.InputJsonObject, now: Date): Promise<number> {
     const count = await this.limiter.hit(otpAlertKey(action, businessDate(now)), 86_400);
 
+    // `audit_logs.entity_id` is a UUID column, and an alert has no row of its own: the
+    // action and the counter travel in the metadata instead.
     await writeIdentityAudit(this.prisma, {
       action: 'OTP_ALERT',
       entityType: 'otp_alert',
-      entityId: action,
+      entityId: null,
       metadata: { alert: action, count, ...metadata },
     });
 

@@ -4,6 +4,8 @@ import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
+import { RedisService } from '../src/infra/redis.service';
+import { REDIS_PROBE } from '../src/infra/tokens';
 import { TURNSTILE_TEST_TOKEN } from '../src/infra/turnstile-verifier';
 import { OTP_ALERTS, OtpService, OtpThrottledException } from '../src/otp/otp.service';
 import { OTP_SMS_PROVIDER, type FakeSmsProvider, type SmsProvider } from '../src/otp/sms-provider';
@@ -18,6 +20,48 @@ import { createMigratedTestDatabase, type TestDatabase } from './support/databas
  */
 
 const saved = { ...process.env };
+
+/**
+ * A freshly booted API reports itself degraded until its Redis connection is established,
+ * and its client refuses commands until then (`enableOfflineQueue: false`). Every OTP route
+ * needs Redis, so the boot waits for it instead of racing it.
+ */
+async function waitForRedis(app: NestFastifyApplication): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await app.get<RedisService>(REDIS_PROBE).ping();
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  throw new Error('the API Redis connection did not become ready');
+}
+
+/** One boot of the API. The budget is a boot-time setting, so a test that needs a small
+ * breaker gets its own process-like instance rather than lowering the limit for everyone. */
+async function bootApp(budget: number): Promise<{
+  app: NestFastifyApplication;
+  otp: OtpService;
+  provider: FakeSmsProvider;
+}> {
+  process.env.OTP_SMS_DAILY_BUDGET = String(budget);
+
+  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
+    logger: ['error'],
+  });
+  await app.init();
+  await waitForRedis(app);
+
+  return {
+    app,
+    otp: app.get(OtpService),
+    provider: app.get<SmsProvider>(OTP_SMS_PROVIDER) as FakeSmsProvider,
+  };
+}
+
+const BUDGET = 1000;
 
 describe('OTP codes and abuse controls', () => {
   let db!: TestDatabase;
@@ -66,21 +110,19 @@ describe('OTP codes and abuse controls', () => {
     process.env.OTP_HMAC_SECRET = 'test-otp-hmac-secret-0123456789abcdef';
     process.env.SMS_PROVIDER = 'fake';
     process.env.OTP_ALLOWED_COUNTRY_CODES = '+91';
-    process.env.OTP_SMS_DAILY_BUDGET = '5';
+    // Comfortably more than this file sends, so one test's messages cannot trip the breaker
+    // that another test is testing on purpose.
+    process.env.OTP_SMS_DAILY_BUDGET = String(BUDGET);
     process.env.OTP_TEMPLATE_ID = 'TPL-TEST';
 
     redis = new Redis(process.env.REDIS_URL);
     await redis.flushdb();
 
-    app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
-      logger: ['error'],
-    });
-    await app.init();
-
-    otp = app.get(OtpService);
-    provider = app.get<SmsProvider>(OTP_SMS_PROVIDER) as FakeSmsProvider;
+    const booted = await bootApp(BUDGET);
+    app = booted.app;
+    otp = booted.otp;
+    provider = booted.provider;
   }, 120_000);
-
   afterAll(async () => {
     await app?.close();
     await redis?.quit();
@@ -190,22 +232,42 @@ describe('OTP codes and abuse controls', () => {
     // The ledger is the count, so it starts from zero for this test (owner connection).
     await db.client.smsCostLedger.deleteMany({});
 
-    for (let sent = 0; sent < 5; sent += 1) {
-      await request(nextNumber(), `203.0.113.${String(100 + sent)}`);
+    // A budget of one, on its own boot: the breaker is a boot-time setting, and lowering it
+    // for the shared app would make every other test in this file depend on this one.
+    const second = await bootApp(1);
+    try {
+      const first = nextNumber();
+      await second.otp.requestCode(
+        { destination: first, purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+        { ip: '203.0.113.100' },
+      );
+      expect(second.provider.lastTo(first)).toBeDefined();
+
+      const refused = nextNumber();
+      await expect(
+        second.otp.requestCode(
+          { destination: refused, purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+          { ip: '203.0.113.101' },
+        ),
+      ).rejects.toThrow(/paused for today/);
+      expect(second.provider.lastTo(refused)).toBeUndefined();
+      expect(await second.otp.alertCount(OTP_ALERTS.budgetExhausted)).toBe(1);
+
+      // The breaker is latched: the next request is refused without another alert row.
+      await expect(
+        second.otp.requestCode(
+          { destination: nextNumber(), purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+          { ip: '203.0.113.102' },
+        ),
+      ).rejects.toThrow(/paused for today/);
+      expect(await second.otp.alertCount(OTP_ALERTS.budgetExhausted)).toBe(1);
+    } finally {
+      await second.app.close();
+      process.env.OTP_SMS_DAILY_BUDGET = String(BUDGET);
     }
 
-    const refused = nextNumber();
-    await expect(request(refused, '203.0.113.200')).rejects.toThrow(/paused for today/);
-
-    expect(provider.lastTo(refused)).toBeUndefined();
-    expect(await otp.alertCount(OTP_ALERTS.budgetExhausted)).toBe(1);
-
-    // The breaker is latched: the next request is refused without another alert row.
-    await expect(request(nextNumber(), '203.0.113.201')).rejects.toThrow(/paused for today/);
-    expect(await otp.alertCount(OTP_ALERTS.budgetExhausted)).toBe(1);
-
-    const audited = await db.client.auditLog.findMany({ where: { action: 'OTP_ALERT' }, select: { entityId: true } });
-    expect(audited.map((row) => row.entityId)).toContain(OTP_ALERTS.budgetExhausted);
+    const audited = await db.client.auditLog.findMany({ where: { action: 'OTP_ALERT' }, select: { metadata: true } });
+    expect(JSON.stringify(audited)).toContain(OTP_ALERTS.budgetExhausted);
   }, 60_000);
 
   it('sends nothing when the human check fails', async () => {
