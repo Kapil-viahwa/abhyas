@@ -15,6 +15,8 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  // A hung browser fails the run instead of holding the job open; the job has a cap too.
+  globalTimeout: process.env.CI ? 8 * 60_000 : 0,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'never' }]],
@@ -31,7 +33,16 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     ...(process.env.E2E_OTP === '1'
-      ? [{ name: 'otp', testMatch: /otp-enabled\.spec\.ts/, use: { ...devices['Desktop Chrome'] } }]
+      ? [
+          {
+            name: 'otp',
+            testMatch: /otp-enabled\.spec\.ts/,
+            // One stack, one browser, one worker: these flows share its limits.
+            timeout: 60_000,
+            expect: { timeout: 10_000 },
+            use: { ...devices['Desktop Chrome'] },
+          },
+        ]
       : []),
   ],
 });

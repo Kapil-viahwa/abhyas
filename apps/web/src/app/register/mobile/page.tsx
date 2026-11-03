@@ -24,7 +24,10 @@ export default async function MobileRegisterPage({ searchParams }: PageProps): P
   const params = await searchParams;
   const error = typeof params.error === 'string' ? params.error : undefined;
   const destination = typeof params.destination === 'string' ? params.destination : '';
-  const fullName = typeof params.name === 'string' ? params.name : '';
+  // The code-request route carries the name as `fullName`; `name` is still read so a link
+  // that was copied before this fix keeps working.
+  const nameParam = typeof params.fullName === 'string' ? params.fullName : params.name;
+  const fullName = typeof nameParam === 'string' ? nameParam : '';
   const sent = params.sent === '1' && destination !== '';
   const csrf = await csrfFromCookies();
   const resendAfter = Number(params.resend) > 0 ? Number(params.resend) : 30;

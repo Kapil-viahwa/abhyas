@@ -18,7 +18,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       new URLSearchParams({
         sent: '1',
         destination: stringField(form, 'destination').trim(),
-        name: stringField(form, 'fullName').trim(),
+        fullName: stringField(form, 'fullName').trim(),
       }),
   });
 }
