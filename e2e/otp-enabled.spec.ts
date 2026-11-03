@@ -30,6 +30,18 @@ function nextNumber(): string {
   return `+9196${String(randomInt(0, 100_000_000)).padStart(8, '0')}`;
 }
 
+/**
+ * The button that submits a code form.
+ *
+ * That form has two submit buttons — the one that confirms, and the resend button, which is
+ * a submit with its own `formAction`. Naming the one that confirms keeps the locator exact.
+ */
+function confirmButton(page: Page, formAction: string) {
+  return page
+    .locator(`form[action="${formAction}"]`)
+    .locator('button[type="submit"]:not([data-testid="resend-code"])');
+}
+
 /** Creates an account from a number through the real screens, ending signed in. */
 async function register(page: Page, number: string): Promise<void> {
   await page.goto('/register/mobile');
@@ -41,7 +53,7 @@ async function register(page: Page, number: string): Promise<void> {
   await expect(page.getByText(`A code was sent to ${number}.`)).toBeVisible();
 
   await page.fill('input[name="code"]', CODE);
-  await page.click('form[action="/api/auth/mobile/register/verify"] button[type="submit"]');
+  await confirmButton(page, '/api/auth/mobile/register/verify').click();
   await expect(page).toHaveURL(/\/account$/);
 }
 
@@ -66,7 +78,7 @@ test('signs in with a code on a later visit, on the same session as a password w
 
   await expect(page).toHaveURL(/\/login\/mobile\?sent=1/);
   await page.fill('input[name="code"]', CODE);
-  await page.click('form[action="/api/auth/mobile/login/verify"] button[type="submit"]');
+  await confirmButton(page, '/api/auth/mobile/login/verify').click();
   await expect(page).toHaveURL(/\/account$/);
 });
 
@@ -118,13 +130,13 @@ test('burns the code after five wrong guesses and refuses the right one afterwar
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const form = page.locator('form[action="/api/auth/mobile/login/verify"]');
     await form.locator('input[name="code"]').fill(wrong);
-    await form.locator('button[type="submit"]').click();
+    await confirmButton(page, '/api/auth/mobile/login/verify').click();
     await expect(page.getByText(/not valid/i)).toBeVisible();
   }
 
   const form = page.locator('form[action="/api/auth/mobile/login/verify"]');
   await form.locator('input[name="code"]').fill(CODE);
-  await form.locator('button[type="submit"]').click();
+  await confirmButton(page, '/api/auth/mobile/login/verify').click();
   await expect(page.getByText(/not valid/i)).toBeVisible();
   await expect(page).toHaveURL(/\/login\/mobile\?/);
 });
