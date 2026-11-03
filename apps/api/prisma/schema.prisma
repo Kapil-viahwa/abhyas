@@ -43,7 +43,7 @@ model User {
   // Nullable since phase 2c: an account may be identified by a verified mobile only.
   email            String?   @unique(map: "users_email_key")
   mobile           String?   @unique(map: "users_mobile_key")
-  /** E.164, written once a number has been verified; unique across the platform. */
+  // E.164, written once a number has been verified; unique across the platform.
   firstVerifiedMobile String? @map("first_verified_mobile")
   passwordHash     String    @map("password_hash")
   fullName         String    @map("full_name")
