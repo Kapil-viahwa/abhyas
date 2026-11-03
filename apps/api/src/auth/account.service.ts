@@ -21,7 +21,8 @@ export interface SessionListResult {
 
 export interface ProfileResult {
   readonly id: string;
-  readonly email: string;
+  /** Null for an account that signed up with a mobile number and has not linked an email. */
+  readonly email: string | null;
   readonly fullName: string;
   readonly roleCode: string;
   readonly permissions: readonly string[];

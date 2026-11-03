@@ -369,3 +369,82 @@ export function parseUserStatusBody(body: unknown): UserStatus {
 
   return normalised as UserStatus;
 }
+
+
+const OTP_CODE_PATTERN = /^[0-9]{6}$/;
+
+/**
+ * A mobile destination and the code sent to it. The number is only checked for shape here:
+ * `OtpService` normalises it to E.164 and enforces the country allowlist, so an unknown
+ * country is refused with the message that belongs to that rule.
+ */
+function parseDestination(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new BadRequestException('Enter a valid mobile number');
+  }
+
+  return value.trim();
+}
+
+function parseOtpCode(value: unknown): string {
+  const code = typeof value === 'string' ? value.trim() : '';
+  if (!OTP_CODE_PATTERN.test(code)) {
+    throw new BadRequestException('Enter the 6-digit code');
+  }
+
+  return code;
+}
+
+export interface OtpRequestForm {
+  readonly destination: string;
+  readonly purpose: string;
+  readonly turnstileToken: string;
+  readonly deviceId?: string | undefined;
+}
+
+/** Asking for a code. The purpose is normalised here and validated by the OTP module. */
+export function parseOtpRequestBody(body: unknown): OtpRequestForm {
+  const record = asRecord(body);
+  const purpose = typeof record.purpose === 'string' ? record.purpose.trim().toUpperCase() : '';
+
+  if (purpose === '') {
+    throw new BadRequestException('Choose why the code is being sent');
+  }
+
+  return {
+    destination: parseDestination(record.destination),
+    purpose,
+    turnstileToken: parseTurnstileToken(record.turnstileToken),
+    deviceId: typeof record.deviceId === 'string' && record.deviceId.trim() !== '' ? record.deviceId.trim() : undefined,
+  };
+}
+
+export interface MobileRegisterInput {
+  readonly destination: string;
+  readonly code: string;
+  readonly fullName: string;
+}
+
+export function parseMobileRegisterBody(body: unknown): MobileRegisterInput {
+  const record = asRecord(body);
+
+  return {
+    destination: parseDestination(record.destination),
+    code: parseOtpCode(record.code),
+    fullName: parseFullName(record.fullName),
+  };
+}
+
+export interface MobileLoginInput {
+  readonly destination: string;
+  readonly code: string;
+}
+
+export function parseMobileLoginBody(body: unknown): MobileLoginInput {
+  const record = asRecord(body);
+
+  return {
+    destination: parseDestination(record.destination),
+    code: parseOtpCode(record.code),
+  };
+}

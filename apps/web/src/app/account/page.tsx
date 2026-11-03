@@ -33,7 +33,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
           <h1 className="text-2xl font-semibold text-white">Your account</h1>
           <p className="text-sm text-slate-400">
-            {session.profile.fullName} · {session.profile.email}
+            {session.profile.fullName} · {session.profile.email ?? 'No email linked'}
           </p>
         </div>
         <form action="/api/auth/logout" method="post">

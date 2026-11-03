@@ -41,7 +41,7 @@ export default async function AdminUserDetailPage({ params, searchParams }: Page
     <AdminPage
       csrf={csrf}
       current="/admin/users"
-      title={user.email}
+      title={user.email ?? user.fullName}
       subtitle={`${user.fullName} · ${user.roleCode}`}
     >
       {notices.map((notice) => (

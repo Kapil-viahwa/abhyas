@@ -11,6 +11,7 @@ import { AccountService } from './auth/account.service';
 import { AuthController } from './auth/auth.controller';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
+import { MobileIdentityService } from './auth/mobile.service';
 import { PermissionsService } from './auth/permissions.service';
 import { SESSIONS_SERVICE, SessionsService } from './auth/sessions.service';
 import { CatalogController } from './catalog/catalog.controller';
@@ -29,6 +30,7 @@ import { DATABASE_PROBE, REDIS_PROBE } from './infra/tokens';
 import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-verifier';
 import { MediaController } from './media/media.controller';
 import { MediaService } from './media/media.service';
+import { OtpController } from './otp/otp.controller';
 import { OtpService } from './otp/otp.service';
 import { OTP_SMS_PROVIDER, providerFromEnv } from './otp/sms-provider';
 import { QuestionsController } from './questions/questions.controller';
@@ -39,6 +41,7 @@ import { QuestionsService } from './questions/questions.service';
     HealthController,
     AuthController,
     AccountController,
+    OtpController,
     AdminController,
     CatalogController,
     PublicCatalogController,
@@ -90,6 +93,7 @@ import { QuestionsService } from './questions/questions.service';
       useFactory: () => providerFromEnv(loadConfig(process.env)),
     },
     OtpService,
+    MobileIdentityService,
     MediaService,
     QuestionsService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.
