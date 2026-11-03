@@ -53,6 +53,8 @@ The rules this repository is built under are in [docs/working-rules.md](docs/wor
 
 Architecture: [docs/architecture.md](docs/architecture.md). Decisions and the reason for every dependency: [docs/decisions.md](docs/decisions.md). Accepted advisories and why: [docs/security-exceptions.md](docs/security-exceptions.md). Honest per-phase status: [PROGRESS.md](PROGRESS.md).
 
+Where the work is going, and what each phase owes: [docs/ROADMAP.md](docs/ROADMAP.md). Per-phase records: [docs/PHASE4-CHECKLIST.md](docs/PHASE4-CHECKLIST.md) (what Phase 4 shipped and what Phase 4b still owes) and [docs/PHASE2C-SPEC.md](docs/PHASE2C-SPEC.md) (the mobile OTP specification, kept in the repository so a later session can resume from the repo alone).
+
 ## Getting started
 
 Requires Node 22, pnpm 9 and Docker.
