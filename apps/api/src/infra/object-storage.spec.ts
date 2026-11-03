@@ -35,6 +35,18 @@ function config(overrides: Partial<AppEnv> = {}): AppEnv {
     S3_SECRET_ACCESS_KEY: '',
     S3_FORCE_PATH_STYLE: true,
     S3_PUBLIC_READ: false,
+    OTP_ENABLED: false,
+    OTP_HMAC_SECRET: '',
+    OTP_ALLOWED_COUNTRY_CODES: ['+91'],
+    OTP_SMS_DAILY_BUDGET: 100,
+    OTP_SENDER_ID: '',
+    OTP_DLT_ENTITY_ID: '',
+    OTP_TEMPLATE_ID: '',
+    OTP_GATEWAY_URL: '',
+    OTP_GATEWAY_AUTH_HEADER: '',
+    OTP_GATEWAY_AUTH_VALUE: '',
+    OTP_GATEWAY_BODY_TEMPLATE: '',
+    OTP_GATEWAY_TIMEOUT_MS: 5000,
     ...overrides,
   };
 }
