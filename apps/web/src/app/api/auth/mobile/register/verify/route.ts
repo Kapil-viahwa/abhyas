@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
-import { handleCodeVerify } from '../../../../../lib/mobile-auth';
-import { stringField } from '../../../../../lib/route-handler';
+import { handleCodeVerify } from '../../../../../../lib/mobile-auth';
+import { stringField } from '../../../../../../lib/route-handler';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,13 +14,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       code: stringField(form, 'code').trim(),
       fullName: stringField(form, 'fullName').trim(),
     }),
-    back: (form) => {
-      const back = new URLSearchParams({
+    back: (form) =>
+      new URLSearchParams({
         sent: '1',
         destination: stringField(form, 'destination').trim(),
         name: stringField(form, 'fullName').trim(),
-      });
-      return back;
-    },
+      }),
   });
 }

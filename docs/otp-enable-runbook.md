@@ -10,10 +10,9 @@ code change.
 
 ## 0. Before you start
 
-- OTP flows, linking and the web screens are Phase 2c items 3 and 4. Do not enable the switch
-  before they are merged: the API would answer routes the UI does not offer.
-- The manual staging test in step 7 is launch-blocking and cannot be proven in CI. It is
-  recorded in `docs/ROADMAP.md` with the other launch blockers.
+- The OTP service, the mobile sign-up, sign-in and linking flows, and the web screens are
+  built (Phase 2c items 1–4). The manual staging test in step 7 is still launch-blocking and
+  cannot be proven in CI; it is recorded in `docs/ROADMAP.md` with the other blockers.
 - Never put a provider key, DLT password or sender secret in the repository. They go into
   GitHub encrypted secrets (for CI, which never sends production SMS) and into the server's
   environment (for production), and `docker-compose.prod.yml` requires each one by name.
@@ -103,10 +102,12 @@ template. Read the failure line, fix the value named in it, and boot again.
 
 ## 6. Flip the signup requirement
 
-`signup_grant_requirement` is a setting row (`email` by default, `mobile` when OTP is enabled and
-the row has never been edited by an administrator). To pin it explicitly, change it from
-`/admin/settings`; the change is audited like every other setting. The coin grant itself is
-Phase 5: this phase only records which contact must be verified.
+`signup_grant_requirement` is a setting row seeded with `email` (the value that matches a
+platform where signing up means an email address). Once OTP is on and you want the signup coin
+grant to require a **verified mobile number** instead, change it to `mobile` from
+`/admin/settings`; the change is audited like every other setting, and the database refuses any
+value that is not `email` or `mobile`. The coin grant itself is Phase 5: this phase only records
+which contact must be verified.
 
 ## 7. Verification checklist
 
@@ -122,7 +123,17 @@ On staging, with a real provider and a real phone:
 7. Sign in for a number with no account → the same "accepted" answer as a number that has one,
    and no code-shaped difference in timing you can measure.
 8. Set `OTP_SMS_DAILY_BUDGET=1`, exhaust it, and confirm 503 plus one alert row.
-9. Roll `OTP_ENABLED` back to false, redeploy, and confirm every OTP route answers 404.
+9. Sign up a fresh number with a code; the account has no email address, and the admin list
+   shows "No email linked" rather than a blank or the word "null".
+10. Change that account's password with a re-authentication code from its own number, then
+    deactivate it the same way; both end the sessions they must.
+11. Add an email address from the account page (signed in, confirmed from the mailed link), then
+    try to attach a number that belongs to another account → refused, generically, and audited.
+    Remove the number while an email exists → allowed; try to remove it when it is the only
+    identifier → refused.
+12. Roll `OTP_ENABLED` back to false, redeploy, and confirm every OTP route answers 404, that
+    `/login/mobile` is a 404 page, and that the sign-in page has no mobile link. Email linking
+    must keep working with the switch off.
 
 Record the date and the result in `PROGRESS.md`. Until that has been done, OTP stays off in
 production even if everything above is configured.

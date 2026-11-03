@@ -105,6 +105,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
 
           <Notice message={mobile === 'linked' ? 'Your mobile number was added.' : undefined} />
           <Notice message={mobile === 'removed' ? 'Your mobile number was removed.' : undefined} />
+          <Notice message={params.email === 'linked' ? 'Your email address was added and verified.' : undefined} />
 
           <form action="/api/account/mobile/link" method="post" className="mt-4 space-y-3">
             <input type="hidden" name="csrfToken" value={csrf} />

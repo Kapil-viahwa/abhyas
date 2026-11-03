@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { handleCodeRequest } from '../../../../lib/mobile-auth';
+import { handleCodeRequest } from '../../../../../lib/mobile-auth';
 
 export const dynamic = 'force-dynamic';
 

@@ -12,7 +12,7 @@ request, and merges only when every CI job is green on its latest commit.
 | 3 | Administration, the exam catalog, settings, audit viewer, public SEO pages | Merged |
 | 4 | Object storage and upload pipeline, question model and versioning, sanitiser, question API and editor | Merged (PR #16, `0a677c5`) |
 | 4b | The rest of Phase 4: media-reference link table, media view route, CSV import, ZIP import, phase docs | Owed — see `docs/PHASE4-CHECKLIST.md` |
-| 2c | Mobile OTP, fully built but disabled by default behind `OTP_ENABLED` | In progress (PR #18): items 1 and 2 done, items 3–5 owed — see `docs/PHASE2C-SPEC.md` |
+| 2c | Mobile OTP, fully built but disabled by default behind `OTP_ENABLED` | In progress (PR #18): items 1–4 built; item 5's runbook is written and its staging verification is owed — see `docs/PHASE2C-SPEC.md` |
 | 5 | Coins: ledger rules, daily grant, attempt charges, admin adjustments | Planned |
 | 6 | Test builder and enrollment: papers, sections, question selection, snapshot | Planned |
 | 7 | CBT engine: attempts, timers, autosave, submission, snapshot-scoped media | Planned |

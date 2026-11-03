@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 
-import { mobileDisabledResponse } from '../../../../../lib/mobile-auth';
-import { guardFormPost, redirectTo, stringField } from '../../../../../lib/route-handler';
-import { tokensFromCookies } from '../../../../../lib/session';
-import { apiCall, clientIpFrom, errorMessage } from '../../../../../lib/upstream';
+import { mobileDisabledResponse } from '../../../../../../lib/mobile-auth';
+import { guardFormPost, redirectTo, stringField } from '../../../../../../lib/route-handler';
+import { tokensFromCookies } from '../../../../../../lib/session';
+import { apiCall, clientIpFrom, errorMessage } from '../../../../../../lib/upstream';
 
 export const dynamic = 'force-dynamic';
 
