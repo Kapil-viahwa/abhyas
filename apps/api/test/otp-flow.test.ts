@@ -198,7 +198,12 @@ describe('OTP codes and abuse controls', () => {
     await request(destination);
     const code = codeFor(destination);
 
-    await db.client.otpRequest.updateMany({ where: { destination }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    // A row cannot be "expired" by moving only its expiry before its creation: the table
+    // refuses that pairing. Move the pair back in time, keeping the order the CHECK wants.
+    await db.client.otpRequest.updateMany({
+      where: { destination },
+      data: { createdAt: new Date(Date.now() - 10 * 60_000), expiresAt: new Date(Date.now() - 5 * 60_000) },
+    });
 
     await expect(otp.verifyCode({ destination, purpose: 'LOGIN', code })).rejects.toThrow(/not valid/);
   });

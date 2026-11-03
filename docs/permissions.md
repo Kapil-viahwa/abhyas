@@ -115,3 +115,19 @@ capability it was issued under.
 | Admin dashboard with real counts of what exists today | 3 | Done |
 | Object-level rules for questions, tests and attempts | with the resource (phases 4–5) | Not yet |
 
+
+
+## Mobile OTP (phase 2c)
+
+OTP introduces **no new permission codes**, because it introduces no privileged action:
+
+- The sign-up and sign-in routes are `@Public()`: they exist to hand out a first session.
+- Every OTP route also carries `OtpGuard`, which answers **404** when `OTP_ENABLED` is false.
+  The switch is not a permission, and no role can be given it.
+- Linking a mobile to an account is `@Authenticated()` and re-checks the current password (or a
+  session signed in within the last ten minutes); it is never `@Public` and never takes the
+  account id from the body — the id comes from the session.
+- `signup_grant_requirement` is an ordinary setting row, so changing it needs `settings.write`
+  and is audited as `SETTINGS_CHANGED` like every other setting.
+- The alert counter and the daily SMS budget are not exposed as routes; they are read from Redis
+  by an operator (see `docs/otp-enable-runbook.md`).

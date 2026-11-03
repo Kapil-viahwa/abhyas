@@ -65,3 +65,25 @@ Consequences the code already respects:
 | `OTP_HMAC_SECRET` | The server secret the codes are HMAC-ed with; never in git |
 
 The runbook for the actual cutover is `docs/otp-enable-runbook.md` (item 5 of the phase).
+
+
+## What the platform does around a provider (phase 2c)
+
+Before a provider sees a message, `OtpService` has already:
+
+- checked the human challenge, the per-number (3/hour, 8/day), per-IP (10/hour) and per-device
+  (5/hour) limits, the escalating resend cooldown, and the daily SMS budget;
+- written an `otp_requests` row whose `code_hmac` is the only trace of the code.
+
+After the provider answers, the platform writes one `sms_cost_ledger` row (provider, destination
+hash, cost, provider message id). That ledger is what the daily budget counts, so a provider
+invoice can be reconciled with something the platform wrote itself.
+
+**The gateway URL is an SSRF seam.** At boot the URL must be https in production and must not
+name a private, loopback, link-local, CGNAT, multicast, unspecified or metadata address —
+including numeric forms (`127.1`, `0x7f000001`, `2130706433`) and IPv4-mapped IPv6. At send time
+DNS is resolved once, *every* answer is checked, and the address that passed is pinned into the
+connection through the request's `lookup` option; nothing resolves the name a second time.
+Redirects are not followed (a 3xx is a failure), the timeout is bounded per request, and the
+answer is read with an 8 KiB cap. A development mock on loopback is allowed outside production
+only. Decision 0048 records the reasoning.
