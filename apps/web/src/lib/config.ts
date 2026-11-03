@@ -18,6 +18,12 @@ export interface WebConfig {
   readonly turnstileTestMode: boolean;
   /** Accepted on /api/revalidate, the one route the API is allowed to call. */
   readonly revalidateSecret: string;
+  /**
+   * True when the API serves the mobile OTP routes. The mobile screens and their web
+   * routes are hidden and answer 404 when this is false, so the switch cannot be flipped
+   * in the API alone and leave a screen that posts into nothing.
+   */
+  readonly otpEnabled: boolean;
 }
 
 const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
@@ -74,5 +80,6 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
     turnstileSiteKey,
     turnstileTestMode: TURNSTILE_TEST_SITE_KEY_PATTERN.test(turnstileSiteKey),
     revalidateSecret: revalidateSecret === '' ? DEFAULT_REVALIDATE_SECRET : revalidateSecret,
+    otpEnabled: (env.OTP_ENABLED ?? '').trim().toLowerCase() === 'true',
   };
 }

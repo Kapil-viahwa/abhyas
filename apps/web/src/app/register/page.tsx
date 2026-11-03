@@ -67,6 +67,14 @@ export default async function RegisterPage({ searchParams }: PageProps): Promise
           Create account
         </button>
       </form>
+
+      {config.otpEnabled ? (
+        <p className="mt-4 text-sm text-slate-400">
+          <Link href="/register/mobile" className="text-sky-400 hover:text-sky-300">
+            Create an account with a mobile number
+          </Link>
+        </p>
+      ) : null}
     </AuthShell>
   );
 }

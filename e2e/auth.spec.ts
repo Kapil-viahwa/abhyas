@@ -266,4 +266,23 @@ test.describe.serial('authentication flows', () => {
     expect(headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     expect(headers['content-security-policy']).toContain("frame-ancestors 'none'");
   });
+
+  /**
+   * The default stack runs with `OTP_ENABLED=false`, so this is the disabled half of the
+   * master switch, proved the way a browser sees it: no link to the screens, and the screens
+   * and their form posts answer 404 rather than a page or a redirect.
+   */
+  test('hides the mobile screens and 404s their routes while OTP is switched off', async ({ request }) => {
+    const login = await request.get('/login');
+    expect(login.status()).toBe(200);
+    expect(await login.text()).not.toContain('/login/mobile');
+
+    for (const path of ['/login/mobile', '/register/mobile']) {
+      const response = await request.get(path);
+      expect(response.status(), path).toBe(404);
+    }
+
+    const posted = await request.post('/api/auth/mobile/login', { form: {} });
+    expect(posted.status()).toBe(404);
+  });
 });

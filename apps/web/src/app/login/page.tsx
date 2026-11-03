@@ -64,6 +64,14 @@ export default async function LoginPage({ searchParams }: PageProps): Promise<Re
           Forgot your password?
         </Link>
       </p>
+
+      {config.otpEnabled ? (
+        <p className="mt-2 text-sm text-slate-400">
+          <Link href="/login/mobile" className="text-sky-400 hover:text-sky-300">
+            Sign in with a mobile number
+          </Link>
+        </p>
+      ) : null}
     </AuthShell>
   );
 }

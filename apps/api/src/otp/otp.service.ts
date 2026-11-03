@@ -47,7 +47,7 @@ import { OTP_SMS_PROVIDER, destinationHash, type SmsProvider } from './sms-provi
  * from becoming a membership oracle.
  */
 
-export const OTP_PURPOSES = ['SIGNUP', 'LOGIN', 'LINK'] as const;
+export const OTP_PURPOSES = ['SIGNUP', 'LOGIN', 'LINK', 'REAUTH'] as const;
 export type OtpPurpose = (typeof OTP_PURPOSES)[number];
 
 export const OTP_ALERTS = {
