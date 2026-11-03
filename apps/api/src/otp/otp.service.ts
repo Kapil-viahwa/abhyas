@@ -25,6 +25,7 @@ import {
   OTP_TTL_SECONDS,
   businessDate,
   codeMatches,
+  fixedCodeFor,
   generateCode,
   hashCode,
   isSequentialDigits,
@@ -117,6 +118,8 @@ export class OtpService {
   private readonly allowedCountryCodes: readonly string[];
   private readonly dailyBudget: number;
   private readonly templateId: string;
+  /** A code a browser test can know, or `null` for a random one (decision 0051). */
+  private readonly fixedCode: string | null;
 
   constructor(
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
@@ -130,6 +133,12 @@ export class OtpService {
     this.allowedCountryCodes = config.OTP_ALLOWED_COUNTRY_CODES;
     this.dailyBudget = config.OTP_SMS_DAILY_BUDGET;
     this.templateId = config.OTP_TEMPLATE_ID;
+    this.fixedCode = fixedCodeFor({
+      otpEnabled: config.OTP_ENABLED,
+      nodeEnv: config.NODE_ENV,
+      smsProvider: config.SMS_PROVIDER,
+      fixedCode: config.OTP_FAKE_FIXED_CODE,
+    });
   }
 
   private get prisma() {
@@ -234,7 +243,9 @@ export class OtpService {
 
     await this.assertBudget(now);
 
-    const code = generateCode();
+    // Random, unless a test asked the fake provider for a code it can type. Everything
+    // below — the HMAC, the expiry, the attempts, the cooldown — is the same either way.
+    const code = this.fixedCode ?? generateCode();
     const request = await this.prisma.otpRequest.create({
       data: {
         destination,

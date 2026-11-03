@@ -1024,3 +1024,46 @@ Recent-ness is never accepted for an account with an email address: there the pa
 available and asking for it is what stops a stolen session from changing it. That asymmetry is
 deliberate and is proven by tests for both kinds of account. A stale session with no proof is
 a 403 naming both ways forward, not a generic refusal.
+
+
+## 0051 — A fixed code only the fake provider may use, so the browser can be tested with OTP on
+
+**Status:** accepted · **Phase:** 2c
+
+The master switch has two halves and the browser suite only proved one: the stack runs with
+`OTP_ENABLED=false`, so Playwright can show the screens are hidden and the routes are 404, but it
+cannot register, sign in, link or be locked out, because a browser cannot read an SMS.
+
+Two shortcuts were considered and both were rejected:
+
+- **An HTTP route that returns the newest code in development.** It is a way to obtain a live
+  code from outside the process, and "development only" is a flag away from being reachable. The
+  rule that a code never leaves the server except in the message would have its first exception.
+- **Logging the code.** Same objection, plus log retention and log access.
+
+What is accepted is narrower: `OTP_FAKE_FIXED_CODE`. It is a six-digit constant used instead of a
+random draw, and it is honoured only when **all** of these hold: `OTP_ENABLED=true`, `NODE_ENV` is
+not `production`, and `SMS_PROVIDER=fake`. `validateEnv` refuses it in production, refuses it with
+any provider other than `fake`, and refuses anything that is not six digits — a boot failure, not
+advice. `fixedCodeFor()` checks the same three conditions again inside the API, so the value is
+inert even if somebody bypasses the validator (the fake provider also refuses to be constructed in
+production at all).
+
+Nothing else about a code changes. It is still stored only as an HMAC bound to its destination,
+still expires in five minutes, still spends after five wrong guesses, still obeys the escalating
+resend cooldown and every rate limit. `otp-code.spec.ts` proves the digest, the constants and the
+schedule are untouched by a fixed code, and `otp-flow.test.ts` boots an API with one and proves the
+cooldown, the attempt limit and the expiry still bite.
+
+`docker-compose.otp.yml` is the override that turns this on for CI and for a developer who wants to
+click through the mobile screens: `OTP_ENABLED=true`, the fake provider, the HMAC secret, a
+template id and the fixed code. Production never uses it — `docker-compose.prod.yml` is a
+standalone file, and `scripts/validate-compose-prod.mjs` fails if that file so much as names the
+override or the variable.
+
+The browser coverage stays in the existing `e2e` job: the disabled suite runs first against the
+default stack, then the stack is restarted with the override and a second Playwright project drives
+mobile registration, mobile sign-in, linking a number from the account page with re-authentication,
+the wrong-code lockout, the resend countdown and the identical answer for a number nobody has. No
+job was added; the job's timeout was raised from fifteen minutes to twenty with the reason written
+beside it.

@@ -314,10 +314,12 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-24.04
-    # A healthy run takes about five minutes (stack build, migrations, Playwright) and
-    # Playwright itself caps every test at 30s. Fifteen minutes is three times the
-    # observed cost, so a spec that hangs fails the job instead of holding it open.
-    timeout-minutes: 15
+    # A healthy run takes about five minutes (stack build, migrations, Playwright). This job
+    # now boots the stack twice — once as shipped, once with OTP switched on — and runs a
+    # Playwright project against each, which the observed cost says is under eight minutes.
+    # Twenty is well above that, and Playwright caps every test at 30s, so a spec that hangs
+    # fails the job instead of holding it open.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -350,11 +352,29 @@ jobs:
         run: |
           set -o pipefail
           docker compose run --rm migrate 2>&1 | tee "$RUNNER_TEMP/migrate.log"
-      - name: Run Playwright
+      # Both halves of the master switch, in one job. The default stack proves the switch is
+      # off: the mobile screens are hidden and their routes and form posts answer 404. Then
+      # the OTP override turns it on with the fake provider and a fixed code (decision 0051),
+      # and the second project drives the real screens — registration, sign-in, linking with
+      # re-authentication, the wrong-code lockout, the resend countdown and the identical
+      # answer for a number nobody has.
+      - name: Run Playwright (OTP disabled)
         shell: bash
         run: |
           set -o pipefail
-          pnpm exec playwright test 2>&1 | tee "$RUNNER_TEMP/playwright.log"
+          pnpm exec playwright test --project=chromium 2>&1 | tee "$RUNNER_TEMP/playwright.log"
+      - name: Restart the stack with OTP enabled
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose -f docker-compose.yml -f docker-compose.otp.yml up -d --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-otp.log"
+      - name: Run Playwright (OTP enabled, fake provider)
+        shell: bash
+        env:
+          E2E_OTP: '1'
+        run: |
+          set -o pipefail
+          pnpm exec playwright test --project=otp 2>&1 | tee "$RUNNER_TEMP/playwright-otp.log"
       # Every container that can fail at boot is read here, not just the API: a `--wait`
       # failure only says "container X exited (1)", and the reason is in that container's
       # own log. The worker's last lines are also raised as annotations, because a long log

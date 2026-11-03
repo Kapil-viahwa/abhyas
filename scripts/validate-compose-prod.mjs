@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 /**
  * Proves the production compose file has no development shortcuts:
@@ -100,6 +100,12 @@ for (const [name, service] of Object.entries(services)) {
     failures.push(`service "${name}" uses the "${sms}" SMS provider in production`);
   }
 
+  // The fixed code exists so a browser test can type a code it knows. It is meaningless
+  // here, and its presence would mean somebody copied the CI fixture into production.
+  if (environment.OTP_FAKE_FIXED_CODE !== undefined) {
+    failures.push(`service "${name}" sets OTP_FAKE_FIXED_CODE, which is a test fixture`);
+  }
+
   for (const volume of service.volumes ?? []) {
     if (volume.type === 'bind') {
       failures.push(`service "${name}" bind-mounts ${volume.source}; production must use named volumes`);
@@ -126,6 +132,22 @@ for (const [variable, label] of [
   } else {
     failures.push(`${COMPOSE_FILE} rendered without ${label}; a default secret is being used`);
   }
+}
+
+// The OTP override is a development and CI fixture (decision 0051). Production must not
+// mention it, and must not carry the fixed code that only the fake provider may use.
+const composeSource = readFileSync(COMPOSE_FILE, 'utf8');
+
+if (/docker-compose\.otp\.yml/.test(composeSource)) {
+  failures.push(`${COMPOSE_FILE} names docker-compose.otp.yml, which turns on the fake provider`);
+} else {
+  passes.push(`${COMPOSE_FILE} never includes docker-compose.otp.yml`);
+}
+
+if (/OTP_FAKE_FIXED_CODE/.test(composeSource)) {
+  failures.push(`${COMPOSE_FILE} sets OTP_FAKE_FIXED_CODE, which is a test fixture`);
+} else {
+  passes.push(`${COMPOSE_FILE} never sets OTP_FAKE_FIXED_CODE`);
 }
 
 const report = [];

@@ -293,3 +293,64 @@ describe('validateEnv and the OTP master switch', () => {
     );
   });
 });
+
+
+/**
+ * The fixed code exists so a browser test can type a code it already knows. It is a
+ * development shortcut in the strictest sense: it must be impossible to turn on where a
+ * real message could go out, and the boot refusal is the proof (decision 0051).
+ */
+describe('the fixed OTP code', () => {
+  const fakeOtp = {
+    ...base,
+    TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
+    SMS_PROVIDER: 'fake',
+    OTP_ENABLED: 'true',
+    OTP_HMAC_SECRET: 'h'.repeat(32),
+    OTP_TEMPLATE_ID: 'TPL-DEV',
+  };
+
+  it('is accepted with the fake provider outside production', () => {
+    const env = validateEnv({ ...fakeOtp, OTP_FAKE_FIXED_CODE: '123456' });
+
+    expect(env.OTP_FAKE_FIXED_CODE).toBe('123456');
+    expect(env.SMS_PROVIDER).toBe('fake');
+  });
+
+  it('is empty when it is not asked for, so codes stay random', () => {
+    expect(validateEnv(fakeOtp).OTP_FAKE_FIXED_CODE).toBe('');
+  });
+
+  it('is refused in production, and the fake provider with it', () => {
+    expect(() =>
+      validateEnv({
+        ...production,
+        OTP_ENABLED: 'true',
+        OTP_HMAC_SECRET: 'h'.repeat(32),
+        OTP_SENDER_ID: 'ABHYAS',
+        OTP_DLT_ENTITY_ID: '1201159000000000000',
+        OTP_TEMPLATE_ID: 'TPL-LIVE',
+        SMS_PROVIDER: 'http',
+        OTP_GATEWAY_URL: 'https://sms.example.com/send',
+        OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}","body":"{{body}}"}',
+        OTP_FAKE_FIXED_CODE: '123456',
+      }),
+    ).toThrow(/OTP_FAKE_FIXED_CODE: is refused in production/);
+
+    expect(() => validateEnv({ ...production, SMS_PROVIDER: 'fake', OTP_FAKE_FIXED_CODE: '123456' })).toThrow(
+      /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+  });
+
+  it('is refused with a provider that would really send, and when it is not six digits', () => {
+    expect(() => validateEnv({ ...fakeOtp, SMS_PROVIDER: 'msg91', OTP_FAKE_FIXED_CODE: '123456' })).toThrow(
+      /OTP_FAKE_FIXED_CODE: may only be set while SMS_PROVIDER is fake/,
+    );
+    expect(() => validateEnv({ ...fakeOtp, OTP_FAKE_FIXED_CODE: '12345' })).toThrow(
+      /OTP_FAKE_FIXED_CODE: must be six digits/,
+    );
+    expect(() => validateEnv({ ...fakeOtp, OTP_FAKE_FIXED_CODE: 'abcdef' })).toThrow(
+      /OTP_FAKE_FIXED_CODE: must be six digits/,
+    );
+  });
+});

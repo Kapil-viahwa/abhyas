@@ -3,9 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   InvalidMobileError,
   OTP_CODE_PATTERN,
+  OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_SECONDS,
+  OTP_TTL_SECONDS,
   businessDate,
   codeMatches,
+  fixedCodeFor,
   generateCode,
   hashCode,
   isSequentialDigits,
@@ -97,5 +100,48 @@ describe('mobile normalisation', () => {
 
   it('keeps the ten national digits the identity trigger stores', () => {
     expect(nationalDigits('+919876543210')).toBe('9876543210');
+  });
+});
+
+
+/**
+ * The fixed code (decision 0051). It exists so a browser test can type a code it knows,
+ * and it must be impossible where a real message could leave the building.
+ */
+describe('the fixed code', () => {
+  const allowed = {
+    otpEnabled: true,
+    nodeEnv: 'test',
+    smsProvider: 'fake',
+    fixedCode: '424242',
+  };
+
+  it('is used only with the switch on, outside production, on the fake provider', () => {
+    expect(fixedCodeFor(allowed)).toBe('424242');
+    expect(fixedCodeFor({ ...allowed, otpEnabled: false })).toBeNull();
+    expect(fixedCodeFor({ ...allowed, nodeEnv: 'production' })).toBeNull();
+    expect(fixedCodeFor({ ...allowed, smsProvider: 'http' })).toBeNull();
+  });
+
+  it('is ignored when it is not six digits, so codes stay random', () => {
+    expect(fixedCodeFor({ ...allowed, fixedCode: '' })).toBeNull();
+    expect(fixedCodeFor({ ...allowed, fixedCode: '12345' })).toBeNull();
+    expect(fixedCodeFor({ ...allowed, fixedCode: 'abcdef' })).toBeNull();
+    expect(fixedCodeFor({ ...allowed, fixedCode: ' 424242 ' })).toBe('424242');
+  });
+
+  it('changes nothing else: the digest still binds a code to its destination', () => {
+    const fixed = fixedCodeFor(allowed) ?? generateCode();
+
+    expect(OTP_CODE_PATTERN.test(fixed)).toBe(true);
+    expect(hashCode('secret', '+919876543210', fixed)).not.toBe(hashCode('secret', '+919876543211', fixed));
+    expect(codeMatches(hashCode('secret', '+919876543210', fixed), 'secret', '+919876543210', fixed)).toBe(true);
+    expect(codeMatches(hashCode('secret', '+919876543210', fixed), 'secret', '+919876543210', '999999')).toBe(false);
+
+    // Expiry, attempts and the resend schedule are the same constants as before.
+    expect(OTP_TTL_SECONDS).toBe(300);
+    expect(OTP_MAX_ATTEMPTS).toBe(5);
+    expect(resendCooldownSeconds(0)).toBe(OTP_RESEND_COOLDOWN_SECONDS[0]);
+    expect(resendCooldownSeconds(4)).toBeLessThanOrEqual(resendCooldownSeconds(5));
   });
 });

@@ -1,0 +1,22 @@
+# Development and CI only: turns mobile OTP on with the fake provider and a code a browser
+# test can type. It is never used by the production topology — `docker-compose.prod.yml` is
+# a standalone file, and `scripts/validate-compose-prod.mjs` fails if it so much as names
+# this file or `OTP_FAKE_FIXED_CODE`.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.otp.yml up -d --wait
+#
+# The API refuses this combination in production at boot (decision 0051).
+
+services:
+  api:
+    environment:
+      OTP_ENABLED: 'true'
+      SMS_PROVIDER: fake
+      OTP_HMAC_SECRET: dev-only-otp-hmac-secret-please-change
+      OTP_TEMPLATE_ID: TPL-DEV-OTP
+      OTP_FAKE_FIXED_CODE: '123456'
+
+  web:
+    environment:
+      # The screens and their web routes exist only while this is true.
+      OTP_ENABLED: 'true'

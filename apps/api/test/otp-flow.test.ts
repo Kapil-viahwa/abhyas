@@ -316,4 +316,70 @@ describe('OTP codes and abuse controls', () => {
 
     expect(provider.outbox.length).toBe(before);
   });
+
+  /**
+   * The fixed code (decision 0051). A browser test cannot read an SMS, so the fake provider
+   * is allowed to be told which code to send — and this test proves that asking for one
+   * changes the digits and nothing else: the cooldown, the attempt limit and the expiry are
+   * the same rules as an ordinary code.
+   */
+  it('sends a fixed code when a test asks for one, and enforces everything else as before', async () => {
+    await redis.flushdb();
+
+    // Its own boot: the fixed code is read once, when the service is constructed.
+    process.env.OTP_FAKE_FIXED_CODE = '424242';
+    const fixed = await bootApp(BUDGET);
+
+    try {
+      const destination = nextNumber();
+      const accepted = await fixed.otp.requestCode(
+        { destination, purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+        { ip: '198.51.101.10' },
+      );
+      expect(accepted.status).toBe('accepted');
+      expect(fixed.provider.lastTo(destination)?.body).toContain('424242');
+
+      // The escalating cooldown still refuses an immediate second request.
+      await expect(
+        fixed.otp.requestCode(
+          { destination, purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+          { ip: '198.51.101.10' },
+        ),
+      ).rejects.toBeInstanceOf(OtpThrottledException);
+
+      // Five wrong guesses still spend the code, fixed or not.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(fixed.otp.verifyCode({ destination, purpose: 'LOGIN', code: '999999' })).rejects.toThrow(
+          /not valid/,
+        );
+      }
+      await expect(fixed.otp.verifyCode({ destination, purpose: 'LOGIN', code: '424242' })).rejects.toThrow(
+        /not valid/,
+      );
+
+      const row = await db.client.otpRequest.findFirst({
+        where: { destination },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(row?.attempts).toBe(5);
+      expect(row?.consumedAt).not.toBeNull();
+
+      // An expired code is refused even when it is the fixed one.
+      const expired = nextNumber();
+      await fixed.otp.requestCode(
+        { destination: expired, purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+        { ip: '198.51.101.11' },
+      );
+      await db.client.otpRequest.updateMany({
+        where: { destination: expired },
+        data: { createdAt: new Date(Date.now() - 10 * 60_000), expiresAt: new Date(Date.now() - 5 * 60_000) },
+      });
+      await expect(fixed.otp.verifyCode({ destination: expired, purpose: 'LOGIN', code: '424242' })).rejects.toThrow(
+        /not valid/,
+      );
+    } finally {
+      await fixed.app.close();
+      delete process.env.OTP_FAKE_FIXED_CODE;
+    }
+  }, 60_000);
 });

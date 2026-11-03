@@ -19,6 +19,9 @@ const SMS_PROVIDERS: readonly SmsProvider[] = ['fake', 'console', 'http', 'msg91
 
 const EMAIL_PROVIDERS: readonly EmailProvider[] = ['console', 'smtp'];
 
+/** Six digits, and only ever honoured by the fake provider outside production. */
+const FIXED_OTP_CODE_PATTERN = /^[0-9]{6}$/;
+
 const FORBIDDEN_PRODUCTION_SECRETS: readonly string[] = [
   'secret',
   'changeme',
@@ -92,6 +95,11 @@ export interface AppEnv {
   readonly OTP_SENDER_ID: string;
   readonly OTP_DLT_ENTITY_ID: string;
   readonly OTP_TEMPLATE_ID: string;
+  /**
+   * Six digits a browser test can know in advance. Honoured only while the SMS provider is
+   * the fake one and `NODE_ENV` is not production (decision 0051); empty otherwise.
+   */
+  readonly OTP_FAKE_FIXED_CODE: string;
   readonly OTP_GATEWAY_URL: string;
   readonly OTP_GATEWAY_AUTH_HEADER: string;
   readonly OTP_GATEWAY_AUTH_VALUE: string;
@@ -310,6 +318,7 @@ export function validateEnv(raw: RawEnv): AppEnv {
   const otpSenderId = read(raw, 'OTP_SENDER_ID');
   const otpDltEntityId = read(raw, 'OTP_DLT_ENTITY_ID');
   const otpTemplateId = read(raw, 'OTP_TEMPLATE_ID');
+  const otpFakeFixedCode = read(raw, 'OTP_FAKE_FIXED_CODE');
   const otpGatewayUrl = read(raw, 'OTP_GATEWAY_URL');
   const otpGatewayAuthHeader = read(raw, 'OTP_GATEWAY_AUTH_HEADER');
   const otpGatewayAuthValue = read(raw, 'OTP_GATEWAY_AUTH_VALUE');
@@ -347,6 +356,23 @@ export function validateEnv(raw: RawEnv): AppEnv {
       issues.push({
         variable: 'OTP_ALLOWED_COUNTRY_CODES',
         message: `"${code}" is not an E.164 country prefix like +91`,
+      });
+    }
+  }
+
+  // A code that never changes exists so a browser test can type it. That is only safe
+  // where nothing real is sent: the fake provider, outside production. Both are refused
+  // here, at boot, rather than trusted to the code that reads the value.
+  if (otpFakeFixedCode !== '') {
+    if (!FIXED_OTP_CODE_PATTERN.test(otpFakeFixedCode)) {
+      issues.push({ variable: 'OTP_FAKE_FIXED_CODE', message: 'must be six digits' });
+    }
+    if (isProduction) {
+      issues.push({ variable: 'OTP_FAKE_FIXED_CODE', message: 'is refused in production' });
+    } else if (smsProvider !== 'fake') {
+      issues.push({
+        variable: 'OTP_FAKE_FIXED_CODE',
+        message: 'may only be set while SMS_PROVIDER is fake',
       });
     }
   }
@@ -429,6 +455,7 @@ export function validateEnv(raw: RawEnv): AppEnv {
     OTP_SENDER_ID: otpSenderId,
     OTP_DLT_ENTITY_ID: otpDltEntityId,
     OTP_TEMPLATE_ID: otpTemplateId,
+    OTP_FAKE_FIXED_CODE: otpFakeFixedCode,
     OTP_GATEWAY_URL: otpGatewayUrl,
     OTP_GATEWAY_AUTH_HEADER: otpGatewayAuthHeader,
     OTP_GATEWAY_AUTH_VALUE: otpGatewayAuthValue,

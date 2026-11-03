@@ -172,3 +172,35 @@ export function otpBudgetKey(day: string): string {
 export function otpAlertKey(action: string, day: string): string {
   return `otp:alerts:${action}:${day}`;
 }
+
+
+/** Six digits: the only shape a fixed code is allowed to take. */
+export const FIXED_CODE_PATTERN = /^[0-9]{6}$/;
+
+export interface FixedCodeConfig {
+  readonly otpEnabled: boolean;
+  readonly nodeEnv: string;
+  readonly smsProvider: string;
+  readonly fixedCode: string;
+}
+
+/**
+ * The code to send instead of a random one, or `null` for the real thing.
+ *
+ * A browser test cannot read an SMS, and adding an HTTP route that hands out live codes —
+ * even a development-only one — would be a new way to obtain somebody's code. A fixed code
+ * is the smaller risk: it only works where nothing real is sent. Three conditions, all
+ * necessary: the switch is on, the process is not production, and the provider is the fake
+ * one, which refuses to exist in production anyway.
+ *
+ * `validateEnv` refuses the same combinations at boot, so this function is the second lock
+ * on the same door rather than the only one (decision 0051).
+ */
+export function fixedCodeFor(config: FixedCodeConfig): string | null {
+  if (!config.otpEnabled || config.nodeEnv === 'production' || config.smsProvider !== 'fake') {
+    return null;
+  }
+
+  const code = config.fixedCode.trim();
+  return FIXED_CODE_PATTERN.test(code) ? code : null;
+}
