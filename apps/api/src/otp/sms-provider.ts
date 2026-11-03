@@ -82,6 +82,49 @@ export interface HttpSmsConfig {
 
 const PLACEHOLDER = /\{\{(to|body|templateId)\}\}/g;
 
+/** Loopback, private, link-local and unique-local addresses, as literals a host may name. */
+const PRIVATE_HOST_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^192\.168\./,
+  /^169\.254\./,
+  /^172\.(1[6-9]|2[0-9]|3[01])\./,
+  /^\[?::1\]?$/,
+  /^\[?f[cd][0-9a-f]{2}:/i,
+  /^0\./,
+];
+
+/**
+ * The gateway address has to be a public https endpoint in production.
+ *
+ * Without this, "configure the gateway by environment" is an SSRF seam: a wrong or hostile
+ * value would make the API POST an OTP to a host inside our own network. The check is on the
+ * literal host, so it needs no DNS at boot — and it refuses rather than silently downgrading.
+ */
+export function assertGatewayUrl(url: string, nodeEnv: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SmsDeliveryError('The SMS gateway URL is not a valid URL');
+  }
+
+  if (nodeEnv !== 'production') {
+    return parsed;
+  }
+
+  if (parsed.protocol !== 'https:') {
+    throw new SmsDeliveryError('The SMS gateway must use https in production');
+  }
+
+  if (PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) {
+    throw new SmsDeliveryError('The SMS gateway must not be a private, loopback or link-local address');
+  }
+
+  return parsed;
+}
+
 /** Fills the template with JSON-escaped values, so the result is always valid JSON. */
 export function renderSmsBody(template: string, message: SmsMessage): string {
   return template.replace(PLACEHOLDER, (_match, key: string) => {
@@ -94,7 +137,11 @@ export function renderSmsBody(template: string, message: SmsMessage): string {
 export class HttpSmsProvider implements SmsProvider {
   readonly name: string;
 
-  constructor(private readonly config: HttpSmsConfig) {
+  constructor(
+    private readonly config: HttpSmsConfig,
+    private readonly nodeEnv: string = 'development',
+  ) {
+    assertGatewayUrl(config.url, nodeEnv);
     this.name = config.name;
   }
 
@@ -127,10 +174,12 @@ export class HttpSmsProvider implements SmsProvider {
       if (error instanceof SmsDeliveryError) {
         throw error;
       }
+      // Never the message, the code or the URL: a delivery error is quoted in logs and
+      // alerts, and none of those may carry a live OTP.
       throw new SmsDeliveryError(
         error instanceof Error && error.name === 'AbortError'
           ? 'The SMS gateway timed out'
-          : `The SMS gateway could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+          : 'The SMS gateway could not be reached',
       );
     } finally {
       clearTimeout(timer);
@@ -164,7 +213,7 @@ export function createSmsProvider(config: SmsProviderConfig): SmsProvider | null
     throw new SmsDeliveryError('The HTTP SMS provider needs a gateway configuration');
   }
 
-  return new HttpSmsProvider(config.http);
+  return new HttpSmsProvider(config.http, config.nodeEnv);
 }
 
 /**

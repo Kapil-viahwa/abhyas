@@ -119,9 +119,65 @@ describe('sms provider', () => {
   });
 
   it('abandons a gateway that never answers', async () => {
-    const provider = new HttpSmsProvider(config({ url: 'http://127.0.0.1:1/send', timeoutMs: 50 }));
+    const provider = new HttpSmsProvider(config({ url: 'http://127.0.0.1:1/send', timeoutMs: 50 }), 'test');
 
     await expect(provider.send(MESSAGE)).rejects.toThrow(/could not be reached|timed out/);
+  });
+
+  it('refuses a gateway that is not https in production', () => {
+    expect(() => new HttpSmsProvider(config({ url: 'http://sms.example.com/send' }), 'production')).toThrow(
+      /must use https in production/,
+    );
+    expect(() => new HttpSmsProvider(config({ url: 'https://sms.example.com/send' }), 'production')).not.toThrow();
+  });
+
+  it('refuses a private, loopback or link-local gateway in production', () => {
+    for (const url of [
+      'https://localhost/send',
+      'https://127.0.0.1/send',
+      'https://10.0.0.5/send',
+      'https://192.168.1.10/send',
+      'https://169.254.169.254/latest/meta-data',
+      'https://172.16.0.9/send',
+      'https://[::1]/send',
+    ]) {
+      expect(() => new HttpSmsProvider(config({ url }), 'production'), url).toThrow(/private, loopback or link-local/);
+    }
+  });
+
+  it('refuses to build the HTTP provider at production boot with an unsafe gateway', () => {
+    // The boot-refusal: turning OTP on in production with a bad URL stops the process.
+    expect(() =>
+      createSmsProvider({
+        otpEnabled: true,
+        nodeEnv: 'production',
+        kind: 'http',
+        http: config({ url: 'http://10.1.2.3/send' }),
+      }),
+    ).toThrow(SmsDeliveryError);
+  });
+
+  it('never writes the code or the body to a log, even when delivery fails', async () => {
+    const captured: string[] = [];
+    const record = (...parts: unknown[]): void => {
+      captured.push(parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' '));
+    };
+    const original = { log: console.log, warn: console.warn, error: console.error, info: console.info };
+    console.log = record;
+    console.warn = record;
+    console.error = record;
+    console.info = record;
+
+    try {
+      const provider = new HttpSmsProvider(config({ url: 'http://127.0.0.1:1/send', timeoutMs: 30 }), 'test');
+      await expect(provider.send({ ...MESSAGE, body: 'Your Abhyas code is 654321' })).rejects.toThrow();
+    } finally {
+      Object.assign(console, original);
+    }
+
+    const everything = captured.join('\n');
+    expect(everything).not.toContain('654321');
+    expect(everything).not.toContain('Your Abhyas code');
   });
 
   it('hashes a destination so a phone number is never stored in the ledger', () => {
