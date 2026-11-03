@@ -190,3 +190,106 @@ describe('validateEnv', () => {
     );
   });
 });
+
+/** A production environment that turns mobile OTP on through the generic gateway. */
+const otpProduction = {
+  ...production,
+  SMS_PROVIDER: 'http',
+  OTP_ENABLED: 'true',
+  OTP_HMAC_SECRET: 'o'.repeat(48),
+  OTP_SENDER_ID: 'ABHYAS',
+  OTP_DLT_ENTITY_ID: '1000000000000000000',
+  OTP_TEMPLATE_ID: '1107160000000000000',
+  OTP_GATEWAY_URL: 'https://sms.example.com/send',
+  OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}","message":"{{body}}","template":"{{templateId}}"}',
+};
+
+describe('validateEnv and the OTP master switch', () => {
+  it('keeps mobile OTP off unless it is asked for', () => {
+    const env = validateEnv(base);
+
+    expect(env.OTP_ENABLED).toBe(false);
+    expect(env.OTP_ALLOWED_COUNTRY_CODES).toEqual(['+91']);
+    expect(env.OTP_SMS_DAILY_BUDGET).toBe(100);
+    // Off is not the same as absent: the boundaries are still present and bounded.
+    expect(env.OTP_GATEWAY_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('accepts an OTP-enabled development configuration with the fake provider', () => {
+    const env = validateEnv({ ...base, OTP_ENABLED: 'true', OTP_HMAC_SECRET: 'h'.repeat(32), SMS_PROVIDER: 'fake' });
+
+    expect(env.OTP_ENABLED).toBe(true);
+    expect(env.SMS_PROVIDER).toBe('fake');
+  });
+
+  it('requires an HMAC secret whenever OTP is on', () => {
+    expect(() => validateEnv({ ...base, OTP_ENABLED: 'true' })).toThrow(
+      /OTP_HMAC_SECRET: is required when OTP_ENABLED is true/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_HMAC_SECRET: 'short' })).toThrow(
+      /OTP_HMAC_SECRET: must be at least 32 characters in production/,
+    );
+    expect(() =>
+      validateEnv({ ...otpProduction, OTP_HMAC_SECRET: 'dev-only-insecure-secret-please-change-32chars' }),
+    ).toThrow(/OTP_HMAC_SECRET: must not be a well-known default value/);
+  });
+
+  it('refuses the fake provider for an OTP-enabled production boot', () => {
+    // The fake provider already refuses itself; the environment refuses first, so the
+    // process never even reaches the constructor.
+    expect(() => validateEnv({ ...otpProduction, SMS_PROVIDER: 'fake' })).toThrow(
+      /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+    expect(() => validateEnv({ ...otpProduction, SMS_PROVIDER: 'console' })).toThrow(
+      /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+  });
+
+  it('refuses a provider with no adapter for an OTP-enabled production boot', () => {
+    expect(() => validateEnv({ ...otpProduction, SMS_PROVIDER: 'msg91' })).toThrow(
+      /SMS_PROVIDER: must be "http" when OTP_ENABLED is true in production/,
+    );
+  });
+
+  it('requires the sender id, DLT entity id and template id in production', () => {
+    expect(() => validateEnv({ ...otpProduction, OTP_SENDER_ID: '' })).toThrow(
+      /OTP_SENDER_ID: is required in production when OTP is enabled/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_DLT_ENTITY_ID: '' })).toThrow(
+      /OTP_DLT_ENTITY_ID: is required in production when OTP is enabled/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_TEMPLATE_ID: '' })).toThrow(
+      /OTP_TEMPLATE_ID: is required in production when OTP is enabled/,
+    );
+  });
+
+  it('requires an https gateway and its body template for the generic adapter', () => {
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_URL: '' })).toThrow(
+      /OTP_GATEWAY_URL: is required when SMS_PROVIDER is http/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_URL: 'http://sms.example.com/send' })).toThrow(
+      /OTP_GATEWAY_URL: must be an https URL in production/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_BODY_TEMPLATE: '' })).toThrow(
+      /OTP_GATEWAY_BODY_TEMPLATE: is required when SMS_PROVIDER is http/,
+    );
+  });
+
+  it('refuses a country prefix that is not E.164', () => {
+    expect(() => validateEnv({ ...base, OTP_ALLOWED_COUNTRY_CODES: '91' })).toThrow(
+      /OTP_ALLOWED_COUNTRY_CODES: "91" is not an E.164 country prefix/,
+    );
+    expect(() => validateEnv({ ...base, OTP_ALLOWED_COUNTRY_CODES: ' , ' })).toThrow(
+      /OTP_ALLOWED_COUNTRY_CODES: must name at least one country prefix/,
+    );
+  });
+
+  it('bounds the timeout and the daily budget', () => {
+    expect(() => validateEnv({ ...base, OTP_GATEWAY_TIMEOUT_MS: '10' })).toThrow(
+      /OTP_GATEWAY_TIMEOUT_MS: must be an integer between 1000 and 30000/,
+    );
+    expect(() => validateEnv({ ...base, OTP_SMS_DAILY_BUDGET: '0' })).toThrow(
+      /OTP_SMS_DAILY_BUDGET: must be an integer between 1 and 100000/,
+    );
+  });
+});

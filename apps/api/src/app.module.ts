@@ -29,6 +29,8 @@ import { DATABASE_PROBE, REDIS_PROBE } from './infra/tokens';
 import { TURNSTILE_VERIFIER, createTurnstileVerifier } from './infra/turnstile-verifier';
 import { MediaController } from './media/media.controller';
 import { MediaService } from './media/media.service';
+import { OtpService } from './otp/otp.service';
+import { OTP_SMS_PROVIDER, providerFromEnv } from './otp/sms-provider';
 import { QuestionsController } from './questions/questions.controller';
 import { QuestionsService } from './questions/questions.service';
 
@@ -81,6 +83,13 @@ import { QuestionsService } from './questions/questions.service';
       provide: OBJECT_STORAGE,
       useFactory: () => createObjectStorage(loadConfig(process.env)),
     },
+    // The OTP provider is built only when the switch is on: with OTP off the factory
+    // returns before it constructs anything, so no code path can send an SMS at all.
+    {
+      provide: OTP_SMS_PROVIDER,
+      useFactory: () => providerFromEnv(loadConfig(process.env)),
+    },
+    OtpService,
     MediaService,
     QuestionsService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.

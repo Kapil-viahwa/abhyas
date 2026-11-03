@@ -9,13 +9,13 @@
 
 export type NodeEnv = 'development' | 'test' | 'production';
 
-export type SmsProvider = 'fake' | 'console' | 'msg91' | 'twilio' | 'ses';
+export type SmsProvider = 'fake' | 'console' | 'http' | 'msg91' | 'twilio' | 'ses';
 
 export type EmailProvider = 'console' | 'smtp';
 
 const NODE_ENVS: readonly NodeEnv[] = ['development', 'test', 'production'];
 
-const SMS_PROVIDERS: readonly SmsProvider[] = ['fake', 'console', 'msg91', 'twilio', 'ses'];
+const SMS_PROVIDERS: readonly SmsProvider[] = ['fake', 'console', 'http', 'msg91', 'twilio', 'ses'];
 
 const EMAIL_PROVIDERS: readonly EmailProvider[] = ['console', 'smtp'];
 
@@ -81,6 +81,22 @@ export interface AppEnv {
   readonly S3_SECRET_ACCESS_KEY: string;
   readonly S3_FORCE_PATH_STYLE: boolean;
   readonly S3_PUBLIC_READ: boolean;
+  /** Phase 2c: the master switch for mobile OTP. Off by default. */
+  readonly OTP_ENABLED: boolean;
+  /** The secret every stored code is HMACed with; a database read cannot recover a code. */
+  readonly OTP_HMAC_SECRET: string;
+  /** E.164 country prefixes a code may be sent to; India only unless widened on purpose. */
+  readonly OTP_ALLOWED_COUNTRY_CODES: readonly string[];
+  /** The most messages one business day may send before the breaker stops everything. */
+  readonly OTP_SMS_DAILY_BUDGET: number;
+  readonly OTP_SENDER_ID: string;
+  readonly OTP_DLT_ENTITY_ID: string;
+  readonly OTP_TEMPLATE_ID: string;
+  readonly OTP_GATEWAY_URL: string;
+  readonly OTP_GATEWAY_AUTH_HEADER: string;
+  readonly OTP_GATEWAY_AUTH_VALUE: string;
+  readonly OTP_GATEWAY_BODY_TEMPLATE: string;
+  readonly OTP_GATEWAY_TIMEOUT_MS: number;
 }
 
 /** Credentials the development stack ships with; production refuses them. */
@@ -286,6 +302,104 @@ export function validateEnv(raw: RawEnv): AppEnv {
     });
   }
 
+  // Mobile OTP (phase 2c). The switch is off unless it is asked for, and everything that
+  // would be a development shortcut is refused in production when it is on: a fake
+  // provider, a missing HMAC secret, missing DLT identifiers, or an insecure gateway.
+  const otpEnabled = read(raw, 'OTP_ENABLED').toLowerCase() === 'true';
+  const otpHmacSecret = read(raw, 'OTP_HMAC_SECRET');
+  const otpSenderId = read(raw, 'OTP_SENDER_ID');
+  const otpDltEntityId = read(raw, 'OTP_DLT_ENTITY_ID');
+  const otpTemplateId = read(raw, 'OTP_TEMPLATE_ID');
+  const otpGatewayUrl = read(raw, 'OTP_GATEWAY_URL');
+  const otpGatewayAuthHeader = read(raw, 'OTP_GATEWAY_AUTH_HEADER');
+  const otpGatewayAuthValue = read(raw, 'OTP_GATEWAY_AUTH_VALUE');
+  const otpGatewayBodyTemplate = read(raw, 'OTP_GATEWAY_BODY_TEMPLATE');
+
+  const otpGatewayTimeoutMs = Number(read(raw, 'OTP_GATEWAY_TIMEOUT_MS') || '5000');
+  if (!Number.isInteger(otpGatewayTimeoutMs) || otpGatewayTimeoutMs < 1_000 || otpGatewayTimeoutMs > 30_000) {
+    issues.push({
+      variable: 'OTP_GATEWAY_TIMEOUT_MS',
+      message: 'must be an integer between 1000 and 30000',
+    });
+  }
+
+  const otpSmsDailyBudget = Number(read(raw, 'OTP_SMS_DAILY_BUDGET') || '100');
+  if (!Number.isInteger(otpSmsDailyBudget) || otpSmsDailyBudget < 1 || otpSmsDailyBudget > 100_000) {
+    issues.push({
+      variable: 'OTP_SMS_DAILY_BUDGET',
+      message: 'must be an integer between 1 and 100000',
+    });
+  }
+
+  const otpAllowedCountryCodes = (read(raw, 'OTP_ALLOWED_COUNTRY_CODES') || '+91')
+    .split(',')
+    .map((code) => code.trim())
+    .filter((code) => code !== '');
+
+  if (otpAllowedCountryCodes.length === 0) {
+    issues.push({
+      variable: 'OTP_ALLOWED_COUNTRY_CODES',
+      message: 'must name at least one country prefix like +91',
+    });
+  }
+  for (const code of otpAllowedCountryCodes) {
+    if (!/^\+[1-9][0-9]{0,3}$/.test(code)) {
+      issues.push({
+        variable: 'OTP_ALLOWED_COUNTRY_CODES',
+        message: `"${code}" is not an E.164 country prefix like +91`,
+      });
+    }
+  }
+
+  if (otpEnabled) {
+    if (otpHmacSecret === '') {
+      issues.push({ variable: 'OTP_HMAC_SECRET', message: 'is required when OTP_ENABLED is true' });
+    } else if (isProduction && otpHmacSecret.length < MIN_AUTH_SECRET_LENGTH) {
+      issues.push({
+        variable: 'OTP_HMAC_SECRET',
+        message: `must be at least ${MIN_AUTH_SECRET_LENGTH} characters in production`,
+      });
+    } else if (isProduction && FORBIDDEN_PRODUCTION_SECRETS.includes(otpHmacSecret.toLowerCase())) {
+      issues.push({ variable: 'OTP_HMAC_SECRET', message: 'must not be a well-known default value' });
+    }
+
+    if (isProduction) {
+      if (otpSenderId === '') {
+        issues.push({ variable: 'OTP_SENDER_ID', message: 'is required in production when OTP is enabled' });
+      }
+      if (otpDltEntityId === '') {
+        issues.push({ variable: 'OTP_DLT_ENTITY_ID', message: 'is required in production when OTP is enabled' });
+      }
+      if (otpTemplateId === '') {
+        issues.push({ variable: 'OTP_TEMPLATE_ID', message: 'is required in production when OTP is enabled' });
+      }
+
+      if (smsProvider !== 'http') {
+        // There is no vendor-specific adapter yet, and "fake" is already refused above:
+        // an OTP-enabled production boot must use the generic gateway.
+        issues.push({
+          variable: 'SMS_PROVIDER',
+          message: 'must be "http" when OTP_ENABLED is true in production (no vendor adapter exists yet)',
+        });
+      } else {
+        if (otpGatewayUrl === '') {
+          issues.push({
+            variable: 'OTP_GATEWAY_URL',
+            message: 'is required when SMS_PROVIDER is http and OTP is enabled in production',
+          });
+        } else if (!otpGatewayUrl.startsWith('https://')) {
+          issues.push({ variable: 'OTP_GATEWAY_URL', message: 'must be an https URL in production' });
+        }
+        if (otpGatewayBodyTemplate === '') {
+          issues.push({
+            variable: 'OTP_GATEWAY_BODY_TEMPLATE',
+            message: 'is required when SMS_PROVIDER is http',
+          });
+        }
+      }
+    }
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -308,5 +422,17 @@ export function validateEnv(raw: RawEnv): AppEnv {
     S3_SECRET_ACCESS_KEY: s3SecretKey,
     S3_FORCE_PATH_STYLE: s3ForcePathStyle,
     S3_PUBLIC_READ: s3PublicRead,
+    OTP_ENABLED: otpEnabled,
+    OTP_HMAC_SECRET: otpHmacSecret,
+    OTP_ALLOWED_COUNTRY_CODES: otpAllowedCountryCodes,
+    OTP_SMS_DAILY_BUDGET: otpSmsDailyBudget,
+    OTP_SENDER_ID: otpSenderId,
+    OTP_DLT_ENTITY_ID: otpDltEntityId,
+    OTP_TEMPLATE_ID: otpTemplateId,
+    OTP_GATEWAY_URL: otpGatewayUrl,
+    OTP_GATEWAY_AUTH_HEADER: otpGatewayAuthHeader,
+    OTP_GATEWAY_AUTH_VALUE: otpGatewayAuthValue,
+    OTP_GATEWAY_BODY_TEMPLATE: otpGatewayBodyTemplate,
+    OTP_GATEWAY_TIMEOUT_MS: otpGatewayTimeoutMs,
   };
 }

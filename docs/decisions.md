@@ -912,3 +912,58 @@ not the intended state.
   require approval before workflows run, secret scanning with push protection is on, and
   Dependabot alerts and security updates are enabled. Those are toggles in the repository's
   own settings, not files, so they are recorded here rather than enforced by CI.
+
+
+## 0048 — Mobile OTP is off by default and the switch is enforced on the server
+
+**Status:** accepted · **Phase:** 2c
+
+**One switch, checked at three layers.** `OTP_ENABLED` (default false) is read from the
+validated environment at boot and is the only thing that turns the feature on. With it off:
+`providerFromEnv` returns `null` before it constructs anything at all, `OtpService.assertEnabled`
+throws `NotFoundException` before it reads a row or a counter, and `OtpGuard` answers **404**
+(not 403) on the routes. Hiding the web screens is the fourth layer, never the first. Tests
+prove the disabled mode from the service with a provider wired in on purpose: 404, and nothing
+in the outbox.
+
+**Codes are stored as an HMAC, bound to their destination.** `code_hmac` is
+`HMAC-SHA256(OTP_HMAC_SECRET, "<e164>:<code>")`, so the same six digits sent to two numbers
+produce different digests and a database read cannot recover a live code. Verification compares
+in constant time with `timingSafeEqual` and, for an unknown number, spends a comparison anyway
+so the two answers are not measurably different. The code itself appears in exactly one place:
+the body handed to the provider, which the fake provider keeps in its development-only outbox.
+
+**Five attempts, five minutes, escalating resends.** A row is spent (`consumed_at`) when it is
+verified, when the fifth guess is wrong, when it expires, or when delivery fails — a code that
+was never delivered must never verify. The resend cooldown starts at 30 seconds and doubles to
+ten minutes, indexed by how many requests already exist for that number in the last hour.
+
+**Limits, and the budget as a hard stop.** Per number 3/hour and 8/day, per IP 10/hour, per
+device 5/hour, all on the existing Redis fixed-window limiter. Above them sits a daily SMS
+budget: the count is `sms_cost_ledger` rows for the current business day (Asia/Kolkata), and
+when it is reached a Redis latch closes the breaker for the rest of the day, one alert row is
+written, and every further request answers 503 without another provider call. The ledger also
+records what each message was sent by and, when the vendor returns one, its message id.
+
+**Anomaly detection, and what it honestly covers.** A limit denial from one address, and a
+number whose digits run sequentially, each write an `OTP_ALERT` audit row and increment a
+per-action, per-day counter in Redis that `alertCount()` reads. Network-level (ASN) burst
+detection is **not** implemented; it belongs to the WAF in front of the deployment and is
+recorded as a known gap rather than pretended.
+
+**The gateway is an SSRF seam, so it is guarded twice.** At boot, the URL must be https in
+production and its host may not name a private, loopback, link-local, CGNAT (100.64.0.0/10),
+multicast, unspecified or metadata address — including the numeric forms IPv4 accepts
+(`127.1`, `0x7f000001`, `2130706433`) and IPv4-mapped IPv6 (`::ffff:127.0.0.1`). At send time
+DNS is resolved once, *every* answer is checked, and the address that passed is pinned into
+`http(s).request` through its `lookup` option, so a second lookup cannot swap in another host.
+Redirects are never followed (a 3xx is a failure), the timeout is bounded per request, and the
+response is read with an 8 KiB cap. Development and CI may point the provider at a loopback
+mock server; production may not, and `validateEnv` keeps that honest.
+
+**Boot refusal, not configuration advice.** With the switch on in production, `validateEnv`
+refuses a fake or console provider, any provider without an adapter (only `http` exists yet), a
+missing or short or well-known `OTP_HMAC_SECRET`, a missing `OTP_SENDER_ID`,
+`OTP_DLT_ENTITY_ID` or `OTP_TEMPLATE_ID`, and a gateway that is empty, not https, or missing its
+body template. The fake provider and the test Turnstile verifier refuse themselves as well, so
+the process cannot start in a state where a development shortcut would be reachable.

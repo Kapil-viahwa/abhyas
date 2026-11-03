@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   FakeSmsProvider,
   HttpSmsProvider,
+  MAX_SMS_RESPONSE_BYTES,
   SmsDeliveryError,
   createSmsProvider,
   destinationHash,
+  providerFromEnv,
   renderSmsBody,
   type HttpSmsConfig,
 } from './sms-provider';
@@ -190,5 +192,105 @@ describe('sms provider', () => {
     expect(again).toBe(first);
     expect(other).not.toBe(first);
     expect(differentSecret).not.toBe(first);
+  });
+
+  it('refuses a redirect instead of following it', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(302, { location: 'http://127.0.0.1:1/steal' });
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address() as AddressInfo;
+    const provider = new HttpSmsProvider(config({ url: `http://127.0.0.1:${String(address.port)}/send` }), 'test');
+
+    await expect(provider.send(MESSAGE)).rejects.toThrow(/answered 302/);
+  });
+
+  it('refuses an answer larger than the response cap', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ id: 'x', padding: 'a'.repeat(MAX_SMS_RESPONSE_BYTES * 2) }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    servers.push(server);
+    const address = server.address() as AddressInfo;
+    const provider = new HttpSmsProvider(config({ url: `http://127.0.0.1:${String(address.port)}/send` }), 'test');
+
+    await expect(provider.send(MESSAGE)).rejects.toThrow(/too much data/);
+  });
+
+  it('connects to the address the resolver returned, never a second lookup', async () => {
+    const gateway = await mockGateway(200, { id: 'msg-pinned' });
+    servers.push(gateway.server);
+    const port = new URL(gateway.url).port;
+
+    let lookups = 0;
+    const provider = new HttpSmsProvider(
+      // A name that cannot resolve: only the pinned answer can reach the mock gateway.
+      config({ url: `http://sms.invalid:${port}/send` }),
+      'test',
+      async () => {
+        lookups += 1;
+        return [{ address: '127.0.0.1', family: 4 }];
+      },
+    );
+
+    const result = await provider.send(MESSAGE);
+
+    expect(result.providerMessageId).toBe('msg-pinned');
+    expect(lookups).toBe(1);
+  });
+
+  it('refuses an IPv4-mapped IPv6 and a numeric host in production', () => {
+    for (const url of ['https://[::ffff:127.0.0.1]/send', 'https://2130706433/send', 'https://[fd00::1]/send']) {
+      expect(() => new HttpSmsProvider(config({ url }), 'production'), url).toThrow(/private, loopback or link-local/);
+    }
+  });
+
+  it('never constructs a provider when the switch is off, even with a broken gateway', () => {
+    // The URL is not even a URL: nothing was looked at, because the switch is checked first.
+    expect(
+      providerFromEnv({
+        OTP_ENABLED: false,
+        NODE_ENV: 'production',
+        SMS_PROVIDER: 'http',
+        OTP_GATEWAY_URL: 'not a url',
+        OTP_GATEWAY_AUTH_HEADER: '',
+        OTP_GATEWAY_AUTH_VALUE: '',
+        OTP_GATEWAY_BODY_TEMPLATE: '',
+        OTP_GATEWAY_TIMEOUT_MS: 5000,
+      }),
+    ).toBeNull();
+  });
+
+  it('builds the gateway from the environment when the switch is on', () => {
+    const provider = providerFromEnv({
+      OTP_ENABLED: true,
+      NODE_ENV: 'test',
+      SMS_PROVIDER: 'http',
+      OTP_GATEWAY_URL: 'https://sms.example.com/send',
+      OTP_GATEWAY_AUTH_HEADER: 'x-api-key',
+      OTP_GATEWAY_AUTH_VALUE: 'key',
+      OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}"}',
+      OTP_GATEWAY_TIMEOUT_MS: 2000,
+    });
+
+    expect(provider?.name).toBe('http-gateway');
+  });
+
+  it('refuses a provider that has no adapter yet instead of sending nothing', () => {
+    expect(() =>
+      providerFromEnv({
+        OTP_ENABLED: true,
+        NODE_ENV: 'production',
+        SMS_PROVIDER: 'msg91',
+        OTP_GATEWAY_URL: 'https://sms.example.com/send',
+        OTP_GATEWAY_AUTH_HEADER: '',
+        OTP_GATEWAY_AUTH_VALUE: '',
+        OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}"}',
+        OTP_GATEWAY_TIMEOUT_MS: 5000,
+      }),
+    ).toThrow(/no adapter yet/);
   });
 });

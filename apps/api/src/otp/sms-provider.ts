@@ -1,4 +1,9 @@
 import { createHmac, randomUUID } from 'node:crypto';
+import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+
+import { SmsDeliveryError } from './errors';
+import { BlockedAddressError, assertGatewayUrl, resolvePublicAddress, type DnsLookup, type DnsRecord } from './ssrf-guard';
 
 /**
  * The SMS seam.
@@ -8,6 +13,8 @@ import { createHmac, randomUUID } from 'node:crypto';
  * returns an id or throws. When `OTP_ENABLED` is false the factory returns `null` rather
  * than a provider, so no code path in the platform can construct one, let alone send with it.
  */
+
+export { BlockedAddressError, SmsDeliveryError };
 
 export interface SmsMessage {
   /** E.164, already normalised. */
@@ -24,13 +31,6 @@ export interface SmsSendResult {
 export interface SmsProvider {
   readonly name: string;
   send(message: SmsMessage): Promise<SmsSendResult>;
-}
-
-export class SmsDeliveryError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'SmsDeliveryError';
-  }
 }
 
 /** A message the fake provider accepted, kept so a development run can read the code. */
@@ -82,48 +82,8 @@ export interface HttpSmsConfig {
 
 const PLACEHOLDER = /\{\{(to|body|templateId)\}\}/g;
 
-/** Loopback, private, link-local and unique-local addresses, as literals a host may name. */
-const PRIVATE_HOST_PATTERNS = [
-  /^localhost$/i,
-  /^127\./,
-  /^10\./,
-  /^192\.168\./,
-  /^169\.254\./,
-  /^172\.(1[6-9]|2[0-9]|3[01])\./,
-  /^\[?::1\]?$/,
-  /^\[?f[cd][0-9a-f]{2}:/i,
-  /^0\./,
-];
-
-/**
- * The gateway address has to be a public https endpoint in production.
- *
- * Without this, "configure the gateway by environment" is an SSRF seam: a wrong or hostile
- * value would make the API POST an OTP to a host inside our own network. The check is on the
- * literal host, so it needs no DNS at boot — and it refuses rather than silently downgrading.
- */
-export function assertGatewayUrl(url: string, nodeEnv: string): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new SmsDeliveryError('The SMS gateway URL is not a valid URL');
-  }
-
-  if (nodeEnv !== 'production') {
-    return parsed;
-  }
-
-  if (parsed.protocol !== 'https:') {
-    throw new SmsDeliveryError('The SMS gateway must use https in production');
-  }
-
-  if (PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname))) {
-    throw new SmsDeliveryError('The SMS gateway must not be a private, loopback or link-local address');
-  }
-
-  return parsed;
-}
+/** A gateway's answer is a message id; nothing legitimate is anywhere near this large. */
+export const MAX_SMS_RESPONSE_BYTES = 8 * 1024;
 
 /** Fills the template with JSON-escaped values, so the result is always valid JSON. */
 export function renderSmsBody(template: string, message: SmsMessage): string {
@@ -134,56 +94,137 @@ export function renderSmsBody(template: string, message: SmsMessage): string {
   });
 }
 
+function readJsonId(body: string): string {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (typeof parsed !== 'object' || parsed === null) {
+      return 'unknown';
+    }
+    const { id, messageId } = parsed as { id?: unknown; messageId?: unknown };
+    const value = id ?? messageId;
+    return typeof value === 'string' && value !== '' ? value : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 export class HttpSmsProvider implements SmsProvider {
   readonly name: string;
+  private readonly target: URL;
 
   constructor(
     private readonly config: HttpSmsConfig,
     private readonly nodeEnv: string = 'development',
+    private readonly lookup: DnsLookup | undefined = undefined,
   ) {
-    assertGatewayUrl(config.url, nodeEnv);
+    this.target = assertGatewayUrl(config.url, nodeEnv);
     this.name = config.name;
   }
 
   async send(message: SmsMessage): Promise<SmsSendResult> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
+    // Resolved and checked once, then pinned into the connection below: a second lookup
+    // could answer with a different address, and that address would never be checked.
+    const address = await resolvePublicAddress(
+      this.target.hostname,
+      this.lookup === undefined ? { nodeEnv: this.nodeEnv } : { nodeEnv: this.nodeEnv, lookup: this.lookup },
+    );
 
-    try {
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const response = await this.post(renderSmsBody(this.config.bodyTemplate, message), address);
+
+    // Redirects are not followed: a 3xx is outside 2xx and therefore a failure, so the
+    // gateway cannot bounce the request into our own network.
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw new SmsDeliveryError(`The SMS gateway answered ${String(response.statusCode)}`);
+    }
+
+    return { providerMessageId: readJsonId(response.body) };
+  }
+
+  private post(body: string, address: DnsRecord): Promise<{ statusCode: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const isHttps = this.target.protocol === 'https:';
+      const defaultPort = isHttps ? 443 : 80;
+      const port = this.target.port === '' ? defaultPort : Number(this.target.port);
+
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body)),
+        accept: 'application/json',
+      };
       if (this.config.authHeaderName !== null && this.config.authHeaderValue !== null) {
         headers[this.config.authHeaderName] = this.config.authHeaderValue;
       }
 
-      const response = await fetch(this.config.url, {
+      const options: RequestOptions = {
         method: 'POST',
+        hostname: this.target.hostname,
+        port,
+        path: `${this.target.pathname}${this.target.search}`,
         headers,
-        body: renderSmsBody(this.config.bodyTemplate, message),
-        signal: controller.signal,
+        // The pinned answer: Node never asks the resolver again for this request.
+        lookup: (_hostname, _options, callback) => {
+          callback(null, address.address, address.family);
+        },
+      };
+
+      const onResponse = (response: IncomingMessage): void => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let settled = false;
+
+        const fail = (error: Error): void => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          reject(error);
+        };
+
+        response.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_SMS_RESPONSE_BYTES) {
+            // A bounded read: a gateway that streams megabytes is a broken one, and the
+            // process will not hold them in memory waiting to find out.
+            response.destroy();
+            fail(new SmsDeliveryError('The SMS gateway answered with too much data'));
+            return;
+          }
+          chunks.push(chunk);
+        });
+
+        response.on('end', () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve({ statusCode: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') });
+        });
+
+        response.on('error', () => {
+          fail(new SmsDeliveryError('The SMS gateway could not be reached'));
+        });
+      };
+
+      const request = isHttps
+        ? httpsRequest({ ...options, servername: this.target.hostname }, onResponse)
+        : httpRequest(options, onResponse);
+
+      request.setTimeout(this.config.timeoutMs, () => {
+        request.destroy(new Error('sms-timeout'));
       });
 
-      if (!response.ok) {
-        throw new SmsDeliveryError(`The SMS gateway answered ${String(response.status)}`);
-      }
+      request.on('error', (error: Error) => {
+        // Never the message, the code or the URL: a delivery error is quoted in logs and
+        // alerts, and none of those may carry a live OTP.
+        reject(
+          new SmsDeliveryError(
+            error.message === 'sms-timeout' ? 'The SMS gateway timed out' : 'The SMS gateway could not be reached',
+          ),
+        );
+      });
 
-      const payload = (await response.json().catch(() => ({}))) as { id?: unknown; messageId?: unknown };
-      const id = payload.id ?? payload.messageId;
-
-      return { providerMessageId: typeof id === 'string' && id !== '' ? id : 'unknown' };
-    } catch (error) {
-      if (error instanceof SmsDeliveryError) {
-        throw error;
-      }
-      // Never the message, the code or the URL: a delivery error is quoted in logs and
-      // alerts, and none of those may carry a live OTP.
-      throw new SmsDeliveryError(
-        error instanceof Error && error.name === 'AbortError'
-          ? 'The SMS gateway timed out'
-          : 'The SMS gateway could not be reached',
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+      request.end(body);
+    });
   }
 }
 
@@ -215,6 +256,56 @@ export function createSmsProvider(config: SmsProviderConfig): SmsProvider | null
 
   return new HttpSmsProvider(config.http, config.nodeEnv);
 }
+
+/** The environment keys a provider is built from, so nothing else has to know them. */
+export interface SmsEnvConfig {
+  readonly OTP_ENABLED: boolean;
+  readonly NODE_ENV: string;
+  readonly SMS_PROVIDER: string;
+  readonly OTP_GATEWAY_URL: string;
+  readonly OTP_GATEWAY_AUTH_HEADER: string;
+  readonly OTP_GATEWAY_AUTH_VALUE: string;
+  readonly OTP_GATEWAY_BODY_TEMPLATE: string;
+  readonly OTP_GATEWAY_TIMEOUT_MS: number;
+}
+
+/**
+ * Builds the provider from validated environment configuration, and only when the switch is
+ * on. With `OTP_ENABLED=false` this returns before constructing anything at all — not even a
+ * provider that would refuse to send — which is the code-level half of the master switch.
+ */
+export function providerFromEnv(config: SmsEnvConfig): SmsProvider | null {
+  if (!config.OTP_ENABLED) {
+    return null;
+  }
+
+  if (config.SMS_PROVIDER === 'fake') {
+    return createSmsProvider({ otpEnabled: true, nodeEnv: config.NODE_ENV, kind: 'fake', http: null });
+  }
+
+  if (config.SMS_PROVIDER !== 'http') {
+    throw new SmsDeliveryError(
+      `SMS_PROVIDER "${config.SMS_PROVIDER}" has no adapter yet; use "http" with the generic gateway`,
+    );
+  }
+
+  return createSmsProvider({
+    otpEnabled: true,
+    nodeEnv: config.NODE_ENV,
+    kind: 'http',
+    http: {
+      name: 'http-gateway',
+      url: config.OTP_GATEWAY_URL,
+      authHeaderName: config.OTP_GATEWAY_AUTH_HEADER === '' ? null : config.OTP_GATEWAY_AUTH_HEADER,
+      authHeaderValue: config.OTP_GATEWAY_AUTH_VALUE === '' ? null : config.OTP_GATEWAY_AUTH_VALUE,
+      bodyTemplate: config.OTP_GATEWAY_BODY_TEMPLATE,
+      timeoutMs: config.OTP_GATEWAY_TIMEOUT_MS,
+    },
+  });
+}
+
+/** The injection token the API hands the provider (or `null`) over with. */
+export const OTP_SMS_PROVIDER = 'OTP_SMS_PROVIDER';
 
 /**
  * The destination hash used in every row, log line and audit record: a phone number must
