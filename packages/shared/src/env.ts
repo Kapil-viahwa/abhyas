@@ -73,7 +73,25 @@ export interface AppEnv {
   readonly ALLOW_DEV_LOGIN: boolean;
   /** Shared with the web tier, which accepts it on its cache-revalidation route. */
   readonly REVALIDATE_SECRET: string;
+  /** S3-compatible object storage: empty in development means media is disabled. */
+  readonly S3_ENDPOINT: string;
+  readonly S3_REGION: string;
+  readonly S3_BUCKET: string;
+  readonly S3_ACCESS_KEY_ID: string;
+  readonly S3_SECRET_ACCESS_KEY: string;
+  readonly S3_FORCE_PATH_STYLE: boolean;
+  readonly S3_PUBLIC_READ: boolean;
 }
+
+/** Credentials the development stack ships with; production refuses them. */
+export const DEVELOPMENT_S3_CREDENTIALS: readonly string[] = [
+  'minioadmin',
+  'abhyas-dev',
+  'abhyas',
+  'dev-secret',
+  'changeme',
+  'change-me',
+];
 
 type RawEnv = Readonly<Record<string, string | undefined>>;
 
@@ -210,6 +228,64 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
   }
 
+  // Object storage. Production has to point at a real S3-compatible service over TLS
+  // with its own credentials; the development stack's MinIO credentials are refused.
+  const s3Endpoint = read(raw, 'S3_ENDPOINT');
+  const s3Bucket = read(raw, 'S3_BUCKET');
+  const s3AccessKey = read(raw, 'S3_ACCESS_KEY_ID');
+  const s3SecretKey = read(raw, 'S3_SECRET_ACCESS_KEY');
+  const s3Region = read(raw, 'S3_REGION') || 'us-east-1';
+  const s3ForcePathStyle = read(raw, 'S3_FORCE_PATH_STYLE').toLowerCase() === 'true';
+  const s3PublicRead = read(raw, 'S3_PUBLIC_READ').toLowerCase() === 'true';
+
+  if (isProduction) {
+    if (s3Endpoint === '') {
+      issues.push({ variable: 'S3_ENDPOINT', message: 'is required in production' });
+    } else if (s3Endpoint === 'memory:') {
+      issues.push({ variable: 'S3_ENDPOINT', message: 'the in-memory store is refused in production' });
+    } else if (!s3Endpoint.startsWith('https://')) {
+      issues.push({ variable: 'S3_ENDPOINT', message: 'must be an https endpoint in production' });
+    }
+    if (s3Bucket === '') {
+      issues.push({ variable: 'S3_BUCKET', message: 'is required in production' });
+    }
+    if (s3AccessKey === '') {
+      issues.push({ variable: 'S3_ACCESS_KEY_ID', message: 'is required in production' });
+    } else if (DEVELOPMENT_S3_CREDENTIALS.includes(s3AccessKey.toLowerCase())) {
+      issues.push({ variable: 'S3_ACCESS_KEY_ID', message: 'development credentials are refused in production' });
+    }
+    if (s3SecretKey === '') {
+      issues.push({ variable: 'S3_SECRET_ACCESS_KEY', message: 'is required in production' });
+    } else if (DEVELOPMENT_S3_CREDENTIALS.includes(s3SecretKey.toLowerCase())) {
+      issues.push({
+        variable: 'S3_SECRET_ACCESS_KEY',
+        message: 'development credentials are refused in production',
+      });
+    } else if (s3SecretKey.length < 16) {
+      issues.push({
+        variable: 'S3_SECRET_ACCESS_KEY',
+        message: 'must be at least 16 characters',
+      });
+    }
+  } else if (s3Endpoint !== '') {
+    // A development stack that names a store must name all of it, or uploads fail late.
+    if (s3Bucket === '' || s3AccessKey === '' || s3SecretKey === '') {
+      issues.push({
+        variable: 'S3_BUCKET',
+        message: 'is required whenever S3_ENDPOINT is set',
+      });
+    }
+  }
+
+  // A bucket the whole internet can read defeats presigned URLs, so it is refused
+  // everywhere rather than only in production.
+  if (s3PublicRead) {
+    issues.push({
+      variable: 'S3_PUBLIC_READ',
+      message: 'a public bucket is refused: media is served through presigned URLs only',
+    });
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -225,5 +301,12 @@ export function validateEnv(raw: RawEnv): AppEnv {
     EMAIL_PROVIDER: emailProvider,
     ALLOW_DEV_LOGIN: allowDevLogin,
     REVALIDATE_SECRET: revalidateRaw === '' ? DEFAULT_REVALIDATE_SECRET : revalidateRaw,
+    S3_ENDPOINT: s3Endpoint,
+    S3_REGION: s3Region,
+    S3_BUCKET: s3Bucket,
+    S3_ACCESS_KEY_ID: s3AccessKey,
+    S3_SECRET_ACCESS_KEY: s3SecretKey,
+    S3_FORCE_PATH_STYLE: s3ForcePathStyle,
+    S3_PUBLIC_READ: s3PublicRead,
   };
 }

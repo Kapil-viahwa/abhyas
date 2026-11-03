@@ -29,6 +29,27 @@ services:
       timeout: 5s
       retries: 20
 
+  # S3-compatible object storage for development and CI only (decision 0038).
+  #
+  # MinIO's own images cannot be pulled anonymously from CI any more (minio/minio is not
+  # on Docker Hub; quay.io/minio/minio answers "unauthorized"), and Bitnami no longer
+  # publishes this image (its tag list is empty). Adobe S3Mock is the substitute: a
+  # maintained S3 API server for local testing, path-style only, which is exactly how
+  # the application talks to storage. Pinned by tag and by the manifest-list digest.
+  # It is never used in production; production boot refuses it by configuration.
+  s3mock:
+    image: adobe/s3mock:5.2.3@sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92
+    environment:
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: abhyas-media
+      COM_ADOBE_TESTING_S3MOCK_STORE_REGION: us-east-1
+    ports:
+      - '9090:9090'
+    healthcheck:
+      test: ['CMD', 'wget', '--spider', '-q', 'http://localhost:9090/favicon.ico']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   # One-shot migrations, as the owner role. Kept out of `up` by a profile so the
   # stack still starts with one command; run it explicitly once Postgres is up:
   #   docker compose run --rm migrate
@@ -69,12 +90,21 @@ services:
       # Public base URL of the web app, used for links in email.
       WEB_URL: http://localhost:3000
       ALLOW_DEV_LOGIN: 'true'
+      # Development object storage. The bucket is private and created at boot.
+      S3_ENDPOINT: http://s3mock:9090
+      S3_REGION: us-east-1
+      S3_BUCKET: abhyas-media
+      S3_ACCESS_KEY_ID: abhyas-dev
+      S3_SECRET_ACCESS_KEY: abhyas-dev-secret
+      S3_FORCE_PATH_STYLE: 'true'
     ports:
       - '3001:3001'
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      s3mock:
         condition: service_healthy
     healthcheck:
       test:
@@ -134,8 +164,17 @@ services:
       SMS_PROVIDER: fake
       EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
+      # The import job stores images through the same private bucket as the API.
+      S3_ENDPOINT: http://s3mock:9090
+      S3_REGION: us-east-1
+      S3_BUCKET: abhyas-media
+      S3_ACCESS_KEY_ID: abhyas-dev
+      S3_SECRET_ACCESS_KEY: abhyas-dev-secret
+      S3_FORCE_PATH_STYLE: 'true'
     depends_on:
       redis:
+        condition: service_healthy
+      s3mock:
         condition: service_healthy
 
 volumes:

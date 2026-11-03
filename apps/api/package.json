@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@abhyas/shared": "workspace:*",
+    "@aws-sdk/client-s3": "3.699.0",
+    "@aws-sdk/s3-request-presigner": "3.699.0",
     "@fastify/static": "^10.1.2",
     "@nestjs/common": "^11.1.18",
     "@nestjs/core": "^11.1.18",
@@ -25,13 +27,19 @@
     "@nestjs/swagger": "^11.0.0",
     "@node-rs/argon2": "^2.0.0",
     "@prisma/client": "^5.22.0",
+    "exceljs": "4.4.0",
     "fastify": "^5.12.5",
     "ioredis": "^5.4.2",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "sanitize-html": "2.13.1",
+    "sharp": "0.35.5",
+    "yauzl": "3.2.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/sanitize-html": "2.13.0",
+    "@types/yauzl": "2.10.3",
     "prisma": "^5.22.0"
   }
 }

@@ -557,3 +557,358 @@ exists to record.
 **Consequence:** the export is capped at 5,000 rows so one request cannot become a database dump,
 and the CSV is generated from the same filter function the viewer uses, so what is exported is
 what was on screen.
+
+
+## 0038 — A private S3-compatible bucket, and an upload pipeline that decides for itself
+
+**Status:** accepted · **Phase:** 4
+
+Storage is S3 behind `ObjectStorage` (`apps/api/src/infra/object-storage.ts`), and the
+bucket is private in every environment. Development and CI run MinIO (`minio/minio`
+`RELEASE.2024-05-10T01-41-38Z`) and the API creates the bucket at boot there; production
+points at an external service and creates nothing. `validateEnv` refuses, in production,
+an empty endpoint, a non-`https` endpoint, the in-memory store, development credentials,
+and a public-bucket flag (which is refused in every environment).
+
+Every image goes through `apps/api/src/media/image.ts`:
+
+- the type is decided by **magic bytes**, never the extension or the declared content
+  type, so a renamed executable or an SVG is not an image;
+- the file is decoded with `sharp` (pixel-count limit), rotated, resized to a 2000px
+  longest edge, and **re-encoded as WebP**, which strips EXIF and drops anything appended
+  to the original container — that is what defuses a polyglot;
+- the key is generated (`question-image/<uuid>.webp`) and the database CHECK refuses any
+  other shape, so a user-supplied name can never reach the store;
+- reads are presigned URLs that live five minutes, and only the uploader or an
+  administrator can ask for one.
+
+**Dependencies (exact versions):**
+
+- `@aws-sdk/client-s3` 3.699.0 — the S3 protocol client.
+- `@aws-sdk/s3-request-presigner` 3.699.0 — signed GET URLs; part of the same SDK line,
+  so a single version must not drift.
+- `sharp` 0.33.5 — decoding and re-encoding. It is the only maintained image library that
+  gives a pixel-count limit and a metadata-stripping re-encode without a shell-out.
+
+**Why:** a public bucket makes presigned URLs pointless, and deciding the type from the
+name is the oldest upload bug there is. Re-encoding rather than trusting the bytes means
+the store only ever holds a WebP the pipeline produced.
+
+**Consequence:** `S3_ENDPOINT=memory:` exists for the database test job, which has no
+object store. It is named like a protocol so it cannot be mistaken for a host, and
+production refuses it.
+
+## 0039 — Questions: a working version, an immutable published version, and server-side sanitising
+
+**Status:** accepted · **Phase:** 4
+
+A `questions` row points at the catalog (exam, subject, optional topic) and owns a
+`current_version`. Text lives in `question_versions`: an HTML subset sanitised on the
+server, an explanation, an optional LaTeX string rendered separately with KaTeX, marks and
+negative marks, language (`EN`/`HI`), difficulty, and the type. `question_options` rows
+hang off a version.
+
+Rules the database keeps, not the handler:
+
+- a version that has `published_at` cannot be updated or deleted (trigger), and neither
+  can its options;
+- a deferred constraint trigger checks the answer key at commit: an `MCQ` has two to six
+  options and exactly one correct one, a `NUMERICAL` has none and a numeric
+  `numerical_answer` matching `^-?[0-9]+(\.[0-9]{1,6})?$`;
+- a question's subject must belong to its exam and its topic to its subject (trigger);
+- editing a published question creates a new draft version, so history is never rewritten.
+
+Rich text arrives as TipTap's HTML and is sanitised with an allowlist (`sanitize-html`),
+never trusted. LaTeX is rendered with `katex` with `trust: false` and `strict: 'ignore'`
+on the render options, so `\href` and raw HTML cannot pass through.
+
+**Dependencies (exact versions):**
+
+- `sanitize-html` 2.13.1 (+ `@types/sanitize-html` 2.13.0) — the allowlist sanitiser.
+- `@tiptap/react`, `@tiptap/starter-kit`, `@tiptap/pm` 2.10.3 — the editor. TipTap is in
+  the fixed stack from phase 0.
+- `katex` 0.16.11 (+ `@types/katex` 0.16.7) — mathematical rendering, also named in the
+  fixed stack.
+
+**Why:** a rich-text editor that is trusted by the backend is an XSS engine with a
+database. Storing the sanitised HTML next to the numeric answer means a student preview
+and a printed paper see the same markup, and versioning means a published paper cannot
+change under a student who already sat it.
+
+## 0040 — Bulk import: a worker job, a staging table, and an all-or-nothing commit
+
+**Status:** accepted · **Phase:** 4
+
+An editor uploads a CSV or XLSX (and optionally a ZIP of images). The API stores the file
+in the private bucket and queues a job; the worker parses it, validates every row into
+`import_rows`, and never writes a question until the commit. A job with any invalid row is
+`REJECTED` and commits nothing. The commit writes drafts only, inside one transaction, and
+records `import_commits` first, so a worker that restarts finds the row and stops instead
+of importing twice.
+
+ZIP handling rejects, before reading any entry: more than 500 entries, more than 100 MB of
+uncompressed data, a compression ratio above 100:1, `../` or absolute paths, and symlinks.
+Each image entry then goes through the same `processImage` pipeline as a direct upload.
+
+**Dependencies (exact versions):**
+
+- `exceljs` 4.4.0 — reads XLSX and writes the template and the error report. It is used
+  by the API and the worker, so the template and the parser cannot disagree.
+- `yauzl` 3.2.0 (+ `@types/yauzl` 2.10.3) — streaming ZIP reading with entry metadata,
+  which is what makes the caps above enforceable before extracting anything.
+
+**Why:** a bulk import that half-succeeds leaves an editor with no idea which rows landed,
+and parsing a customer-supplied archive is the classic path to a zip bomb or a path
+traversal. Staging plus one transaction makes the answer to "what did this file do?"
+exactly one row in `import_jobs`.
+
+**Consequence:** the worker now owns a Prisma client and the same object-storage client as
+the API, and it generates the client from the API's schema so the two can never drift.
+
+
+## 0041 — Adobe S3Mock is the development and CI object store, pinned by tag and digest
+
+**Status:** accepted · **Phase:** 4
+
+Development and CI run `adobe/s3mock` at `5.2.3`, pinned again by its manifest-list
+digest (`sha256:ab01a6946750f451ca215a47e91030695b260e4003b8a5a6201d25029b8fca92`), on
+port 9090. It implements the S3 API the application uses — `CreateBucket`, `HeadBucket`,
+`PutObject`, `GetObject`, `DeleteObject`, `GetBucketLocation` and path-style addressing —
+and it accepts presigned URLs. The application still creates its own private bucket at
+boot, so the server starts empty.
+
+**Why this server:** MinIO's own images are not pullable anonymously from CI any more.
+`minio/minio` does not exist on Docker Hub, `quay.io/minio/minio` answers "unauthorized"
+without a login, and `bitnami/minio` publishes no tags at all (its Docker Hub tag list is
+empty). S3Mock is maintained by Adobe, ships a dateable release line, and its documented
+limitations are exactly the ones we do not rely on: it accepts presigned URLs without
+validating the signature (the API still signs and expires them, and only ever hands them
+to the person who uploaded the image), and it is path-style only (the application is
+configured with `S3_FORCE_PATH_STYLE=true`).
+
+**Consequence:** this image is a development and CI convenience and must never be
+deployed. Production requires an external S3-compatible service over https with its own
+credentials; `validateEnv` refuses an empty endpoint, a non-https endpoint, the in-memory
+store, the development credentials and a public bucket, and `docker-compose.prod.yml`
+requires every `S3_*` variable by name. `PROGRESS.md` records the substitution as a known
+gap.
+
+## 0042 — The `fast-xml-parser` override is temporary and must be removed
+
+**Status:** accepted · **Phase:** 4
+
+`@aws-sdk/client-s3` 3.699.0 depends on `fast-xml-parser` 4.4.1 through `@aws-sdk/core`,
+which carries four advisories at the time of writing (GHSA-m7jm-9gc2-mpf2, critical;
+GHSA-jmr7-xgp7-cmfj, GHSA-8gc5-j5rx-235r and GHSA-fj3w-jwp-x2g3). The audit gate is not
+lowered and no exception is added: `package.json` pins the transitive package to `4.5.5`,
+which is the version the advisories name as fixed, and the production audit passes.
+
+**Why an override and not a newer SDK:** the SDK line that depends on a fixed
+`fast-xml-parser` is newer than the two-week window the dependency rules require, and the
+SDK is only used for the S3 protocol. Pinning the one package keeps the SDK on a version
+whose behaviour has been running in CI for a while.
+
+**Consequence:** remove the `fast-xml-parser` override as soon as `@aws-sdk/client-s3`
+reaches a release that depends on `fast-xml-parser` >= 4.5.5 on its own. The override is
+listed with its reason in `package.json`'s `pnpm.overrides` block.
+
+## 0043 — `sharp` 0.35.5, and every dependency inside the two-week window
+
+**Status:** accepted · **Phase:** 4
+
+`sharp` was raised from 0.33.5 to 0.35.5 because three high advisories
+(GHSA-f88m-g3jw-g9cj, GHSA-rgj7-g3m4-5g8c, GHSA-wq5f-xc86-pv6w) are fixed only at
+0.35.5. The 0.35.5 release is older than the two-week window at the time this was applied,
+so it satisfies both rules at once; the smaller bumps that were not old enough were not
+taken. Every other new dependency is pinned to an exact version that was published at
+least two weeks before it was added, and the audit gate is unchanged.
+
+## 0044 — Signed URLs live five minutes, and an exam student sees only their own snapshot's images
+
+**Status:** accepted · **Phase:** 4 (with a rule for phases 6 and 7)
+
+A question image is stored in a private bucket. The only way to read it is a presigned
+`GET` whose key was generated by the server (`question-image/<uuid>.webp`), whose life is
+`PRESIGNED_URL_TTL_SECONDS` (300 seconds), and which is issued only after the caller has
+been authorised for that asset. Nothing else in the platform can produce a permanent
+address to an object, and the upload response never carries image bytes.
+
+**Why five minutes:** an author previews an image seconds after uploading it, and a
+student sees one for the length of a question. Five minutes is long enough for both and
+short enough that a URL copied out of a page stops working before it can be shared
+usefully.
+
+**Phases 6 and 7 (exams):** during an active attempt, a student may receive a signed URL
+only for an image belonging to a question in their own attempt snapshot — the questions
+frozen for that attempt — and not for any other asset, including images of questions they
+have not reached yet or questions from another paper. The exam module therefore asks for a
+URL per asset through an attempt-scoped check; `MediaService.signedUrl`'s uploader check
+remains for authoring and is not sufficient on its own for an exam. Answer keys stay
+outside that check: an image URL proves nothing about the correct option, but the
+snapshot rule keeps one student's paper from revealing another's.
+
+**Known limitation of the development store:** `adobe/s3mock` (decision 0041) accepts a
+presigned URL without validating its signature or its expiry, so CI proves the URL is
+signed and expired correctly (a unit test reads `X-Amz-Expires`, `X-Amz-Signature` and
+`X-Amz-Credential` out of the generated URL) but does not prove the store rejects a
+tampered or expired one. **Phase 9 carries a launch-blocking integration test** against the
+real production S3-compatible service: a URL with an edited signature, an expired URL and
+a URL for a key that does not exist must each be refused. `PROGRESS.md` records this as a
+known gap.
+
+
+
+## 0045 — Decoding a question image is bounded by pixels, threads and a body limit
+
+**Status:** accepted · **Phase:** 4
+
+Three limits decide how much memory one upload may cost, and they are chosen for the
+smallest box the platform is meant to run on (a two-core VPS with 2 GB of memory), not for
+the machine it was written on.
+
+**Pixels.** `MAX_INPUT_PIXELS` is 16,000,000. libvips decodes to four bytes per pixel
+(RGBA) before it resizes, so one decode peaks at about 64 MB: 16e6 × 4 bytes. A file that
+declares more is refused by `limitInputPixels` before any of it is decoded, which is what
+makes a decompression bomb cheap to reject — an 8000 × 8000 PNG of a few kilobytes is
+64 megapixels and never allocates them.
+
+**Threads and cache.** `sharp.cache(false)` drops libvips' operation cache, which otherwise
+keeps decoded tiles alive after the request that needed them — memory held by history
+rather than by work. `sharp.concurrency(1)` stops one decode from fanning out over every
+core, so two decodes use two threads and that is the ceiling. `MAX_CONCURRENT_DECODES` is
+2, matching the two cores: two decodes ≤ 2 × 64 MB = 128 MB of pixel data, plus the stored
+WebP (≤ 5 MB each) and the Node heap. Everything else in the API is single-threaded
+JavaScript and does not compete for that memory.
+
+**A slot belongs to the decode, not to the caller.** The limiter's slot is taken around the
+native work; the ten-second timeout only stops the caller from waiting. An abandoned decode
+keeps its slot until libvips actually finishes, so a slow decode cannot be abandoned into
+starting a third one beside it — the bound is on real memory, not on requests in flight.
+
+**The body limit.** Every route keeps the Fastify adapter's 1 MB `bodyLimit`. The upload
+route carries a base64 image, which is 4/3 of the file plus the JSON envelope, so it gets
+the single per-route exception: `ceil(5 MB × 4 / 3) + 8 KB` (about 6.99 MB), applied
+through Fastify's `onRoute` hook before routes are registered. Fastify stops reading at the
+limit and answers 413, so an oversized upload is refused without being buffered; a body
+between 5 MB and 6.99 MB is refused by the parser with the image-size message. The hook is
+attached in `main.ts` and in the HTTP test, so the test exercises the same limit the server
+runs with.
+
+**Stored images and the browser.** `PutObject` always writes `ContentType: image/webp` and a
+private, short cache rule; the presigned `GET` asks the store to answer with
+`response-content-type=image/webp` and `response-cache-control=private, max-age=300`, so a
+proxy cannot decide either. A signed URL is the only way in, and the object is never public.
+
+**CSP.** The web app loads question images from the storage origin, so that exact origin —
+validated as an origin with no path and no credentials — joins `img-src` through
+`MEDIA_ORIGIN`. It is added to `img-src` and to nothing else; `script-src`, `connect-src`,
+`frame-src` and the rest are byte-identical to the policy without it, and that is what the
+header test asserts.
+
+**Animated containers are refused, not flattened.** An animated PNG declares an `acTL`
+chunk and an animated WebP declares `ANIM`/`ANMF`; both are refused before the decoder runs,
+and `metadata.pages > 1` refuses anything else that still declares more than one frame. A
+question image is one still picture, and a container that describes more is not one.
+
+
+## 0046 — Authored content is a fixed point of one allowlist, and an image is a reference
+
+**Status:** accepted · **Phase:** 4
+
+One function in `apps/api/src/questions/sanitize.ts` decides what authored content is, and
+it runs on three occasions: on save, on every later save, and again when the row is read
+back, so a version written under older rules can never reach a student unsanitised.
+
+**The allowlist.** Paragraphs, line breaks, emphasis, lists, sub/superscript, code and a
+blockquote. No links — a question has no use for one, and a link is the easiest way to
+smuggle a scheme — and no `style`, `class`, `id` or `on*` attribute anywhere: only `img`
+carries attributes at all, and only `data-media-id` and `alt`. The containers whose content
+is not prose (`script`, `style`, `textarea`, `option`, `noscript`, `iframe`, `object`,
+`embed`, `svg`, `math`, `template`, `form`) are dropped whole rather than unwrapped, because
+their text is the payload: the classic `<math><mtext><table><mglyph><style><img onerror…>`
+needs the namespace to be discarded, not read.
+
+**An image is a reference.** Content names an upload by its `media_assets` id and nothing
+else; an `img` without one, or with a URL where one belongs, is removed, and a second pass
+over the cleaned markup removes anything the parser left behind. On save the service checks
+every referenced id: it must exist, be a WebP and be the caller's own upload (an
+Administrator may use any). A foreign id and an invented one are refused with the same
+words, so the route cannot be used to discover which images exist.
+
+**A fixed point.** `sanitize(sanitize(x))` must equal `sanitize(x)`, and the save refuses a
+value that moves on the second pass. A sanitiser whose output is not its own input cannot be
+reasoned about; the tests hold every payload to it.
+
+**Characters.** Text is composed to NFC, and C0 controls (except tab, newline and carriage
+return), null bytes, bidirectional overrides and isolates are removed. A bidi override
+renders one string and reads as another, which has no place in a question a student answers.
+Depth is bounded at 50 tags: 20,000 nested tags would be flattened by the parser only after
+it had built the tree, so the raw string is measured first and refused.
+
+**Search text.** `plainText` strips tags and then decodes entities, so a question authored
+as `a &lt; b` or `R&amp;D` is found by searching for what the author typed.
+
+**LaTeX.** KaTeX renders with `trust: false`, `strict: 'error'`, `throwOnError: false`,
+`maxSize: 50` and `maxExpand: 1000`. `\href`, `\url`, `\includegraphics` and `\htmlClass` are
+not in its command list and cannot produce a link, an image or a class attribute with trust
+disabled; the renderer shows the expression as escaped text, and a hard failure is escaped
+by the renderer itself before it reaches the page.
+
+
+## 0046 — Animation is decided by the chunk list, and the sanitiser strips what cannot be read
+
+**Status:** accepted · **Phase:** 4
+
+**Chunks, not bytes.** The first version of the animation guard searched the file for the
+four bytes `acTL` (PNG) and `ANIM`/`ANMF` (WebP). That is wrong in both directions: a text
+chunk or a caption that merely mentions `acTL` was refused, and a real animation whose
+chunk type was split across the search window could pass. Both formats are chunk lists, so
+the guard now walks them: for a PNG it reads each chunk header from the signature and
+refuses the file when an `acTL` chunk appears before the first `IDAT`; for a WebP it walks
+the RIFF chunks and refuses `ANIM` or `ANMF`. The tests keep a PNG carrying `acTL` inside a
+text chunk and a WebP carrying `ANIMANMF` inside a metadata chunk, and both are accepted.
+
+**Invisible characters.** `normalizeText` removes C0 controls (except tab, line feed and
+carriage return), DEL, C1 controls (U+0080–U+009F), Unicode tag characters
+(U+E0000–U+E007F), the zero-width space, the word joiner and the byte-order mark, after
+composing to NFC. It deliberately keeps the zero-width joiner (U+200C) and non-joiner
+(U+200D): Devanagari conjuncts are written with them, so removing them would silently
+change the Hindi an author typed, and there is a test with conjuncts that would break.
+
+**Metadata containers.** `xmp`, `noembed`, `noframes`, `title` and `head` join the list of
+tags whose *content* is dropped, not just the tag: their text is an instruction to a
+browser that parses it later, so keeping it as prose is the bug.
+
+**List screens show text.** `plainText` is documented as the string a list screen may show,
+never as HTML, and the web side has one `questionPreview` that strips markup and decodes
+entities to a plain string rendered in a text node. The test feeds it
+`<img src=x onerror=alert(1)>` and asserts the result carries no tag at all.
+
+
+## 0047 — The repository is public temporarily, and carries no real secret
+
+**Status:** accepted · **Phase:** 4
+
+The repository is **public for now**, because GitHub Actions for a private repository were
+blocked on billing and public repositories get free runners. That is a temporary arrangement,
+not the intended state.
+
+- **Make it private again before any real user data, production secret or live customer
+  exists.** Nothing in the history can be unpublished: once something is pushed to a public
+  repository it must be treated as published for ever, and removing it from the latest commit
+  does not remove it from earlier ones.
+- **Production secrets never live in this repository.** They are set as GitHub encrypted
+  secrets (CI) and in the server environment (deployment), read by name through
+  `docker-compose.prod.yml`'s `${VAR:?}` requirements. `.env.example` holds development
+  placeholders only, and `validateEnv` refuses the development values in production.
+- **What the working tree and history were checked for** when the repository became public:
+  real passwords, tokens, API keys, private keys, real addresses or phone numbers, server IPs
+  and hostnames, and personal data. The findings were the expected ones — documented
+  development placeholders in `.env.example`, throwaway `example.com` accounts and obvious
+  test passwords in the browser suite, and the repository owner's handle in `PROGRESS.md`
+  proof links — and no real credential. The `gitleaks` job scans the full history on every
+  push, so an accidental commit is caught as it arrives rather than later.
+- **Repository settings that matter more now than they did in private**: fork pull requests
+  require approval before workflows run, secret scanning with push protection is on, and
+  Dependabot alerts and security updates are enabled. Those are toggles in the repository's
+  own settings, not files, so they are recorded here rather than enforced by CI.

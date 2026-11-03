@@ -66,6 +66,11 @@ export const RATE_LIMITS = {
   passwordResetPerAccount: { limit: 3, windowSeconds: 3600 },
   passwordResetSubmitPerIp: { limit: 10, windowSeconds: 900 },
   refreshPerIp: { limit: 60, windowSeconds: 300 },
+  /**
+   * Question images per editor. Uploading is the only route that runs a native decoder, so
+   * it is metered per account: a burst is slowed rather than allowed to fill the queue.
+   */
+  mediaUploadPerUser: { limit: 30, windowSeconds: 600 },
 } as const;
 
 /**
@@ -91,12 +96,15 @@ export function ipRateLimitKey(scope: string, ip: string): string {
   return `ratelimit:${scope}:ip:${value === '' ? 'unknown' : value}`;
 }
 
-/**
- * One key per account, hashed: an email address must never sit in a Redis key in
- * clear text. Lower-cased for the same reason emails are normalised.
- */
+/** One key per account, hashed: an email address must never sit in a Redis key in
+ * clear text. Lower-cased for the same reason emails are normalised. */
 export function accountRateLimitKey(scope: string, account: string): string {
   return `ratelimit:${scope}:account:${hashToken(account.trim().toLowerCase())}`;
+}
+
+/** One key per user id, for a route metered by the account that is signed in. */
+export function userRateLimitKey(scope: string, userId: string): string {
+  return `ratelimit:${scope}:user:${userId}`;
 }
 
 /** One key per address *and* account, so a guesser is slowed without touching anyone else. */
