@@ -1,5 +1,14 @@
 # Progress
 
+## Handover
+
+**Where things stand.** `main` contains phases 0 to 3 and, now, phase 4: pull request #16 was merged as `0a677c5` after its head `36af161` passed all 18 checks (nine jobs on both the push and pull-request runs). The planned next phase is 2c — mobile OTP, shipped disabled behind `OTP_ENABLED`; nothing of it exists yet.
+
+- **Owed from phase 4**: the media-reference link table with `ON DELETE RESTRICT`, the media view route with its web proxy add its Playwright coverage, the CSV and ZIP bulk import slices, and the phase 4 claim table. All are listed in `docs/PHASE4-CHECKLIST.md`.
+- **Roadmap**: `docs/ROADMAP.md` is the order of phases and the launch-blocking items.
+- **Working with CI**: `e2e` and `database` are the slow jobs (3–5 min and ~1 min). A push cancels the previous run of the same event through the concurrency group, so push once and wait for both runs before the next push.
+- **Known launch blockers** that CI cannot prove: a real SMS provider used manually on staging, a real SMTP provider, and a presigned-URL signature/expiry test against the production object store (decision 0044).
+
 Honest status. "Verified by" names a CI run and the job in it that actually executed; nothing else counts. A row that has never executed in CI says so.
 
 | Phase | Scope | Built | Verified by | Known gaps |
