@@ -42,6 +42,7 @@ function config(overrides: Partial<AppEnv> = {}): AppEnv {
     OTP_SENDER_ID: '',
     OTP_DLT_ENTITY_ID: '',
     OTP_TEMPLATE_ID: '',
+    OTP_FAKE_FIXED_CODE: '',
     OTP_GATEWAY_URL: '',
     OTP_GATEWAY_AUTH_HEADER: '',
     OTP_GATEWAY_AUTH_VALUE: '',
