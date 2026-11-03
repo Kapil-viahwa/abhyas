@@ -442,3 +442,38 @@ model MediaAsset {
   @@map("media_assets")
 }
 
+
+
+/// Phase 2c: one code sent to one number. The code itself is never stored — `codeHmac` is
+/// an HMAC with a server secret, so a database read cannot recover a live code.
+model OtpRequest {
+  id              String    @id @default(uuid()) @db.Uuid
+  destination     String
+  destinationHash String    @map("destination_hash")
+  purpose         String
+  codeHmac        String    @map("code_hmac")
+  attempts        Int       @default(0)
+  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt      DateTime? @map("consumed_at") @db.Timestamptz(6)
+  ipHash          String?   @map("ip_hash")
+  deviceHash      String?   @map("device_hash")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([destinationHash], map: "otp_requests_destination_hash_idx")
+  @@index([createdAt], map: "otp_requests_created_at_idx")
+  @@map("otp_requests")
+}
+
+/// Phase 2c: one row per message handed to a provider, so the daily budget and the invoice
+/// can be reconciled against something the platform wrote down itself.
+model SmsCostLedger {
+  id                String   @id @default(uuid()) @db.Uuid
+  provider          String
+  destinationHash   String   @map("destination_hash")
+  cost              Decimal  @default(0) @db.Decimal(10, 4)
+  providerMessageId String?  @map("provider_message_id")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt], map: "sms_cost_ledger_created_at_idx")
+  @@map("sms_cost_ledger")
+}
