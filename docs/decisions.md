@@ -967,3 +967,60 @@ missing or short or well-known `OTP_HMAC_SECRET`, a missing `OTP_SENDER_ID`,
 `OTP_DLT_ENTITY_ID` or `OTP_TEMPLATE_ID`, and a gateway that is empty, not https, or missing its
 body template. The fake provider and the test Turnstile verifier refuse themselves as well, so
 the process cannot start in a state where a development shortcut would be reachable.
+
+
+## 0049 — An account is identified by a verified identifier, and mobile-first accounts hold no usable password
+
+**Status:** accepted · **Phase:** 2c
+
+A student who signs up with a mobile number has no email address, so `users.email` becomes
+nullable and a `users_identifier_present` CHECK requires a row to carry an email **or** a
+`first_verified_mobile` — never neither. Both identifiers are only ever written after they
+have been verified (an email link, or an OTP), so the row cannot claim an identifier nobody
+proved.
+
+`users.password_hash` stays `NOT NULL`. A mobile-first account is created with an Argon2id
+hash of 32 random bytes the platform generates and never stores in readable form, which makes
+password sign-in impossible for it until its owner sets a password through re-authentication.
+A nullable hash column was rejected: every password comparison on the platform would then
+carry a branch, and a forgotten branch is an authentication bypass.
+
+The consequences are written down rather than discovered later:
+
+- Password sign-in and password reset look the account up **by email**, so a mobile-first
+  account simply cannot be found by either. They answer exactly as an unknown address does.
+- Every screen, list and export that shows an email shows "No email linked" when it is null.
+- A sensitive change proves the holder by password, by a code sent to the account's own
+  verified number, or — for an account with no email — by a sign-in from the last fifteen
+  minutes (decision 0050).
+- A full-text search over the account list matches the name and the email; a mobile-only
+  account is found by name.
+
+The unique indexes are the real constraint, not the service: `users_email_key` compares the
+lower-cased value the normalising trigger writes, and `users_mobile_key` (plus
+`users_first_verified_mobile_key`) makes one phone one account. A test inserts a duplicate in
+a different case and proves Postgres refuses it.
+
+## 0050 — Re-authentication: password, then a code, then a sign-in from minutes ago
+
+**Status:** accepted · **Phase:** 2c
+
+Changing a password, deactivating an account, and (in item 3) linking or unlinking an
+identifier are all changes to how somebody signs in, so each one has to prove it is still
+the holder. `ReauthenticationService.assert` accepts, in this order:
+
+1. **The current password**, whenever one is offered. It is verified for every account that
+   has one, whichever way it was created — a mobile-first account that later chose a password
+   is asked for it.
+2. **A one-time code** sent to the account's own `first_verified_mobile`, purpose `REAUTH`.
+   The destination is read from the account, never from the request body, so the route can
+   never be used to send a code to a stranger. It is an ordinary OTP row: same HMAC storage,
+   five attempts, five minutes, same rate limits and the same 404 with `OTP_ENABLED=false`.
+3. **A sign-in from the last fifteen minutes**, and only for an account with **no email
+   address**. Such an account has no password anybody could type; a session created minutes
+   ago is the same evidence as a password typed a minute ago.
+
+Recent-ness is never accepted for an account with an email address: there the password is
+available and asking for it is what stops a stolen session from changing it. That asymmetry is
+deliberate and is proven by tests for both kinds of account. A stale session with no proof is
+a 403 naming both ways forward, not a generic refusal.

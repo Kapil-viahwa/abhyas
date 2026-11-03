@@ -11,8 +11,10 @@ import { AccountService } from './auth/account.service';
 import { AuthController } from './auth/auth.controller';
 import { AuthGuard } from './auth/auth.guard';
 import { AuthService } from './auth/auth.service';
+import { LinkingService } from './auth/linking.service';
 import { MobileIdentityService } from './auth/mobile.service';
 import { PermissionsService } from './auth/permissions.service';
+import { ReauthenticationService } from './auth/reauthentication.service';
 import { SESSIONS_SERVICE, SessionsService } from './auth/sessions.service';
 import { CatalogController } from './catalog/catalog.controller';
 import { CatalogService } from './catalog/catalog.service';
@@ -94,6 +96,8 @@ import { QuestionsService } from './questions/questions.service';
     },
     OtpService,
     MobileIdentityService,
+    ReauthenticationService,
+    LinkingService,
     MediaService,
     QuestionsService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.

@@ -189,6 +189,8 @@ model EmailToken {
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
   usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
   requestIp String?   @map("request_ip")
+  // The address a LINK_EMAIL token will confirm; null for verification and reset tokens.
+  destination String? @map("destination")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

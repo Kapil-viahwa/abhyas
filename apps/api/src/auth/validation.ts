@@ -181,19 +181,21 @@ export function parseForgotPasswordBody(body: unknown): ForgotPasswordInput {
 }
 
 export interface ChangePasswordInput {
-  readonly currentPassword: string;
+  /** The current password, when the account has one it knows. */
+  readonly currentPassword: string | undefined;
   readonly newPassword: string;
+  /** A re-authentication code, the path for an account created with a mobile number. */
+  readonly code: string | undefined;
 }
 
 export function parseChangePasswordBody(body: unknown): ChangePasswordInput {
   const record = asRecord(body);
-  const currentPassword = record.currentPassword;
 
-  if (typeof currentPassword !== 'string' || currentPassword === '') {
-    throw new BadRequestException('Enter your current password');
-  }
-
-  return { currentPassword, newPassword: parsePassword(record.newPassword) };
+  return {
+    currentPassword: optionalSecret(record.currentPassword),
+    newPassword: parsePassword(record.newPassword),
+    code: parseOptionalOtpCode(record.code),
+  };
 }
 
 export interface ResetPasswordInput {
@@ -210,17 +212,86 @@ export function parseResetPasswordBody(body: unknown): ResetPasswordInput {
 }
 
 export interface DeactivateInput {
-  readonly password: string;
+  readonly password: string | undefined;
+  readonly code: string | undefined;
 }
 
 export function parseDeactivateBody(body: unknown): DeactivateInput {
-  const password = asRecord(body).password;
+  const record = asRecord(body);
 
-  if (typeof password !== 'string' || password === '') {
-    throw new BadRequestException('Enter your password');
+  return {
+    password: optionalSecret(record.password),
+    code: parseOptionalOtpCode(record.code),
+  };
+}
+
+export interface ReauthenticationInput {
+  readonly turnstileToken: string;
+}
+
+/** Asking for a re-authentication code. The destination is never taken from the client. */
+export function parseReauthenticationBody(body: unknown): ReauthenticationInput {
+  return { turnstileToken: parseTurnstileToken(asRecord(body).turnstileToken) };
+}
+
+/** An empty or absent secret means "not offered", never "empty string is fine". */
+function optionalSecret(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/** A six-digit code, or nothing when none was offered: an empty proof is no proof. */
+function parseOptionalOtpCode(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return undefined;
   }
 
-  return { password };
+  return parseOtpCode(value);
+}
+
+export interface EmailLinkInput {
+  readonly email: string;
+  readonly password: string | undefined;
+  readonly code: string | undefined;
+}
+
+export function parseEmailLinkBody(body: unknown): EmailLinkInput {
+  const record = asRecord(body);
+
+  return {
+    email: parseEmail(record.email),
+    password: optionalSecret(record.password),
+    code: parseOptionalOtpCode(record.code),
+  };
+}
+
+export interface MobileLinkInput {
+  readonly destination: string;
+  readonly code: string;
+  readonly password: string | undefined;
+}
+
+export function parseMobileLinkBody(body: unknown): MobileLinkInput {
+  const record = asRecord(body);
+
+  return {
+    destination: parseDestination(record.destination),
+    code: parseOtpCode(record.code),
+    password: optionalSecret(record.password),
+  };
+}
+
+export interface UnlinkMobileInput {
+  readonly password: string | undefined;
+  readonly code: string | undefined;
+}
+
+export function parseUnlinkMobileBody(body: unknown): UnlinkMobileInput {
+  const record = asRecord(body);
+
+  return {
+    password: optionalSecret(record.password),
+    code: parseOptionalOtpCode(record.code),
+  };
 }
 
 const ROLE_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,31}$/;
