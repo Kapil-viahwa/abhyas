@@ -72,6 +72,10 @@ services:
       # address on this compose network. Never a subnet and never the internet (decision
       # 0052): anything wider would let an address the attacker chooses pick its own bucket.
       TRUST_PROXY: '172.31.0.10/32'
+      # The one header the web container writes, and the only one this API reads
+      # (decision 0055). Nginx overwrites X-Real-IP, so the web tier forwards it under
+      # the same name; X-Forwarded-For is never read here.
+      TRUST_CLIENT_IP_HEADER: 'x-real-ip'
       # The web container's own address: never route a cache drop through the public edge.
       REVALIDATE_URL: http://web:3000/api/revalidate
     expose:
@@ -107,13 +111,18 @@ services:
       WEB_URL: ${WEB_URL:?WEB_URL is required}
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY is required}
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
-      # One hop in front of this tier: Nginx, on the host, which overwrites X-Real-IP and
-      # X-Forwarded-For with $remote_addr (docs/deployment.md). A count, not "true": the
-      # browser can send both headers itself (decision 0052).
+      # One hop in front of this tier: Nginx, on the host, which overwrites X-Real-IP with
+      # $remote_addr (docs/deployment.md). A count, not "true": the browser can send both
+      # headers itself (decision 0052).
       TRUST_PROXY: '1'
+      # Exactly one header is read, and it is the one Nginx overwrites (decision 0055).
+      TRUST_CLIENT_IP_HEADER: 'x-real-ip'
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
-      - '${WEB_PORT:-3000}:3000'
+      # Loopback only: Docker publishes around ufw, so a port bound on every interface is
+      # reachable from the internet even when the firewall says otherwise. Only the host's
+      # Nginx may reach this tier, and it connects to 127.0.0.1 (docs/deployment.md).
+      - '127.0.0.1:${WEB_PORT:-3000}:3000'
     # A fixed address so the API can name exactly this container as its trusted proxy.
     networks:
       default:
@@ -135,6 +144,9 @@ services:
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?TURNSTILE_SECRET_KEY is required}
       SMS_PROVIDER: ${SMS_PROVIDER:?SMS_PROVIDER is required}
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:?EMAIL_PROVIDER is required}
+      # The worker boots through the same validator as the API, which requires this in
+      # production even though the worker never asks for a cache drop itself.
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}

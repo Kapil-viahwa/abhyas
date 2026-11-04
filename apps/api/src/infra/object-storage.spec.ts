@@ -28,6 +28,7 @@ function config(overrides: Partial<AppEnv> = {}): AppEnv {
     EMAIL_PROVIDER: 'console',
     ALLOW_DEV_LOGIN: true,
     TRUST_PROXY: false,
+    TRUST_CLIENT_IP_HEADER: 'x-real-ip',
     TRUST_FORWARDED_IP_FOR_TESTS: false,
     REVALIDATE_SECRET: 'dev-only-revalidate-secret',
     S3_ENDPOINT: '',

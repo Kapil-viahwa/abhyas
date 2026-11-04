@@ -79,6 +79,28 @@ if (!services.api) {
   passes.push('service "api" publishes no host ports');
 }
 
+// Docker inserts its own iptables rules for a published port, which bypass ufw: a port bound
+// on 0.0.0.0 is reachable from the internet even when the firewall says it is closed. So the
+// only published port is the web tier's, and only on loopback, where the host's Nginx is the
+// one thing that can reach it (docs/deployment.md).
+const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'];
+
+for (const [name, service] of Object.entries(services)) {
+  for (const port of service.ports ?? []) {
+    const host = String(port.host_ip ?? '');
+
+    if (!LOOPBACK_ADDRESSES.includes(host)) {
+      failures.push(
+        `service "${name}" publishes ${JSON.stringify(port)} on ${
+          host === '' ? 'every interface' : host
+        }; production publishes only on loopback (127.0.0.1 or ::1), behind Nginx`,
+      );
+    } else {
+      passes.push(`service "${name}" publishes ${String(port.published ?? '')} only on loopback (${host})`);
+    }
+  }
+}
+
 // Client-address trust (decision 0052): the API trusts exactly the web container by address,
 // and the web tier trusts exactly the hops in front of it. A subnet, or "true", here would
 // let a caller pick the address it is counted by and step out of the per-IP limits.
@@ -104,6 +126,29 @@ if (!/^[0-9]+$/.test(webTrustProxy) || Number(webTrustProxy) < 1 || Number(webTr
   );
 } else {
   passes.push(`service "web" trusts ${webTrustProxy} edge hop(s) in front of it`);
+}
+
+// Exactly one header per tier, and the same one on both (decision 0055): the web tier forwards
+// the address under the name the API reads, and reading both headers would let a browser
+// forge the one the edge leaves alone.
+const CLIENT_IP_HEADERS = ['x-real-ip', 'x-forwarded-for'];
+const apiClientIpHeader = String(services.api?.environment?.TRUST_CLIENT_IP_HEADER ?? '').toLowerCase();
+const webClientIpHeader = String(services.web?.environment?.TRUST_CLIENT_IP_HEADER ?? '').toLowerCase();
+
+if (!CLIENT_IP_HEADERS.includes(apiClientIpHeader)) {
+  failures.push(
+    `service "api" sets TRUST_CLIENT_IP_HEADER "${apiClientIpHeader}"; it must name the one header it reads (${CLIENT_IP_HEADERS.join(' or ')})`,
+  );
+} else if (!CLIENT_IP_HEADERS.includes(webClientIpHeader)) {
+  failures.push(
+    `service "web" sets TRUST_CLIENT_IP_HEADER "${webClientIpHeader}"; it must name the one header it reads (${CLIENT_IP_HEADERS.join(' or ')})`,
+  );
+} else if (apiClientIpHeader !== webClientIpHeader) {
+  failures.push(
+    `the api reads "${apiClientIpHeader}" but the web tier forwards "${webClientIpHeader}"; both must name the same header`,
+  );
+} else {
+  passes.push(`api and web agree on one client-address header ("${apiClientIpHeader}")`);
 }
 
 for (const name of ['api', 'worker', 'migrations']) {

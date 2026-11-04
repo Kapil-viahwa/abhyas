@@ -73,6 +73,12 @@ Production invariants, asserted by `scripts/validate-compose-prod.mjs` in the `d
 - Every secret is required by name (`${VAR:?message}`), so rendering the file without one fails
   before any container starts. A default secret is therefore impossible to deploy.
 - Named volumes only; no bind mounts of host paths.
+- The web port is published on **loopback only** (`127.0.0.1:${WEB_PORT:-3000}:3000`).
+  Docker writes its own iptables rules for a published port, so a port bound on `0.0.0.0` is
+  reachable from the internet even when `ufw` says otherwise — the firewall never sees that
+  traffic. Only the host's Nginx may reach the web tier, and it connects to `127.0.0.1`.
+  `scripts/validate-compose-prod.mjs` fails the `docker` job for any published port that is
+  not loopback.
 - Migrations run as a one-shot service that the API waits on, so a replica never serves against
   an unmigrated schema.
 
@@ -118,9 +124,13 @@ TRUST_PROXY: '1'    # web: exactly one proxy — the host Nginx — in front of 
 
 Here `TRUST_PROXY` is a hop count and nothing else; production refuses `true`, `*` and an
 address list, because a Next.js route handler cannot see the socket's peer and therefore
-cannot check an address. The tier reads `X-Real-IP` first — the single value Nginx overwrites
-— and otherwise the entry at the named hop **from the right** of `X-Forwarded-For`. The
-left-most entry is never read: that is the one a browser can write.
+cannot check an address. **One header, named, with no fallback**: `TRUST_CLIENT_IP_HEADER`
+(`x-real-ip` by default) is the only header either tier reads, and the web tier forwards the
+address under that same name (decision 0055). Reading `X-Real-IP` *or* `X-Forwarded-For` would
+undo the choice, because the header the edge does not write is the one a browser can set
+itself. A production boot that names a proxy must name the header too. With `x-forwarded-for`
+the tier reads the entry `hops` in from the right of the chain, so the left-most entry — the
+one a browser can prepend — is never read.
 
 **Every value is validated before it is used.** Both tiers drop anything that is not exactly
 one `net.isIP` address, so garbage, a list, an oversized value, a newline or a spreadsheet
@@ -130,10 +140,14 @@ So the edge must both **overwrite** the headers and be **named**:
 
 ```nginx
 # Nginx, on the server that fronts web:3000 and api:3001
-proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Real-IP         $remote_addr;   # the one header the tiers read
 proxy_set_header X-Forwarded-For   $remote_addr;   # $remote_addr, NOT $proxy_add_x_forwarded_for
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
+
+The two headers are written the same way so a later switch of `TRUST_CLIENT_IP_HEADER` does
+not need an Nginx change, but only the configured one is ever read — and it must be
+`$remote_addr`, overwritten rather than appended.
 
 `$proxy_add_x_forwarded_for` appends what the browser sent, which is the one thing that must
 not happen. With `proxy_set_header X-Forwarded-For $remote_addr` the browser's own value is

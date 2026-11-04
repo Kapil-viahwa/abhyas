@@ -1255,3 +1255,31 @@ operator to read `otp:budget:count:<day>` against the budget, to alert when it p
 and to page when `otp:alerts:SMS_BUDGET_EXHAUSTED:<day>` becomes non-zero or
 `otp:budget:closed:<day>` latches. Sharing the budget per client address, so one attacker cannot
 spend the day's allowance for everybody, is the next step and is owed with the staging test.
+
+
+## 0055 — One client-address header per tier, named
+
+**Decided in phase 2c hardening, before any deployment. Date: post-2c hardening.**
+
+**One header, never two.** `TRUST_CLIENT_IP_HEADER` names the single request header a tier
+reads for the client address: `x-real-ip` (the default) or `x-forwarded-for`. The other header
+is not opened at all, so there is no fallback to fall back to. Believing both is worse than
+believing neither: an edge that overwrites `X-Real-IP` leaves `X-Forwarded-For` to the browser,
+and an edge that appends to `X-Forwarded-For` leaves `X-Real-IP` to it, so a request could
+arrive with a truthful header and a forged second one and the resolver would take whichever it
+happened to prefer. With one named header, the forged one is inert.
+
+**The name is part of naming the proxy.** A production boot that sets `TRUST_PROXY` to
+anything but `false` and does not set `TRUST_CLIENT_IP_HEADER` is refused; the web tier refuses
+the same combination when it names a hop. `docker-compose.prod.yml` sets `x-real-ip` on both
+tiers — Nginx overwrites that header with `$remote_addr` — and the web tier forwards the
+address under the same name, which `scripts/validate-compose-prod.mjs` checks. Each tier still
+reads the value as a chain of one, so switching to `x-forwarded-for` is a configuration change
+and needs no code change.
+
+**Proof.** `apps/api/src/config/trust-proxy.spec.ts` proves that the resolver reads only the
+value it is handed; `apps/api/test/client-ip.test.ts` boots the real API twice more, once per
+header name, and proves that a spoofed `X-Forwarded-For` is ignored when `X-Real-IP` is the
+configured header and the reverse; `apps/web/src/lib/client-ip.spec.ts` proves the same on the
+web tier; `packages/shared/src/env.spec.ts` and `apps/web/src/lib/config.spec.ts` prove the
+production refusal and the default.

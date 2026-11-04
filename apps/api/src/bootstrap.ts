@@ -57,8 +57,10 @@ export async function createApiApplication(options: CreateApiOptions = {}): Prom
   // The client address, resolved once per request from this boot's own policy. Every
   // per-IP limit, audit row and session record reads `request.clientIp` through
   // `requestMeta`, so the policy the process booted with is the policy the request is
-  // counted under — not a value a header can choose (decision 0052).
+  // counted under — not a value a header can choose (decision 0052). Only the one header
+  // the boot names is read (decision 0055).
   const instance = app.getHttpAdapter().getInstance();
+  const clientIpHeader = config.TRUST_CLIENT_IP_HEADER;
 
   // Fastify seals its request objects, so the value is declared before a request can set it.
   instance.decorateRequest('clientIp', null);
@@ -66,8 +68,7 @@ export async function createApiApplication(options: CreateApiOptions = {}): Prom
     (request as FastifyRequest & { clientIp: string | null }).clientIp =
       resolveClientAddress(config.TRUST_PROXY, {
         socketAddress: request.raw.socket?.remoteAddress,
-        forwardedFor: headerValue(request.headers['x-forwarded-for']),
-        realIp: headerValue(request.headers['x-real-ip']),
+        headerValue: headerValue(request.headers[clientIpHeader]),
       }) ?? null;
     done();
   });

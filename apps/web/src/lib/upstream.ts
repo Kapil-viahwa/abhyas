@@ -97,7 +97,8 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
     headers.authorization = `Bearer ${String(options.accessToken)}`;
   }
   if (options.clientIp !== undefined && options.clientIp !== '') {
-    headers['x-forwarded-for'] = options.clientIp;
+    // Forwarded under the one header the API is configured to read, never both (decision 0055).
+    headers[webConfig().clientIpHeader] = options.clientIp;
   }
 
   const controller = new AbortController();
@@ -179,34 +180,36 @@ export function errorMessage(body: unknown): string {
  * address it liked and step out of the API's per-IP counters, so no address is forwarded at
  * all (decision 0052).
  *
- * The header is never believed as a whole. `X-Real-IP` is the single value the edge
- * overwrites with the connection's address, and `X-Forwarded-For` is read from the right,
- * so a chain the browser prepended a fake address to still resolves to the one the trusted
- * proxy wrote.
+ * Exactly one header is read — the one `TRUST_CLIENT_IP_HEADER` names — and there is no
+ * fallback to the other (decision 0055). `X-Real-IP` carries one address; a value of
+ * `X-Forwarded-For` with commas is read from the right, so a chain the browser prepended a
+ * fake address to still resolves to the one the trusted proxy wrote.
  */
 export function clientIpFrom(request: Request): string | undefined {
-  const hops = webConfig().forwardedIpHops;
+  const config = webConfig();
+  const hops = config.forwardedIpHops;
 
   if (hops === null) {
     return undefined;
   }
 
-  const realIp = clientAddress(request.headers.get('x-real-ip'));
-  if (realIp !== undefined) {
-    return realIp;
-  }
+  return statedAddress(request.headers.get(config.clientIpHeader), hops);
+}
 
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded === null) {
+/** The address a header states `hops` from the right, or `undefined` when it names none. */
+function statedAddress(value: string | null, hops: number): string | undefined {
+  if (value === null) {
     return undefined;
   }
 
-  const chain = forwarded
+  const chain = value
     .split(',')
     .map((part) => part.trim())
     .filter((part) => part !== '');
 
-  return clientAddress(chain[chain.length - hops]);
+  const index = chain.length - hops;
+
+  return index < 0 ? undefined : clientAddress(chain[index]);
 }
 
 /**

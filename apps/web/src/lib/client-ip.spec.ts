@@ -4,15 +4,22 @@ import { webConfig } from './config';
 import { clientAddress, clientIpFrom } from './upstream';
 
 /**
- * The web tier and the client address (decision 0052).
+ * The web tier and the client address (decisions 0052/0055).
  *
  * The API's per-IP limits are only as good as the address it is handed. A browser can send
- * a forwarding header of its own, so this tier reads only the entry the trusted edge wrote —
- * from the right of the chain, never the left-most one — and forwards nothing that is not
- * exactly one IP address.
+ * a forwarding header of its own, so this tier reads exactly one header — the one
+ * `TRUST_CLIENT_IP_HEADER` names — at the named hop from the right, and forwards nothing that
+ * is not exactly one IP address. The header it does not name is never opened.
  */
 
-const KEYS = ['TRUST_PROXY', 'TRUST_FORWARDED_IP_FOR_TESTS', 'NODE_ENV', 'TURNSTILE_SITE_KEY', 'WEB_URL'];
+const KEYS = [
+  'TRUST_PROXY',
+  'TRUST_CLIENT_IP_HEADER',
+  'TRUST_FORWARDED_IP_FOR_TESTS',
+  'NODE_ENV',
+  'TURNSTILE_SITE_KEY',
+  'WEB_URL',
+];
 
 afterEach(() => {
   for (const key of KEYS) {
@@ -42,6 +49,7 @@ describe('the web tier and the client address', () => {
 
   it('reads the entry at the named hop from the right, so a prepended fake is ignored', () => {
     process.env.TRUST_PROXY = '1';
+    process.env.TRUST_CLIENT_IP_HEADER = 'x-forwarded-for';
 
     expect(clientIpFrom(request({ 'x-forwarded-for': '6.6.6.6, 198.51.100.7' }))).toBe('198.51.100.7');
 
@@ -50,21 +58,43 @@ describe('the web tier and the client address', () => {
     expect(clientIpFrom(request({ 'x-forwarded-for': '6.6.6.6, 198.51.100.7, 10.0.0.9' }))).toBe('198.51.100.7');
   });
 
-  it('prefers X-Real-IP, the single value the edge overwrites, over a chain', () => {
+  it('reads x-real-ip when it is the configured header, and ignores a spoofed X-Forwarded-For', () => {
     process.env.TRUST_PROXY = '1';
+    // The default: an edge that overwrites X-Real-IP leaves X-Forwarded-For to the browser.
+    expect(webConfig().clientIpHeader).toBe('x-real-ip');
 
-    // Both headers are valid single addresses: the one the edge writes to directly wins,
-    // because a chain is the header a client can grow and this one it cannot.
-    expect(clientIpFrom(request({ 'x-forwarded-for': '198.51.100.7', 'x-real-ip': '203.0.113.9' }))).toBe(
-      '203.0.113.9',
-    );
+    expect(
+      clientIpFrom(
+        request({
+          'x-forwarded-for': '203.0.113.9',
+          'x-real-ip': '198.51.100.7',
+        }),
+      ),
+    ).toBe('198.51.100.7');
 
-    // And the hop-counted chain is the answer when that is all the edge wrote.
-    expect(clientIpFrom(request({ 'x-forwarded-for': '6.6.6.6, 198.51.100.7' }))).toBe('198.51.100.7');
+    // Only the forged header: nothing is forwarded, because the one configured is absent.
+    expect(clientIpFrom(request({ 'x-forwarded-for': '203.0.113.9' }))).toBeUndefined();
+  });
+
+  it('reads X-Forwarded-For when it is configured, and ignores a spoofed X-Real-IP', () => {
+    process.env.TRUST_PROXY = '1';
+    process.env.TRUST_CLIENT_IP_HEADER = 'x-forwarded-for';
+
+    expect(
+      clientIpFrom(
+        request({
+          'x-real-ip': '203.0.113.9',
+          'x-forwarded-for': '198.51.100.7',
+        }),
+      ),
+    ).toBe('198.51.100.7');
+
+    expect(clientIpFrom(request({ 'x-real-ip': '203.0.113.9' }))).toBeUndefined();
   });
 
   it('forwards only the one address the hop names, never a raw header', () => {
     process.env.TRUST_PROXY = '1';
+    process.env.TRUST_CLIENT_IP_HEADER = 'x-forwarded-for';
 
     const rejected = [
       'not-an-address',
@@ -109,6 +139,23 @@ describe('the web tier and the client address', () => {
     expect(() => webConfig({ ...PRODUCTION, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY is refused in production/);
     expect(() => webConfig({ ...PRODUCTION, TRUST_PROXY: '*' })).toThrow(/TRUST_PROXY is refused in production/);
 
-    expect(webConfig({ ...PRODUCTION, TRUST_PROXY: '1' }).forwardedIpHops).toBe(1);
+    expect(
+      webConfig({ ...PRODUCTION, TRUST_PROXY: '1', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).forwardedIpHops,
+    ).toBe(1);
+  });
+
+  it('requires the one header to be named when production names a hop', () => {
+    expect(() => webConfig({ ...PRODUCTION, TRUST_PROXY: '1' })).toThrow(
+      /TRUST_CLIENT_IP_HEADER must name the one header/,
+    );
+
+    expect(webConfig({ ...PRODUCTION, TRUST_PROXY: '1', TRUST_CLIENT_IP_HEADER: 'x-forwarded-for' }).clientIpHeader).toBe(
+      'x-forwarded-for',
+    );
+
+    expect(() => webConfig({ ...PRODUCTION, TRUST_CLIENT_IP_HEADER: 'forwarded' })).toThrow(
+      /TRUST_CLIENT_IP_HEADER must be one of/,
+    );
   });
 });
+

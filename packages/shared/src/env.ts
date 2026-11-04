@@ -54,6 +54,21 @@ export const MIN_REVALIDATE_SECRET_LENGTH = 16;
 
 export const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
 
+/**
+ * The one request header a tier reads for the client address (decision 0055).
+ *
+ * An edge either overwrites `X-Real-IP` with the connection's address or appends the address
+ * it accepted to `X-Forwarded-For`. Believing both would undo the choice: the header the edge
+ * does *not* write is the one a browser can set itself, so a request could arrive with a
+ * truthful one and a forged other. Each tier therefore names exactly one, and reads only it.
+ */
+export type ClientIpHeader = 'x-real-ip' | 'x-forwarded-for';
+
+export const CLIENT_IP_HEADERS: readonly ClientIpHeader[] = ['x-real-ip', 'x-forwarded-for'];
+
+/** The value a well-configured edge overwrites, so it is the default and never a fallback. */
+export const DEFAULT_CLIENT_IP_HEADER: ClientIpHeader = 'x-real-ip';
+
 /** The narrowest IPv4 and IPv6 blocks a production boot will trust as a proxy. */
 const MIN_TRUSTED_IPV4_PREFIX = 8;
 const MIN_TRUSTED_IPV6_PREFIX = 32;
@@ -135,6 +150,11 @@ export interface AppEnv {
    * production (decision 0052).
    */
   readonly TRUST_PROXY: boolean | number | readonly string[];
+  /**
+   * The single request header this tier reads for the client address (decision 0055). It is
+   * never a fallback chain: the header not named here is not read at all.
+   */
+  readonly TRUST_CLIENT_IP_HEADER: ClientIpHeader;
   /**
    * Development and CI only: let the web tier believe a browser-supplied forwarding header,
    * so the browser suite can use a fresh address per test. Refused in production.
@@ -574,6 +594,29 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
   }
 
+  // Exactly one header is read (decision 0055). Naming it is part of naming the proxy: a
+  // production boot that trusts a proxy has to say which header that proxy writes, because
+  // the pair cannot be guessed and believing both is the bug this replaces.
+  const trustClientIpHeaderRaw = read(raw, 'TRUST_CLIENT_IP_HEADER').toLowerCase();
+  let trustClientIpHeader: ClientIpHeader = DEFAULT_CLIENT_IP_HEADER;
+
+  if (trustClientIpHeaderRaw !== '') {
+    if (!CLIENT_IP_HEADERS.includes(trustClientIpHeaderRaw as ClientIpHeader)) {
+      issues.push({
+        variable: 'TRUST_CLIENT_IP_HEADER',
+        message: `must be one of ${CLIENT_IP_HEADERS.join(', ')}`,
+      });
+    } else {
+      trustClientIpHeader = trustClientIpHeaderRaw as ClientIpHeader;
+    }
+  } else if (isProduction && trustProxy !== false) {
+    issues.push({
+      variable: 'TRUST_CLIENT_IP_HEADER',
+      message:
+        'must name the one header the edge writes (x-real-ip or x-forwarded-for) when TRUST_PROXY is enabled in production',
+    });
+  }
+
   const trustForwardedForTests = read(raw, 'TRUST_FORWARDED_IP_FOR_TESTS').toLowerCase() === 'true';
   if (trustForwardedForTests && isProduction) {
     issues.push({ variable: 'TRUST_FORWARDED_IP_FOR_TESTS', message: 'is refused in production' });
@@ -611,6 +654,7 @@ export function validateEnv(raw: RawEnv): AppEnv {
     EMAIL_PROVIDER: emailProvider,
     ALLOW_DEV_LOGIN: allowDevLogin,
     TRUST_PROXY: trustProxy,
+    TRUST_CLIENT_IP_HEADER: trustClientIpHeader,
     TRUST_FORWARDED_IP_FOR_TESTS: trustForwardedForTests,
     REVALIDATE_SECRET: revalidateRaw === '' ? DEFAULT_REVALIDATE_SECRET : revalidateRaw,
     S3_ENDPOINT: s3Endpoint,
