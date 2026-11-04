@@ -53,7 +53,7 @@ describe('loadConfig', () => {
           'REDIS_URL',
           'AUTH_SECRET',
           'TURNSTILE_SECRET_KEY',
-          'SMS_PROVIDER',
+          'S3_ENDPOINT',
         ]),
       );
     }

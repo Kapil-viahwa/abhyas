@@ -128,6 +128,12 @@ OTP introduces **no new permission codes**, because it introduces no privileged 
   `ReauthenticationService` — the current password, a code sent to the account's own verified
   number, or (for an account with no email) a sign-in from the last fifteen minutes; it is never
   `@Public` and never takes the account id from the body — the id comes from the session.
+- **The code wins while OTP is on (decision 0053).** A request with no proof fails after five
+  wrong proofs in fifteen minutes (`429`), and every wrong proof writes `IDENTITY_REAUTH_FAILED`.
+  For an account with no email address, the fresh session is accepted only when `OTP_ENABLED`
+  is false or the account has no verified number; with the switch on, a code to the account's
+  own number is required, including when adding or removing an identifier. The account page
+  offers "Send confirmation code" for those accounts, and the link and unlink forms ask for it.
 - Linking and unlinking an email is `@Authenticated()` and re-proves the holder the same way;
   taking away the last identifier an account has is refused, so an account can never become
   unreachable.
