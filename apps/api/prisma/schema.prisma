@@ -40,8 +40,11 @@ model Role {
 
 model User {
   id               String    @id @default(uuid()) @db.Uuid
-  email            String    @unique(map: "users_email_key")
+  // Nullable since phase 2c: an account may be identified by a verified mobile only.
+  email            String?   @unique(map: "users_email_key")
   mobile           String?   @unique(map: "users_mobile_key")
+  // E.164, written once a number has been verified; unique across the platform.
+  firstVerifiedMobile String? @map("first_verified_mobile")
   passwordHash     String    @map("password_hash")
   fullName         String    @map("full_name")
   roleId           String    @map("role_id") @db.Uuid
@@ -186,6 +189,8 @@ model EmailToken {
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
   usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
   requestIp String?   @map("request_ip")
+  // The address a LINK_EMAIL token will confirm; null for verification and reset tokens.
+  destination String? @map("destination")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -442,3 +447,38 @@ model MediaAsset {
   @@map("media_assets")
 }
 
+
+
+/// Phase 2c: one code sent to one number. The code itself is never stored — `codeHmac` is
+/// an HMAC with a server secret, so a database read cannot recover a live code.
+model OtpRequest {
+  id              String    @id @default(uuid()) @db.Uuid
+  destination     String
+  destinationHash String    @map("destination_hash")
+  purpose         String
+  codeHmac        String    @map("code_hmac")
+  attempts        Int       @default(0)
+  expiresAt       DateTime  @map("expires_at") @db.Timestamptz(6)
+  consumedAt      DateTime? @map("consumed_at") @db.Timestamptz(6)
+  ipHash          String?   @map("ip_hash")
+  deviceHash      String?   @map("device_hash")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([destinationHash], map: "otp_requests_destination_hash_idx")
+  @@index([createdAt], map: "otp_requests_created_at_idx")
+  @@map("otp_requests")
+}
+
+/// Phase 2c: one row per message handed to a provider, so the daily budget and the invoice
+/// can be reconciled against something the platform wrote down itself.
+model SmsCostLedger {
+  id                String   @id @default(uuid()) @db.Uuid
+  provider          String
+  destinationHash   String   @map("destination_hash")
+  cost              Decimal  @default(0) @db.Decimal(10, 4)
+  providerMessageId String?  @map("provider_message_id")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([createdAt], map: "sms_cost_ledger_created_at_idx")
+  @@map("sms_cost_ledger")
+}

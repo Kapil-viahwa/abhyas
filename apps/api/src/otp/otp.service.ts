@@ -1,0 +1,503 @@
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
+
+import { writeIdentityAudit } from '../auth/audit';
+import type { RequestMetadata } from '../auth/request';
+import { loadConfig } from '../config/config';
+import { DatabaseService } from '../infra/database.service';
+import { RateLimiter, ipRateLimitKey } from '../infra/rate-limiter';
+import { DATABASE_PROBE } from '../infra/tokens';
+import { TURNSTILE_VERIFIER, type TurnstileVerifier } from '../infra/turnstile-verifier';
+import {
+  InvalidMobileError,
+  OTP_LIMITS,
+  OTP_MAX_ATTEMPTS,
+  OTP_SMS_COST,
+  OTP_TTL_SECONDS,
+  businessDate,
+  codeMatches,
+  fixedCodeFor,
+  generateCode,
+  hashCode,
+  isSequentialDigits,
+  normaliseMobile,
+  otpAlertKey,
+  otpAnyPurposeLimitKey,
+  otpBudgetCountKey,
+  otpBudgetKey,
+  otpDeviceLimitKey,
+  otpNumberLimitKey,
+  otpVerifyIpKey,
+  otpVerifyNumberKey,
+  resendCooldownSeconds,
+  startOfBusinessDay,
+} from './otp-code';
+import { OTP_SMS_PROVIDER, destinationHash, type SmsProvider } from './sms-provider';
+
+/**
+ * The OTP service: one code in, one code out, and every abuse control around them.
+ *
+ * The shape of the promise to a client is deliberately flat. A request either answers
+ * "accepted" — the same body, the same status, the same work whether the number belongs to
+ * an account or to nobody — or it is refused by a limit. That is what keeps this endpoint
+ * from becoming a membership oracle.
+ */
+
+export const OTP_PURPOSES = ['SIGNUP', 'LOGIN', 'LINK', 'REAUTH'] as const;
+export type OtpPurpose = (typeof OTP_PURPOSES)[number];
+
+export const OTP_ALERTS = {
+  requestLimited: 'OTP_REQUEST_LIMITED',
+  verifyLimited: 'OTP_VERIFY_LIMITED',
+  sendFailed: 'OTP_SEND_FAILED',
+  budgetExhausted: 'SMS_BUDGET_EXHAUSTED',
+  anomaly: 'OTP_ANOMALY_DETECTED',
+} as const;
+
+/** A refusal that carries how long the client should wait, so the route can set `retry-after`. */
+export class OtpThrottledException extends HttpException {
+  constructor(
+    message: string,
+    readonly retryAfterSeconds: number,
+  ) {
+    super(message, HttpStatus.TOO_MANY_REQUESTS);
+    this.name = 'OtpThrottledException';
+  }
+}
+
+export function parseOtpPurpose(value: unknown): OtpPurpose {
+  const purpose = typeof value === 'string' ? value.trim().toUpperCase() : '';
+
+  if (!OTP_PURPOSES.includes(purpose as OtpPurpose)) {
+    throw new BadRequestException('The OTP purpose is not valid');
+  }
+
+  return purpose as OtpPurpose;
+}
+
+export interface OtpRequestInput {
+  readonly destination: string;
+  readonly purpose: OtpPurpose | string;
+  readonly turnstileToken: string;
+  readonly deviceId?: string | undefined;
+}
+
+export interface OtpRequestResult {
+  readonly status: 'accepted';
+  /** How long before another resend is worth asking for. */
+  readonly resendAfterSeconds: number;
+}
+
+export interface OtpVerifyInput {
+  readonly destination: string;
+  readonly purpose: OtpPurpose | string;
+  readonly code: string;
+  readonly deviceId?: string | undefined;
+}
+
+export interface OtpVerifyResult {
+  /** E.164, normalised. The caller resolves the account; this service never does. */
+  readonly destination: string;
+}
+
+@Injectable()
+export class OtpService {
+  private readonly logger = new Logger(OtpService.name);
+  private readonly enabled: boolean;
+  private readonly hmacSecret: string;
+  private readonly allowedCountryCodes: readonly string[];
+  private readonly dailyBudget: number;
+  private readonly templateId: string;
+  /** A code a browser test can know, or `null` for a random one (decision 0051). */
+  private readonly fixedCode: string | null;
+
+  constructor(
+    @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
+    @Inject(RateLimiter) private readonly limiter: RateLimiter,
+    @Inject(TURNSTILE_VERIFIER) private readonly turnstile: TurnstileVerifier,
+    @Inject(OTP_SMS_PROVIDER) private readonly provider: SmsProvider | null,
+  ) {
+    const config = loadConfig(process.env);
+    this.enabled = config.OTP_ENABLED;
+    this.hmacSecret = config.OTP_HMAC_SECRET;
+    this.allowedCountryCodes = config.OTP_ALLOWED_COUNTRY_CODES;
+    this.dailyBudget = config.OTP_SMS_DAILY_BUDGET;
+    this.templateId = config.OTP_TEMPLATE_ID;
+    this.fixedCode = fixedCodeFor({
+      otpEnabled: config.OTP_ENABLED,
+      nodeEnv: config.NODE_ENV,
+      smsProvider: config.SMS_PROVIDER,
+      fixedCode: config.OTP_FAKE_FIXED_CODE,
+    });
+  }
+
+  private get prisma() {
+    return this.database.prisma;
+  }
+
+  /**
+   * The master switch, at the service boundary. Every entry point calls this first: with OTP
+   * off the platform answers 404, exactly as if these routes had never been deployed.
+   */
+  assertEnabled(): void {
+    if (!this.enabled) {
+      throw new NotFoundException('Not found');
+    }
+  }
+
+  /** Whether the master switch is on for this boot, for a caller that offers a proof instead. */
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  async requestCode(input: OtpRequestInput, meta: RequestMetadata = {}): Promise<OtpRequestResult> {
+    this.assertEnabled();
+
+    const purpose = parseOtpPurpose(input.purpose);
+    const destination = this.normalise(input.destination);
+    const now = new Date();
+
+    // No code leaves for a request that did not pass a human check.
+    const token = typeof input.turnstileToken === 'string' ? input.turnstileToken : '';
+    if (!(await this.turnstile.verify(token, meta.ip))) {
+      throw new BadRequestException('The human verification failed. Please try again.');
+    }
+
+    const secret = this.hmacSecret;
+    const destinationDigest = destinationHash(destination, secret);
+    const ipDigest = meta.ip === undefined || meta.ip.trim() === '' ? null : destinationHash(meta.ip.trim(), secret);
+    const deviceDigest =
+      input.deviceId === undefined || input.deviceId.trim() === ''
+        ? null
+        : destinationHash(input.deviceId.trim(), secret);
+
+    const rules = [
+      {
+        key: otpNumberLimitKey(purpose, destinationDigest, 'hour'),
+        limit: OTP_LIMITS.perNumberPerHour,
+        windowSeconds: 3600,
+      },
+      {
+        key: otpNumberLimitKey(purpose, destinationDigest, 'day'),
+        limit: OTP_LIMITS.perNumberPerDay,
+        windowSeconds: 86_400,
+      },
+      {
+        key: ipRateLimitKey('otp-request', meta.ip ?? ''),
+        limit: OTP_LIMITS.perIpPerHour,
+        windowSeconds: 3600,
+      },
+      {
+        // Across every purpose: the way to multiply a per-flow cap is to relabel the request.
+        key: otpAnyPurposeLimitKey(destinationDigest, 'hour'),
+        limit: OTP_LIMITS.anyPurposePerNumberPerHour,
+        windowSeconds: 3600,
+      },
+      {
+        key: otpAnyPurposeLimitKey(destinationDigest, 'day'),
+        limit: OTP_LIMITS.anyPurposePerNumberPerDay,
+        windowSeconds: 86_400,
+      },
+      ...(deviceDigest === null
+        ? []
+        : [
+            {
+              key: otpDeviceLimitKey(deviceDigest),
+              limit: OTP_LIMITS.perDevicePerHour,
+              windowSeconds: 3600,
+            },
+          ]),
+    ];
+
+    const denial = await this.limiter.consumeAll(rules);
+
+    if (denial !== null) {
+      // A burst from one address, or one number asking far too often, is the anomaly the
+      // audit trail should be able to name afterwards.
+      await this.recordAlarm(
+        OTP_ALERTS.requestLimited,
+        { purpose, destinationHash: destinationDigest, ipHash: ipDigest },
+        now,
+      );
+      throw new OtpThrottledException('Too many codes requested. Please try again later.', denial.retryAfterSeconds);
+    }
+
+    const recent = await this.prisma.otpRequest.count({
+      where: {
+        destinationHash: destinationDigest,
+        purpose,
+        createdAt: { gte: new Date(now.getTime() - 3_600_000) },
+      },
+    });
+
+    const cooldown = resendCooldownSeconds(recent);
+    const last = await this.prisma.otpRequest.findFirst({
+      where: { destinationHash: destinationDigest, purpose },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+
+    if (last !== null) {
+      const elapsedSeconds = (now.getTime() - last.createdAt.getTime()) / 1_000;
+      if (elapsedSeconds < cooldown) {
+        throw new OtpThrottledException(
+          'A code was sent moments ago. Please wait before asking for another.',
+          Math.max(1, Math.ceil(cooldown - elapsedSeconds)),
+        );
+      }
+    }
+
+    await this.assertBudget(now);
+
+    // Random, unless a test asked the fake provider for a code it can type. Everything
+    // below — the HMAC, the expiry, the attempts, the cooldown — is the same either way.
+    const code = this.fixedCode ?? generateCode();
+    const request = await this.prisma.otpRequest.create({
+      data: {
+        destination,
+        destinationHash: destinationDigest,
+        purpose,
+        codeHmac: hashCode(secret, destination, code),
+        attempts: 0,
+        expiresAt: new Date(now.getTime() + OTP_TTL_SECONDS * 1_000),
+        ipHash: ipDigest,
+        deviceHash: deviceDigest,
+      },
+      select: { id: true },
+    });
+
+    try {
+      const provider = this.provider;
+      if (provider === null) {
+        // Unreachable while the switch is on (the factory builds a provider), and a hard
+        // stop rather than a silent success if it ever is.
+        throw new Error('No SMS provider is configured');
+      }
+
+      const sent = await provider.send({
+        to: destination,
+        body: `Your Abhyas verification code is ${code}. It expires in 5 minutes. Do not share it.`,
+        templateId: this.templateId,
+      });
+
+      await this.prisma.smsCostLedger.create({
+        data: {
+          provider: provider.name,
+          destinationHash: destinationDigest,
+          cost: OTP_SMS_COST,
+          providerMessageId: sent.providerMessageId,
+        },
+      });
+    } catch (error) {
+      // The row exists, so mark it spent: a code that was never delivered must never verify.
+      await this.prisma.otpRequest.update({ where: { id: request.id }, data: { consumedAt: new Date() } });
+      await this.recordAlarm(OTP_ALERTS.sendFailed, { purpose }, now);
+      this.logger.warn(`OTP delivery failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      throw new ServiceUnavailableException('We could not send a code right now. Please try again.');
+    }
+
+    // The code itself is nowhere in this record: only the hash of the destination.
+    await writeIdentityAudit(this.prisma, {
+      action: 'OTP_REQUESTED',
+      entityType: 'otp_request',
+      entityId: request.id,
+      metadata: { purpose, destinationHash: destinationDigest },
+      ip: meta.ip ?? null,
+    });
+
+    if (isSequentialDigits(destination)) {
+      await this.recordAlarm(OTP_ALERTS.anomaly, { purpose, reason: 'SEQUENTIAL_NUMBER' }, now);
+    }
+
+    return { status: 'accepted', resendAfterSeconds: resendCooldownSeconds(recent + 1) };
+  }
+
+  async verifyCode(input: OtpVerifyInput, meta: RequestMetadata = {}): Promise<OtpVerifyResult> {
+    this.assertEnabled();
+
+    const purpose = parseOtpPurpose(input.purpose);
+    const destination = this.normalise(input.destination);
+    const code = typeof input.code === 'string' ? input.code.trim() : '';
+    const now = new Date();
+    const secret = this.hmacSecret;
+    const destinationDigest = destinationHash(destination, secret);
+
+    // Checking a code is metered as well. Without this a live code could be guessed at for an
+    // hour from any address, five attempts at a time, on as many rows as an attacker cares
+    // to ask for.
+    const denial = await this.limiter.consumeAll([
+      {
+        key: otpVerifyNumberKey(destinationDigest),
+        limit: OTP_LIMITS.verifyPerNumberPerHour,
+        windowSeconds: 3600,
+      },
+      {
+        key: otpVerifyIpKey(meta.ip ?? ''),
+        limit: OTP_LIMITS.verifyPerIpPerHour,
+        windowSeconds: 3600,
+      },
+    ]);
+
+    if (denial !== null) {
+      await this.recordAlarm(
+        OTP_ALERTS.verifyLimited,
+        {
+          purpose,
+          destinationHash: destinationDigest,
+          ipHash: meta.ip === undefined ? null : destinationHash(meta.ip, secret),
+        },
+        now,
+      );
+      throw new OtpThrottledException('Too many attempts. Please wait before trying again.', denial.retryAfterSeconds);
+    }
+
+    const request = await this.prisma.otpRequest.findFirst({
+      where: { destinationHash: destinationDigest, purpose, consumedAt: null, expiresAt: { gt: now } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, codeHmac: true },
+    });
+
+    if (request === null) {
+      // Spend a comparison anyway: an unknown number must not answer measurably faster.
+      codeMatches('0'.repeat(64), secret, destination, code);
+      throw new BadRequestException('That code is not valid');
+    }
+
+    // The attempt is counted in the row itself, before the comparison, and only while the
+    // code is live and unspent. A hundred simultaneous guesses therefore get at most five
+    // comparisons between them: every later one finds no row left to claim.
+    const claimed = await this.prisma.$queryRaw<{ attempts: number }[]>`
+      UPDATE otp_requests
+         SET attempts = attempts + 1
+       WHERE id = CAST(${request.id} AS uuid)
+         AND consumed_at IS NULL
+         AND expires_at > ${now}
+         AND attempts < ${OTP_MAX_ATTEMPTS}
+      RETURNING attempts`;
+
+    const attempts = claimed[0]?.attempts ?? null;
+
+    if (attempts === null) {
+      // Every attempt this row allowed is spent, or another guess took the last one.
+      await this.consume(request.id, now);
+      throw new BadRequestException('That code is not valid');
+    }
+
+    if (!codeMatches(request.codeHmac, secret, destination, code)) {
+      // The fifth wrong guess spends the code in the same breath as the count that made it
+      // the fifth, so a code is never left live with no comparisons left to give.
+      if (attempts >= OTP_MAX_ATTEMPTS) {
+        await this.consume(request.id, now);
+      }
+
+      await writeIdentityAudit(this.prisma, {
+        action: 'OTP_FAILED',
+        entityType: 'otp_request',
+        entityId: request.id,
+        metadata: { purpose, destinationHash: destinationDigest, attempts },
+        ip: meta.ip ?? null,
+      });
+
+      throw new BadRequestException('That code is not valid');
+    }
+
+    // One winner: a second verifier using the same code finds it already consumed.
+    const consumed = await this.prisma.otpRequest.updateMany({
+      where: { id: request.id, consumedAt: null },
+      data: { consumedAt: now },
+    });
+
+    if (consumed.count === 0) {
+      throw new BadRequestException('That code is not valid');
+    }
+
+    await writeIdentityAudit(this.prisma, {
+      action: 'OTP_VERIFIED',
+      entityType: 'otp_request',
+      entityId: request.id,
+      metadata: { purpose, destinationHash: destinationDigest },
+      ip: meta.ip ?? null,
+    });
+
+    return { destination };
+  }
+
+  /** How many times an alert has fired for a business day. Exposed for operators and tests. */
+  async alertCount(action: string, now: Date = new Date()): Promise<number> {
+    return this.limiter.count(otpAlertKey(action, businessDate(now)));
+  }
+
+  private normalise(value: unknown): string {
+    try {
+      return normaliseMobile(typeof value === 'string' ? value : '', this.allowedCountryCodes);
+    } catch (error) {
+      if (error instanceof InvalidMobileError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async consume(id: string, now: Date): Promise<void> {
+    await this.prisma.otpRequest.updateMany({ where: { id, consumedAt: null }, data: { consumedAt: now } });
+  }
+
+  /**
+   * The daily budget, as a hard stop.
+   *
+   * A Redis counter is incremented before the message is handed to a provider, so two requests
+   * that arrive together cannot both read "one more is fine" and overshoot: the `INCR` that
+   * takes the day past its budget is the one that is refused. The counter expires with the
+   * business day, and `sms_cost_ledger` stays the record of what was actually sent.
+   *
+   * The breaker is latched in Redis for the rest of the day, so a flood of requests cannot
+   * turn into a flood of counters.
+   */
+  private async assertBudget(now: Date): Promise<void> {
+    const day = businessDate(now);
+    const breakerKey = otpBudgetKey(day);
+
+    if ((await this.limiter.count(breakerKey)) > 0) {
+      throw new ServiceUnavailableException('Codes are paused for today. Please try again tomorrow.');
+    }
+
+    const endOfDay = startOfBusinessDay(now).getTime() + 86_400_000;
+    const secondsLeft = Math.max(60, Math.ceil((endOfDay - now.getTime()) / 1_000));
+    const attempted = await this.limiter.hit(otpBudgetCountKey(day), secondsLeft);
+
+    if (attempted > this.dailyBudget) {
+      await this.limiter.hit(breakerKey, 86_400);
+      await this.recordAlarm(OTP_ALERTS.budgetExhausted, { day, budget: this.dailyBudget }, now);
+      throw new ServiceUnavailableException('Codes are paused for today. Please try again tomorrow.');
+    }
+  }
+
+  /**
+   * An alert: one audit row naming the action and how many times it has fired today, plus a
+   * Redis counter an operator (and a test) can read without touching the audit table.
+   */
+  private async recordAlarm(action: string, metadata: Prisma.InputJsonObject, now: Date): Promise<number> {
+    const count = await this.limiter.hit(otpAlertKey(action, businessDate(now)), 86_400);
+
+    // `audit_logs.entity_id` is a UUID column, and an alert has no row of its own: the
+    // action and the counter travel in the metadata instead.
+    await writeIdentityAudit(this.prisma, {
+      action: 'OTP_ALERT',
+      entityType: 'otp_alert',
+      entityId: null,
+      metadata: { alert: action, count, ...metadata },
+    });
+
+    this.logger.warn(`OTP alert ${action} (${String(count)} today)`);
+    return count;
+  }
+}

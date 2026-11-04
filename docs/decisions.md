@@ -912,3 +912,346 @@ not the intended state.
   require approval before workflows run, secret scanning with push protection is on, and
   Dependabot alerts and security updates are enabled. Those are toggles in the repository's
   own settings, not files, so they are recorded here rather than enforced by CI.
+
+
+## 0048 — Mobile OTP is off by default and the switch is enforced on the server
+
+**Status:** accepted · **Phase:** 2c
+
+**One switch, checked at three layers.** `OTP_ENABLED` (default false) is read from the
+validated environment at boot and is the only thing that turns the feature on. With it off:
+`providerFromEnv` returns `null` before it constructs anything at all, `OtpService.assertEnabled`
+throws `NotFoundException` before it reads a row or a counter, and `OtpGuard` answers **404**
+(not 403) on the routes. Hiding the web screens is the fourth layer, never the first. Tests
+prove the disabled mode from the service with a provider wired in on purpose: 404, and nothing
+in the outbox.
+
+**Codes are stored as an HMAC, bound to their destination.** `code_hmac` is
+`HMAC-SHA256(OTP_HMAC_SECRET, "<e164>:<code>")`, so the same six digits sent to two numbers
+produce different digests and a database read cannot recover a live code. Verification compares
+in constant time with `timingSafeEqual` and, for an unknown number, spends a comparison anyway
+so the two answers are not measurably different. The code itself appears in exactly one place:
+the body handed to the provider, which the fake provider keeps in its development-only outbox.
+
+**Five attempts, five minutes, escalating resends.** A row is spent (`consumed_at`) when it is
+verified, when the fifth guess is wrong, when it expires, or when delivery fails — a code that
+was never delivered must never verify. The resend cooldown starts at 30 seconds and doubles to
+ten minutes, indexed by how many requests already exist for that number in the last hour.
+
+**Limits, and the budget as a hard stop.** Per number 3/hour and 8/day, per IP 10/hour, per
+device 5/hour, all on the existing Redis fixed-window limiter. Above them sits a daily SMS
+budget: the count is `sms_cost_ledger` rows for the current business day (Asia/Kolkata), and
+when it is reached a Redis latch closes the breaker for the rest of the day, one alert row is
+written, and every further request answers 503 without another provider call. The ledger also
+records what each message was sent by and, when the vendor returns one, its message id.
+
+**Anomaly detection, and what it honestly covers.** A limit denial from one address, and a
+number whose digits run sequentially, each write an `OTP_ALERT` audit row and increment a
+per-action, per-day counter in Redis that `alertCount()` reads. Network-level (ASN) burst
+detection is **not** implemented; it belongs to the WAF in front of the deployment and is
+recorded as a known gap rather than pretended.
+
+**The gateway is an SSRF seam, so it is guarded twice.** At boot, the URL must be https in
+production and its host may not name a private, loopback, link-local, CGNAT (100.64.0.0/10),
+multicast, unspecified or metadata address — including the numeric forms IPv4 accepts
+(`127.1`, `0x7f000001`, `2130706433`) and IPv4-mapped IPv6 (`::ffff:127.0.0.1`). At send time
+DNS is resolved once, *every* answer is checked, and the address that passed is pinned into
+`http(s).request` through its `lookup` option, so a second lookup cannot swap in another host.
+Redirects are never followed (a 3xx is a failure), the timeout is bounded per request, and the
+response is read with an 8 KiB cap. Development and CI may point the provider at a loopback
+mock server; production may not, and `validateEnv` keeps that honest.
+
+**Boot refusal, not configuration advice.** With the switch on in production, `validateEnv`
+refuses a fake or console provider, any provider without an adapter (only `http` exists yet), a
+missing or short or well-known `OTP_HMAC_SECRET`, a missing `OTP_SENDER_ID`,
+`OTP_DLT_ENTITY_ID` or `OTP_TEMPLATE_ID`, and a gateway that is empty, not https, or missing its
+body template. The fake provider and the test Turnstile verifier refuse themselves as well, so
+the process cannot start in a state where a development shortcut would be reachable.
+
+
+## 0049 — An account is identified by a verified identifier, and mobile-first accounts hold no usable password
+
+**Status:** accepted · **Phase:** 2c
+
+A student who signs up with a mobile number has no email address, so `users.email` becomes
+nullable and a `users_identifier_present` CHECK requires a row to carry an email **or** a
+`first_verified_mobile` — never neither. Both identifiers are only ever written after they
+have been verified (an email link, or an OTP), so the row cannot claim an identifier nobody
+proved.
+
+`users.password_hash` stays `NOT NULL`. A mobile-first account is created with an Argon2id
+hash of 32 random bytes the platform generates and never stores in readable form, which makes
+password sign-in impossible for it until its owner sets a password through re-authentication.
+A nullable hash column was rejected: every password comparison on the platform would then
+carry a branch, and a forgotten branch is an authentication bypass.
+
+The consequences are written down rather than discovered later:
+
+- Password sign-in and password reset look the account up **by email**, so a mobile-first
+  account simply cannot be found by either. They answer exactly as an unknown address does.
+- Every screen, list and export that shows an email shows "No email linked" when it is null.
+- A sensitive change proves the holder by password, by a code sent to the account's own
+  verified number, or — for an account with no email — by a sign-in from the last fifteen
+  minutes (decision 0050).
+- A full-text search over the account list matches the name and the email; a mobile-only
+  account is found by name.
+
+The unique indexes are the real constraint, not the service: `users_email_key` compares the
+lower-cased value the normalising trigger writes, and `users_mobile_key` (plus
+`users_first_verified_mobile_key`) makes one phone one account. A test inserts a duplicate in
+a different case and proves Postgres refuses it.
+
+## 0050 — Re-authentication: password, then a code, then a sign-in from minutes ago
+
+**Status:** accepted · **Phase:** 2c
+
+Changing a password, deactivating an account, and (in item 3) linking or unlinking an
+identifier are all changes to how somebody signs in, so each one has to prove it is still
+the holder. `ReauthenticationService.assert` accepts, in this order:
+
+1. **The current password**, whenever one is offered. It is verified for every account that
+   has one, whichever way it was created — a mobile-first account that later chose a password
+   is asked for it.
+2. **A one-time code** sent to the account's own `first_verified_mobile`, purpose `REAUTH`.
+   The destination is read from the account, never from the request body, so the route can
+   never be used to send a code to a stranger. It is an ordinary OTP row: same HMAC storage,
+   five attempts, five minutes, same rate limits and the same 404 with `OTP_ENABLED=false`.
+3. **A sign-in from the last fifteen minutes**, and only for an account with **no email
+   address**. Such an account has no password anybody could type; a session created minutes
+   ago is the same evidence as a password typed a minute ago.
+
+Recent-ness is never accepted for an account with an email address: there the password is
+available and asking for it is what stops a stolen session from changing it. That asymmetry is
+deliberate and is proven by tests for both kinds of account. A stale session with no proof is
+a 403 naming both ways forward, not a generic refusal.
+
+
+## 0051 — A fixed code only the fake provider may use, so the browser can be tested with OTP on
+
+**Status:** accepted · **Phase:** 2c
+
+The master switch has two halves and the browser suite only proved one: the stack runs with
+`OTP_ENABLED=false`, so Playwright can show the screens are hidden and the routes are 404, but it
+cannot register, sign in, link or be locked out, because a browser cannot read an SMS.
+
+Two shortcuts were considered and both were rejected:
+
+- **An HTTP route that returns the newest code in development.** It is a way to obtain a live
+  code from outside the process, and "development only" is a flag away from being reachable. The
+  rule that a code never leaves the server except in the message would have its first exception.
+- **Logging the code.** Same objection, plus log retention and log access.
+
+What is accepted is narrower: `OTP_FAKE_FIXED_CODE`. It is a six-digit constant used instead of a
+random draw, and it is honoured only when **all** of these hold: `OTP_ENABLED=true`, `NODE_ENV` is
+not `production`, and `SMS_PROVIDER=fake`. `validateEnv` refuses it in production, refuses it with
+any provider other than `fake`, and refuses anything that is not six digits — a boot failure, not
+advice. `fixedCodeFor()` checks the same three conditions again inside the API, so the value is
+inert even if somebody bypasses the validator (the fake provider also refuses to be constructed in
+production at all).
+
+Nothing else about a code changes. It is still stored only as an HMAC bound to its destination,
+still expires in five minutes, still spends after five wrong guesses, still obeys the escalating
+resend cooldown and every rate limit. `otp-code.spec.ts` proves the digest, the constants and the
+schedule are untouched by a fixed code, and `otp-flow.test.ts` boots an API with one and proves the
+cooldown, the attempt limit and the expiry still bite.
+
+`docker-compose.otp.yml` is the override that turns this on for CI and for a developer who wants to
+click through the mobile screens: `OTP_ENABLED=true`, the fake provider, the HMAC secret, a
+template id and the fixed code. Production never uses it — `docker-compose.prod.yml` is a
+standalone file, and `scripts/validate-compose-prod.mjs` fails if that file so much as names the
+override or the variable.
+
+The browser coverage stays in the existing `e2e` job: the disabled suite runs first against the
+default stack, then the stack is restarted with the override and a second Playwright project drives
+mobile registration, mobile sign-in, linking a number from the account page with re-authentication,
+the wrong-code lockout, the resend countdown and the identical answer for a number nobody has. No
+job was added; the job's timeout was raised from fifteen minutes to twenty with the reason written
+beside it.
+
+
+## 0052 — The client address is the socket address unless a named proxy says otherwise
+
+**Status:** accepted · **Phase:** 2c
+
+Every per-IP counter — OTP requests, registration, sign-in, password reset — is only as good
+as the address it counts. Fastify was started with `trustProxy: true`, so any request that
+carried an `X-Forwarded-For` chose its own address, and the web tier forwarded whatever the
+browser sent. A single client could therefore present a fresh address per attempt and never
+meet a cap.
+
+The rule now:
+
+- `TRUST_PROXY` is unset by default, and unset means **the forwarding headers are ignored**
+  and the socket address is the client.
+- It may name the proxies that are believed: a comma-separated list of addresses or CIDR
+  blocks, or a hop count (1–10). Only those may state a client address.
+- `true` and `*` are development conveniences and **production boot refuses them.** There is
+  no configuration in which a production API believes an address from anybody who asks.
+- The web tier follows the same rule in its own right (`webConfig().trustForwardedIp`): it
+  reads the edge's header only when `TRUST_PROXY` names an edge, and otherwise forwards no
+  address at all, so a browser-supplied header cannot reach the API as a claim.
+- The browser suite needs a fresh address per test, and it gets one through a **separate**
+  switch, `TRUST_FORWARDED_IP_FOR_TESTS`, which production boot refuses. It is deliberately
+  not the fixed-code switch: one is about where a message goes, the other about who is
+  counting, and sharing a knob between them would make a test convenience look like a
+  sending policy.
+
+Nginx must **overwrite** `X-Forwarded-For` and `X-Real-IP` with the address it actually sees,
+never append to what the browser sent; `docs/deployment.md` says so where the proxy is
+configured. Even with a wrong Nginx config the API's rule holds — it believes only the
+configured proxy, and Nginx is the one configured — so the failure is a shared counter rather
+than an open one, and that is the direction to fail in.
+
+`apps/api/test/client-ip.test.ts` boots the real API twice, differing only in the policy: with
+no proxy trusted, twenty-one sign-ins and six registrations that each claim a different
+address still hit the production ceiling (21st 429, 6th 429); with a trusted proxy, twenty-five
+forwarded addresses are twenty-five counters and none is refused. `env.spec.ts` refuses
+trust-everything and the test switch in production, and `apps/web/src/lib/client-ip.spec.ts`
+proves the web tier ignores a header it was not told to trust.
+
+
+
+## 0053 — An OTP attempt is claimed in the row, and an address is validated before it is used
+
+**Status:** accepted · **Phase:** 2c
+
+Decision 0052 made the client address trustworthy. This one closes what an attacker could
+still do with a correct address, and what a malformed one could still reach.
+
+**Verify attempts are atomic.** The service used to read `attempts`, compare, and then write
+`attempts + 1`. A hundred requests sent together all read `0` and all compared, so the
+"five attempts" ceiling was five attempts per request in flight, not per code. The comparison
+is now made only after the row itself has been stepped:
+
+```sql
+UPDATE otp_requests
+   SET attempts = attempts + 1
+ WHERE id = $1::uuid
+   AND consumed_at IS NULL
+   AND expires_at > now()
+   AND attempts < 5
+RETURNING attempts
+```
+
+No row returned means the code is spent. A hundred simultaneous guesses therefore get at most
+five comparisons between them, and the fifth wrong one consumes the row. `otp-flow.test.ts`
+fires that hundred at one code and proves, by the `OTP_FAILED` audit rows written per
+comparison, that at most five happened and that the right code is refused afterwards.
+
+**Verifying is metered like requesting.** A destination accepts ten comparisons an hour and an
+address twenty, keyed on the resolved client address; a refusal raises the `OTP_VERIFY_LIMITED`
+alert counter and is audited like every other OTP alert.
+
+**Nothing that is not an address is used, stored, logged or forwarded.** Both tiers validate
+with `net.isIP` before the value is counted by, written to an audit row or logged — one choke
+point on the API (`clientAddress` in `auth/request.ts`, used by `requestMeta`) and one on the
+web tier (`clientAddress` in `lib/upstream.ts`). Garbage, a list, an oversized value, a
+newline, `=HYPERLINK(...)` and `<script>` all become "no address", never a Redis key.
+
+**The web tier names hops, not trust.** It cannot see the socket's peer, so `TRUST_PROXY`
+there accepts only a hop count (1–10): production refuses `true`, `*` and an address list. The
+address is `X-Real-IP` (the single value Nginx overwrites) or the entry at that hop **from the
+right** of `X-Forwarded-For`. The left-most entry is never read, so a chain the browser grew
+still resolves to what the proxy wrote.
+
+**Production refuses a range too broad to be a proxy.** `/0`, an IPv4 block below `/8` and an
+IPv6 block below `/32` are refused at boot, and entries are validated as addresses rather than
+by shape (`999.1.1.1/8` is not an address). `docker-compose.prod.yml` pins the web container
+to a fixed address on a pinned subnet and sets the API's `TRUST_PROXY` to exactly that `/32`;
+the web tier is set to `1` hop, the host Nginx. `scripts/validate-compose-prod.mjs` fails the
+`docker` job if either drifts — a subnet or `true` on the API would let a caller choose the
+address its counters are keyed by.
+
+**One bootstrap.** `apps/api/src/bootstrap.ts` builds the application — adapter options,
+`trustProxy`, the 1 MB body limit, the route hooks and the docs gate — and both `main.ts` and
+the database tests call it, so the tests exercise the wiring the process really uses rather
+than a copy of it. `config/trust-proxy.ts` is the one conversion from the validated
+`TRUST_PROXY` to Fastify's option: a hop count is a number at runtime but is missing from
+Fastify's typings, and an address list is copied out of the immutable configuration.
+
+`apps/api/test/client-ip.test.ts` proves: a spoofed chain still hits one counter; one forwarded
+address repeated twenty-one times trips the cap while a different address does not; a
+multi-hop chain resolves to `198.51.100.7`, not the prepended `1.1.1.1`; registration counts by
+the same address; junk is never stored; and the OTP request and verify routes agree on the
+resolved address. `packages/shared/src/env.spec.ts` refuses broad ranges and impossible
+addresses, and `apps/web/src/lib/client-ip.spec.ts` proves the hop reading and the production
+refusals on the browser tier.
+
+
+## 0053 — The client address, the proof counter, and the OTP wallet
+
+**Decided in phase 2c, after a security review of items 1–5. Date: phase 2c.**
+
+**The client address is resolved once, by us.** `resolveClientAddress` (`apps/api/src/config/trust-proxy.ts`)
+is a pure function over the boot's own `TRUST_PROXY`, the socket address and the two forwarding
+headers. The bootstrap runs it in an `onRequest` hook and stores the answer on the request;
+`requestMeta` reads that value and validates it with `net.isIP` again before it becomes a Redis
+key, an audit row or a session record. The framework's own resolution is kept for logging, but no
+per-IP decision depends on it, so a Fastify version change cannot quietly change who is counted.
+Every candidate is dropped unless it is exactly one address: garbage, a list, an oversized value,
+a newline and a spreadsheet formula never reach the database or a log.
+
+**Re-authentication is metered.** Five wrong proofs (password or code) in fifteen minutes closes
+the counter for that account with `429`; every wrong proof writes `IDENTITY_REAUTH_FAILED` with
+the reason. A successful proof resets the counter. A request that offers no proof at all is not a
+failed proof and is not counted — it is refused with the message that says what to offer.
+
+**The code is required while the switch is on.** For an account with no email address, the fresh
+session was the third proof (0050). It now applies only when `OTP_ENABLED` is false or the account
+has no verified mobile: with the switch on, a code to the account's own number is required even on
+the no-email path. A session minutes old is a weaker proof than a code only the holder's phone
+receives, and an account with a verified number always has that option.
+
+**OTP spend is counted atomically.** The daily SMS budget was read from `sms_cost_ledger`, which
+is a record of what was sent, not a gate: two requests arriving together could both read "one
+more is fine". A Redis counter (`otp:budget:count:<business day>`) is now `INCR`ed before a
+provider is called, expires with the business day, and the `INCR` that takes the day past its
+budget is the one that is refused and latches the breaker. The ledger stays the record. Requests
+are also capped per number across every purpose (6 an hour, 12 a day), so relabelling a request
+from `LOGIN` to `SIGNUP` cannot multiply the per-purpose ceiling.
+
+**Secrets are checked for shape, not just for names.** In production, `AUTH_SECRET`,
+`OTP_HMAC_SECRET` and `REVALIDATE_SECRET` must be different from each other, and each is refused
+if it is the shipped default, starts with `dev-`, or contains `change-me`/`changeme`. A
+production boot that uses the HTTP SMS gateway must present `OTP_GATEWAY_AUTH_VALUE`;
+`SMS_PROVIDER` itself is required only when `OTP_ENABLED` is true.
+
+**The SSRF guard judges every way an IPv4 address can be hidden in IPv6.** NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) are refused when the IPv4 address they embed is refused;
+Teredo (`2001::/32`), the documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
+`2001:db8::/32`) and the benchmarking ranges (`198.18.0.0/15`, `2001:2::/48`) are refused outright.
+
+**`apiCall` refuses to leak and refuses to wait.** A response cached under Next tags is never
+built from an access token (it would be shared between visitors); a request is abandoned after
+10 s; and a response is streamed through a reader with a 1 MB cap, so an oversized body is refused
+rather than buffered.
+
+
+## 0054 — Accepted risks in phase 2c: a burnable code and a hard budget stop
+
+**Decided in phase 2c, at the end of the security review. Date: phase 2c.**
+
+Two risks are accepted rather than fixed in this phase, recorded here so they are judged again when
+the switch goes on. `OTP_ENABLED` stays false in production (decision 0048), so neither is live yet.
+
+**Anyone who knows a number can burn its code.** Verification is metered per destination and per
+client address, and five wrong guesses spend the row (decision 0053). That rule is also a lever: a
+caller who can reach `POST /v1/auth/otp/verify` with a victim's number can send five wrong codes and
+leave the holder unable to use the code they were sent, or exhaust the per-number verify cap for the
+hour. The holder cannot request a replacement while the cooldown holds either. The cost to the
+attacker is bounded — one paid message per number per cooldown, and every guess writes an audit row
+and an alert counter — and the obvious fix, a human check on every verification, taxes the honest
+case more than the attack, so it is not taken now. Before OTP is enabled, one of these is chosen and
+recorded in its own decision: bind the attempt counter to a client cookie set by the request route,
+so burning a code requires the same browser that asked for it; or answer a wrong code with a
+challenge instead of a refusal, so guesses cannot spend the code at all.
+
+**The daily SMS budget is a cliff.** `OTP_SMS_DAILY_BUDGET` is counted by an atomic Redis counter
+incremented before the provider call and trips a breaker for the rest of the Asia/Kolkata day
+(0053). That is the right failure direction for money, but it takes mobile sign-in and sign-up down
+for every user until midnight, whether the day was busy or attacked. The mitigation is on the
+operator side and is written into the runbook: `docs/otp-enable-runbook.md` §4 tells the on-call
+operator to read `otp:budget:count:<day>` against the budget, to alert when it passes about 80%,
+and to page when `otp:alerts:SMS_BUDGET_EXHAUSTED:<day>` becomes non-zero or
+`otp:budget:closed:<day>` latches. Sharing the budget per client address, so one attacker cannot
+spend the day's allowance for everybody, is the next step and is owed with the staging test.

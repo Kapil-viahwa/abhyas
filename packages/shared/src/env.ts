@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 /**
  * Environment validation shared by the API and the worker.
  *
@@ -9,15 +11,18 @@
 
 export type NodeEnv = 'development' | 'test' | 'production';
 
-export type SmsProvider = 'fake' | 'console' | 'msg91' | 'twilio' | 'ses';
+export type SmsProvider = 'fake' | 'console' | 'http' | 'msg91' | 'twilio' | 'ses';
 
 export type EmailProvider = 'console' | 'smtp';
 
 const NODE_ENVS: readonly NodeEnv[] = ['development', 'test', 'production'];
 
-const SMS_PROVIDERS: readonly SmsProvider[] = ['fake', 'console', 'msg91', 'twilio', 'ses'];
+const SMS_PROVIDERS: readonly SmsProvider[] = ['fake', 'console', 'http', 'msg91', 'twilio', 'ses'];
 
 const EMAIL_PROVIDERS: readonly EmailProvider[] = ['console', 'smtp'];
+
+/** Six digits, and only ever honoured by the fake provider outside production. */
+const FIXED_OTP_CODE_PATTERN = /^[0-9]{6}$/;
 
 const FORBIDDEN_PRODUCTION_SECRETS: readonly string[] = [
   'secret',
@@ -32,6 +37,13 @@ const FORBIDDEN_PRODUCTION_SECRETS: readonly string[] = [
   'abhyas',
 ];
 
+/** Whether a secret is a development or placeholder value rather than a real one. */
+function isDevelopmentSecret(value: string): boolean {
+  const lower = value.toLowerCase();
+
+  return lower.startsWith('dev-') || lower.includes('change-me') || lower.includes('changeme');
+}
+
 /** Cloudflare Turnstile test secrets all start with 1x0..., 2x0... or 3x0.... */
 const TURNSTILE_TEST_SECRET_PATTERN = /^[123]x0{20,}/i;
 
@@ -41,6 +53,51 @@ export const MIN_AUTH_SECRET_LENGTH = 32;
 export const MIN_REVALIDATE_SECRET_LENGTH = 16;
 
 export const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
+
+/** The narrowest IPv4 and IPv6 blocks a production boot will trust as a proxy. */
+const MIN_TRUSTED_IPV4_PREFIX = 8;
+const MIN_TRUSTED_IPV6_PREFIX = 32;
+
+/**
+ * The family and prefix length a `TRUST_PROXY` entry names, or `null` when it is not an
+ * address at all. A bare address counts as its own /32 or /128.
+ */
+function trustedPrefix(entry: string): { readonly family: 4 | 6; readonly prefix: number } | null {
+  const slash = entry.indexOf('/');
+  const address = slash === -1 ? entry : entry.slice(0, slash);
+
+  const version = isIP(address);
+  if (version === 0) {
+    return null;
+  }
+
+  const family: 4 | 6 = version === 4 ? 4 : 6;
+  const maximum = family === 4 ? 32 : 128;
+
+  if (slash === -1) {
+    return { family, prefix: maximum };
+  }
+
+  const raw = entry.slice(slash + 1);
+  if (!/^[0-9]{1,3}$/.test(raw)) {
+    return null;
+  }
+
+  const prefix = Number(raw);
+
+  return prefix <= maximum ? { family, prefix } : null;
+}
+
+/** Whether a trusted proxy block is wider than production will accept. */
+function isTooBroad(details: { readonly family: 4 | 6; readonly prefix: number }): boolean {
+  if (details.prefix === 0) {
+    return true;
+  }
+
+  return details.family === 4
+    ? details.prefix < MIN_TRUSTED_IPV4_PREFIX
+    : details.prefix < MIN_TRUSTED_IPV6_PREFIX;
+}
 
 export interface EnvIssue {
   readonly variable: string;
@@ -71,6 +128,18 @@ export interface AppEnv {
   readonly SMS_PROVIDER: SmsProvider;
   readonly EMAIL_PROVIDER: EmailProvider;
   readonly ALLOW_DEV_LOGIN: boolean;
+  /**
+   * Which proxies may state a client's address. `false` (the default) means forwarding
+   * headers are ignored and the socket address is used; a list of addresses or CIDR blocks,
+   * or a hop count, means only those may. `true` trusts any source and is refused in
+   * production (decision 0052).
+   */
+  readonly TRUST_PROXY: boolean | number | readonly string[];
+  /**
+   * Development and CI only: let the web tier believe a browser-supplied forwarding header,
+   * so the browser suite can use a fresh address per test. Refused in production.
+   */
+  readonly TRUST_FORWARDED_IP_FOR_TESTS: boolean;
   /** Shared with the web tier, which accepts it on its cache-revalidation route. */
   readonly REVALIDATE_SECRET: string;
   /** S3-compatible object storage: empty in development means media is disabled. */
@@ -81,6 +150,27 @@ export interface AppEnv {
   readonly S3_SECRET_ACCESS_KEY: string;
   readonly S3_FORCE_PATH_STYLE: boolean;
   readonly S3_PUBLIC_READ: boolean;
+  /** Phase 2c: the master switch for mobile OTP. Off by default. */
+  readonly OTP_ENABLED: boolean;
+  /** The secret every stored code is HMACed with; a database read cannot recover a code. */
+  readonly OTP_HMAC_SECRET: string;
+  /** E.164 country prefixes a code may be sent to; India only unless widened on purpose. */
+  readonly OTP_ALLOWED_COUNTRY_CODES: readonly string[];
+  /** The most messages one business day may send before the breaker stops everything. */
+  readonly OTP_SMS_DAILY_BUDGET: number;
+  readonly OTP_SENDER_ID: string;
+  readonly OTP_DLT_ENTITY_ID: string;
+  readonly OTP_TEMPLATE_ID: string;
+  /**
+   * Six digits a browser test can know in advance. Honoured only while the SMS provider is
+   * the fake one and `NODE_ENV` is not production (decision 0051); empty otherwise.
+   */
+  readonly OTP_FAKE_FIXED_CODE: string;
+  readonly OTP_GATEWAY_URL: string;
+  readonly OTP_GATEWAY_AUTH_HEADER: string;
+  readonly OTP_GATEWAY_AUTH_VALUE: string;
+  readonly OTP_GATEWAY_BODY_TEMPLATE: string;
+  readonly OTP_GATEWAY_TIMEOUT_MS: number;
 }
 
 /** Credentials the development stack ships with; production refuses them. */
@@ -149,6 +239,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
         variable: 'AUTH_SECRET',
         message: 'must not be a well-known default value',
       });
+    } else if (isDevelopmentSecret(authSecret)) {
+      issues.push({ variable: 'AUTH_SECRET', message: 'must not be a development or placeholder value in production' });
     }
   }
 
@@ -164,11 +256,17 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
   }
 
+  // The master switch is read here as well as in the OTP block below, because it decides
+  // whether a provider has to be configured at all.
+  const otpEnabled = read(raw, 'OTP_ENABLED').toLowerCase() === 'true';
+
   const smsRaw = read(raw, 'SMS_PROVIDER').toLowerCase();
   let smsProvider: SmsProvider = 'fake';
   if (smsRaw === '') {
-    if (isProduction) {
-      issues.push({ variable: 'SMS_PROVIDER', message: 'is required in production' });
+    // Nothing sends while the switch is off: the provider is only required once the mobile
+    // routes can actually be reached (decision 0048).
+    if (isProduction && otpEnabled) {
+      issues.push({ variable: 'SMS_PROVIDER', message: 'is required in production when OTP is enabled' });
     }
   } else if (!SMS_PROVIDERS.includes(smsRaw as SmsProvider)) {
     issues.push({
@@ -225,6 +323,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
         variable: 'REVALIDATE_SECRET',
         message: `must be at least ${MIN_REVALIDATE_SECRET_LENGTH} characters`,
       });
+    } else if (revalidateRaw === DEFAULT_REVALIDATE_SECRET || isDevelopmentSecret(revalidateRaw)) {
+      issues.push({ variable: 'REVALIDATE_SECRET', message: 'must not be a well-known default value' });
     }
   }
 
@@ -286,6 +386,216 @@ export function validateEnv(raw: RawEnv): AppEnv {
     });
   }
 
+  // Mobile OTP (phase 2c). The switch is off unless it is asked for, and everything that
+  // would be a development shortcut is refused in production when it is on: a fake
+  // provider, a missing HMAC secret, missing DLT identifiers, or an insecure gateway.
+  const otpHmacSecret = read(raw, 'OTP_HMAC_SECRET');
+  const otpSenderId = read(raw, 'OTP_SENDER_ID');
+  const otpDltEntityId = read(raw, 'OTP_DLT_ENTITY_ID');
+  const otpTemplateId = read(raw, 'OTP_TEMPLATE_ID');
+  const otpFakeFixedCode = read(raw, 'OTP_FAKE_FIXED_CODE');
+  const otpGatewayUrl = read(raw, 'OTP_GATEWAY_URL');
+  const otpGatewayAuthHeader = read(raw, 'OTP_GATEWAY_AUTH_HEADER');
+  const otpGatewayAuthValue = read(raw, 'OTP_GATEWAY_AUTH_VALUE');
+  const otpGatewayBodyTemplate = read(raw, 'OTP_GATEWAY_BODY_TEMPLATE');
+
+  const otpGatewayTimeoutMs = Number(read(raw, 'OTP_GATEWAY_TIMEOUT_MS') || '5000');
+  if (!Number.isInteger(otpGatewayTimeoutMs) || otpGatewayTimeoutMs < 1_000 || otpGatewayTimeoutMs > 30_000) {
+    issues.push({
+      variable: 'OTP_GATEWAY_TIMEOUT_MS',
+      message: 'must be an integer between 1000 and 30000',
+    });
+  }
+
+  const otpSmsDailyBudget = Number(read(raw, 'OTP_SMS_DAILY_BUDGET') || '100');
+  if (!Number.isInteger(otpSmsDailyBudget) || otpSmsDailyBudget < 1 || otpSmsDailyBudget > 100_000) {
+    issues.push({
+      variable: 'OTP_SMS_DAILY_BUDGET',
+      message: 'must be an integer between 1 and 100000',
+    });
+  }
+
+  const otpAllowedCountryCodes = (read(raw, 'OTP_ALLOWED_COUNTRY_CODES') || '+91')
+    .split(',')
+    .map((code) => code.trim())
+    .filter((code) => code !== '');
+
+  if (otpAllowedCountryCodes.length === 0) {
+    issues.push({
+      variable: 'OTP_ALLOWED_COUNTRY_CODES',
+      message: 'must name at least one country prefix like +91',
+    });
+  }
+  for (const code of otpAllowedCountryCodes) {
+    if (!/^\+[1-9][0-9]{0,3}$/.test(code)) {
+      issues.push({
+        variable: 'OTP_ALLOWED_COUNTRY_CODES',
+        message: `"${code}" is not an E.164 country prefix like +91`,
+      });
+    }
+  }
+
+  // A code that never changes exists so a browser test can type it. That is only safe
+  // where nothing real is sent: the fake provider, outside production. Both are refused
+  // here, at boot, rather than trusted to the code that reads the value.
+  if (otpFakeFixedCode !== '') {
+    if (!FIXED_OTP_CODE_PATTERN.test(otpFakeFixedCode)) {
+      issues.push({ variable: 'OTP_FAKE_FIXED_CODE', message: 'must be six digits' });
+    }
+    if (isProduction) {
+      issues.push({ variable: 'OTP_FAKE_FIXED_CODE', message: 'is refused in production' });
+    } else if (smsProvider !== 'fake') {
+      issues.push({
+        variable: 'OTP_FAKE_FIXED_CODE',
+        message: 'may only be set while SMS_PROVIDER is fake',
+      });
+    }
+  }
+
+  if (otpEnabled) {
+    if (otpHmacSecret === '') {
+      issues.push({ variable: 'OTP_HMAC_SECRET', message: 'is required when OTP_ENABLED is true' });
+    } else if (isProduction && otpHmacSecret.length < MIN_AUTH_SECRET_LENGTH) {
+      issues.push({
+        variable: 'OTP_HMAC_SECRET',
+        message: `must be at least ${MIN_AUTH_SECRET_LENGTH} characters in production`,
+      });
+    } else if (isProduction && FORBIDDEN_PRODUCTION_SECRETS.includes(otpHmacSecret.toLowerCase())) {
+      issues.push({ variable: 'OTP_HMAC_SECRET', message: 'must not be a well-known default value' });
+    } else if (isProduction && isDevelopmentSecret(otpHmacSecret)) {
+      issues.push({
+        variable: 'OTP_HMAC_SECRET',
+        message: 'must not be a development or placeholder value in production',
+      });
+    }
+
+    if (isProduction) {
+      if (otpSenderId === '') {
+        issues.push({ variable: 'OTP_SENDER_ID', message: 'is required in production when OTP is enabled' });
+      }
+      if (otpDltEntityId === '') {
+        issues.push({ variable: 'OTP_DLT_ENTITY_ID', message: 'is required in production when OTP is enabled' });
+      }
+      if (otpTemplateId === '') {
+        issues.push({ variable: 'OTP_TEMPLATE_ID', message: 'is required in production when OTP is enabled' });
+      }
+
+      if (smsProvider !== 'http') {
+        // There is no vendor-specific adapter yet, and "fake" is already refused above:
+        // an OTP-enabled production boot must use the generic gateway.
+        issues.push({
+          variable: 'SMS_PROVIDER',
+          message: 'must be "http" when OTP_ENABLED is true in production (no vendor adapter exists yet)',
+        });
+      } else {
+        if (otpGatewayUrl === '') {
+          issues.push({
+            variable: 'OTP_GATEWAY_URL',
+            message: 'is required when SMS_PROVIDER is http and OTP is enabled in production',
+          });
+        } else if (!otpGatewayUrl.startsWith('https://')) {
+          issues.push({ variable: 'OTP_GATEWAY_URL', message: 'must be an https URL in production' });
+        }
+        if (otpGatewayBodyTemplate === '') {
+          issues.push({
+            variable: 'OTP_GATEWAY_BODY_TEMPLATE',
+            message: 'is required when SMS_PROVIDER is http',
+          });
+        }
+        if (otpGatewayAuthValue === '') {
+          // A gateway that takes an unauthenticated POST is an open relay for anybody who
+          // finds it, so a production boot that talks to one has to present a secret.
+          issues.push({
+            variable: 'OTP_GATEWAY_AUTH_VALUE',
+            message: 'is required when SMS_PROVIDER is http in production',
+          });
+        }
+      }
+    }
+  }
+
+  // Client-address trust (decision 0052). Nothing is trusted unless it is named, and
+  // "trust everything" is a development convenience that production refuses outright.
+  const trustProxyRaw = read(raw, 'TRUST_PROXY');
+  let trustProxy: boolean | number | readonly string[] = false;
+
+  if (trustProxyRaw === '') {
+    trustProxy = false;
+  } else if (trustProxyRaw === 'true' || trustProxyRaw === '*') {
+    if (isProduction) {
+      issues.push({
+        variable: 'TRUST_PROXY',
+        message: 'is refused in production: name the proxy addresses or a hop count',
+      });
+    } else {
+      trustProxy = true;
+    }
+  } else if (/^[0-9]+$/.test(trustProxyRaw)) {
+    const hops = Number(trustProxyRaw);
+    if (hops < 1 || hops > 10) {
+      issues.push({ variable: 'TRUST_PROXY', message: 'a hop count must be between 1 and 10' });
+    } else {
+      trustProxy = hops;
+    }
+  } else {
+    const entries = trustProxyRaw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '');
+
+    const parsed = entries.map((entry) => ({ entry, block: trustedPrefix(entry) }));
+    const invalid = parsed.filter((item) => item.block === null);
+
+    if (entries.length === 0 || invalid.length > 0) {
+      issues.push({
+        variable: 'TRUST_PROXY',
+        message: `"${invalid[0]?.entry ?? trustProxyRaw}" is not an address or CIDR block`,
+      });
+    } else if (isProduction) {
+      // A trusted range is one that may state any address inside it. A block wider than a
+      // /8 (IPv4) or a /32 (IPv6) is not a proxy address, it is the internet: naming one
+      // would let an address the attacker chooses pick its own per-IP bucket (decision 0052).
+      const broad = parsed
+        .filter(
+          (item): item is { entry: string; block: { family: 4 | 6; prefix: number } } =>
+            item.block !== null && isTooBroad(item.block),
+        )[0];
+
+      if (broad !== undefined) {
+        issues.push({
+          variable: 'TRUST_PROXY',
+          message: `"${broad.entry}" is broader than a /${String(MIN_TRUSTED_IPV4_PREFIX)} IPv4 or /${String(MIN_TRUSTED_IPV6_PREFIX)} IPv6 block, which production refuses to trust`,
+        });
+      } else {
+        trustProxy = entries;
+      }
+    } else {
+      trustProxy = entries;
+    }
+  }
+
+  const trustForwardedForTests = read(raw, 'TRUST_FORWARDED_IP_FOR_TESTS').toLowerCase() === 'true';
+  if (trustForwardedForTests && isProduction) {
+    issues.push({ variable: 'TRUST_FORWARDED_IP_FOR_TESTS', message: 'is refused in production' });
+  }
+
+  // One leaked secret must not open every door. In production the three secrets the platform
+  // signs with are separate values, and each is refused if it is a development placeholder.
+  if (isProduction) {
+    const named = [
+      { variable: 'AUTH_SECRET', value: authSecret },
+      { variable: 'OTP_HMAC_SECRET', value: otpHmacSecret },
+      { variable: 'REVALIDATE_SECRET', value: revalidateRaw },
+    ].filter((item) => item.value !== '');
+
+    if (new Set(named.map((item) => item.value)).size !== named.length) {
+      issues.push({
+        variable: 'AUTH_SECRET',
+        message: 'must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production',
+      });
+    }
+  }
+
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
@@ -300,6 +610,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
     SMS_PROVIDER: smsProvider,
     EMAIL_PROVIDER: emailProvider,
     ALLOW_DEV_LOGIN: allowDevLogin,
+    TRUST_PROXY: trustProxy,
+    TRUST_FORWARDED_IP_FOR_TESTS: trustForwardedForTests,
     REVALIDATE_SECRET: revalidateRaw === '' ? DEFAULT_REVALIDATE_SECRET : revalidateRaw,
     S3_ENDPOINT: s3Endpoint,
     S3_REGION: s3Region,
@@ -308,5 +620,18 @@ export function validateEnv(raw: RawEnv): AppEnv {
     S3_SECRET_ACCESS_KEY: s3SecretKey,
     S3_FORCE_PATH_STYLE: s3ForcePathStyle,
     S3_PUBLIC_READ: s3PublicRead,
+    OTP_ENABLED: otpEnabled,
+    OTP_HMAC_SECRET: otpHmacSecret,
+    OTP_ALLOWED_COUNTRY_CODES: otpAllowedCountryCodes,
+    OTP_SMS_DAILY_BUDGET: otpSmsDailyBudget,
+    OTP_SENDER_ID: otpSenderId,
+    OTP_DLT_ENTITY_ID: otpDltEntityId,
+    OTP_TEMPLATE_ID: otpTemplateId,
+    OTP_FAKE_FIXED_CODE: otpFakeFixedCode,
+    OTP_GATEWAY_URL: otpGatewayUrl,
+    OTP_GATEWAY_AUTH_HEADER: otpGatewayAuthHeader,
+    OTP_GATEWAY_AUTH_VALUE: otpGatewayAuthValue,
+    OTP_GATEWAY_BODY_TEMPLATE: otpGatewayBodyTemplate,
+    OTP_GATEWAY_TIMEOUT_MS: otpGatewayTimeoutMs,
   };
 }

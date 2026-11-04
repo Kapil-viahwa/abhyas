@@ -4,8 +4,9 @@ import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
 import type { AuthenticatedUser } from './access';
 import { writeIdentityAudit } from './audit';
-import { hashPassword, verifyPassword } from './password';
+import { hashPassword } from './password';
 import type { RequestMetadata } from './request';
+import { ReauthenticationService } from './reauthentication.service';
 import { SESSIONS_SERVICE, type SessionSummary, type SessionsService } from './sessions.service';
 import { parseChangePasswordBody, parseDeactivateBody, parseUuid } from './validation';
 
@@ -21,7 +22,8 @@ export interface SessionListResult {
 
 export interface ProfileResult {
   readonly id: string;
-  readonly email: string;
+  /** Null for an account that signed up with a mobile number and has not linked an email. */
+  readonly email: string | null;
   readonly fullName: string;
   readonly roleCode: string;
   readonly permissions: readonly string[];
@@ -49,6 +51,7 @@ export class AccountService {
   constructor(
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
     @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
+    @Inject(ReauthenticationService) private readonly reauth: ReauthenticationService,
   ) {}
 
   private get prisma() {
@@ -132,22 +135,13 @@ export class AccountService {
   ): Promise<PasswordChangedResult> {
     const input = parseChangePasswordBody(body);
 
-    const row = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      select: { passwordHash: true },
-    });
-    if (!row) {
-      throw new NotFoundException('Account not found');
-    }
-
-    const matches = await verifyPassword(row.passwordHash, input.currentPassword);
-    if (!matches) {
-      throw new BadRequestException('Your current password is incorrect.');
-    }
-
-    if (input.currentPassword === input.newPassword) {
+    if (input.currentPassword !== undefined && input.currentPassword === input.newPassword) {
       throw new BadRequestException('Choose a password different from your current one.');
     }
+
+    // An account with a password types it; an account created by mobile proves itself with a
+    // code sent to its own number, or with a sign-in from minutes ago (decision 0050).
+    await this.reauth.assert(user, { password: input.currentPassword, code: input.code }, meta);
 
     // Hashing is deliberately slow, so it happens before the transaction opens.
     const passwordHash = await hashPassword(input.newPassword);
@@ -191,18 +185,15 @@ export class AccountService {
   ): Promise<DeactivatedResult> {
     const input = parseDeactivateBody(body);
 
-    const row = await this.prisma.user.findUnique({
-      where: { id: user.id },
-      select: { passwordHash: true },
-    });
-    if (!row) {
-      throw new NotFoundException('Account not found');
-    }
-
-    const matches = await verifyPassword(row.passwordHash, input.password);
-    if (!matches) {
-      throw new BadRequestException('Your password is incorrect.');
-    }
+    await this.reauth.assert(
+      user,
+      { password: input.password, code: input.code },
+      meta,
+      {
+        missingPasswordMessage: 'Enter your password',
+        wrongPasswordMessage: 'Your password is incorrect.',
+      },
+    );
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: user.id }, data: { status: 'DISABLED' } });

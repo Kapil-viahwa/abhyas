@@ -115,3 +115,31 @@ capability it was issued under.
 | Admin dashboard with real counts of what exists today | 3 | Done |
 | Object-level rules for questions, tests and attempts | with the resource (phases 4–5) | Not yet |
 
+
+
+## Mobile OTP (phase 2c)
+
+OTP introduces **no new permission codes**, because it introduces no privileged action:
+
+- The sign-up and sign-in routes are `@Public()`: they exist to hand out a first session.
+- Every OTP route also carries `OtpGuard`, which answers **404** when `OTP_ENABLED` is false.
+  The switch is not a permission, and no role can be given it.
+- Linking a mobile to an account is `@Authenticated()` and re-proves the holder through
+  `ReauthenticationService` — the current password, a code sent to the account's own verified
+  number, or (for an account with no email) a sign-in from the last fifteen minutes; it is never
+  `@Public` and never takes the account id from the body — the id comes from the session.
+- **The code wins while OTP is on (decision 0053).** A request with no proof fails after five
+  wrong proofs in fifteen minutes (`429`), and every wrong proof writes `IDENTITY_REAUTH_FAILED`.
+  For an account with no email address, the fresh session is accepted only when `OTP_ENABLED`
+  is false or the account has no verified number; with the switch on, a code to the account's
+  own number is required, including when adding or removing an identifier. The account page
+  offers "Send confirmation code" for those accounts, and the link and unlink forms ask for it.
+- Linking and unlinking an email is `@Authenticated()` and re-proves the holder the same way;
+  taking away the last identifier an account has is refused, so an account can never become
+  unreachable.
+- The same rule covers every other change to how somebody signs in: changing a password and
+  deactivating an account both ask for the current password (or a code, or the fresh session).
+- `signup_grant_requirement` is an ordinary setting row, so changing it needs `settings.write`
+  and is audited as `SETTINGS_CHANGED` like every other setting.
+- The alert counter and the daily SMS budget are not exposed as routes; they are read from Redis
+  by an operator (see `docs/otp-enable-runbook.md`).

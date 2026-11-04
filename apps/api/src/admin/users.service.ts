@@ -30,7 +30,8 @@ export interface RoleChangeResult {
 
 export interface UserSummary {
   readonly id: string;
-  readonly email: string;
+  /** Null for an account created with a mobile number that has not linked an email yet. */
+  readonly email: string | null;
   readonly fullName: string;
   readonly roleCode: string;
   readonly status: string;

@@ -92,3 +92,57 @@ change the deployment shape, and neither exists yet — they are listed as known
 | Production topology has no shortcuts | `docker` (`validate-compose-prod.mjs`) |
 | The stack comes up and serves health and docs | `compose-smoke` |
 | A user can open the home page against the running stack | `e2e` |
+
+
+## The proxy in front of the API, and the client address
+
+Per-IP limits are only as good as the address they count, so the address is resolved in one
+place and believed only when a proxy is named (decision 0052).
+
+**The API.** `TRUST_PROXY` is unset by default, and then every forwarding header is ignored:
+the socket address is the client. It accepts a hop count (1–10) or a comma-separated list of
+addresses and CIDR blocks. `true` and `*` are refused at boot in production, and so is any
+block wider than the platform can call a proxy: `/0`, an IPv4 block below `/8`, or an IPv6
+block below `/32` is refused, because a range that big lets a caller choose the address its
+counters are keyed by. Entries are validated as real addresses with `net.isIP`, not by shape.
+
+`docker-compose.prod.yml` names **exactly one** address: the web container's fixed address on
+the compose network, as a `/32`. It never names a subnet, and `scripts/validate-compose-prod.mjs`
+fails the `docker` job if it does, or if the web service loses its fixed address.
+
+**The web tier.** Behind Nginx on the host, one hop counts as the edge:
+
+```yaml
+TRUST_PROXY: '1'    # web: exactly one proxy — the host Nginx — in front of it
+```
+
+Here `TRUST_PROXY` is a hop count and nothing else; production refuses `true`, `*` and an
+address list, because a Next.js route handler cannot see the socket's peer and therefore
+cannot check an address. The tier reads `X-Real-IP` first — the single value Nginx overwrites
+— and otherwise the entry at the named hop **from the right** of `X-Forwarded-For`. The
+left-most entry is never read: that is the one a browser can write.
+
+**Every value is validated before it is used.** Both tiers drop anything that is not exactly
+one `net.isIP` address, so garbage, a list, an oversized value, a newline or a spreadsheet
+formula never reaches a Redis key, an audit row or a log line.
+
+So the edge must both **overwrite** the headers and be **named**:
+
+```nginx
+# Nginx, on the server that fronts web:3000 and api:3001
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $remote_addr;   # $remote_addr, NOT $proxy_add_x_forwarded_for
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+`$proxy_add_x_forwarded_for` appends what the browser sent, which is the one thing that must
+not happen. With `proxy_set_header X-Forwarded-For $remote_addr` the browser's own value is
+discarded and the address Nginx actually accepted the connection from is the only one either
+tier can see.
+
+**Why unset is a safe failure, and a shared one.** With `TRUST_PROXY` unset the socket address
+is used. Behind a proxy that is the proxy's own address, so every visitor shares one per-IP
+counter: the limits still apply, they just apply to everyone at once. That is degraded, not
+unsafe. The unsafe direction — believing whatever header arrives — is refused at boot in
+production, and the browser suite is the only thing allowed to choose an address, through
+`TRUST_FORWARDED_IP_FOR_TESTS`, which production also refuses.

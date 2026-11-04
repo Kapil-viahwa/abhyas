@@ -204,7 +204,7 @@ export async function seedCatalog(
 }
 
 /** Every catalog row records its creator, so the seed needs a real Administrator. */
-export async function findSeedActor(client: PrismaClient): Promise<{ id: string; email: string }> {
+export async function findSeedActor(client: PrismaClient): Promise<{ id: string; email: string | null }> {
   const admin = await client.user.findFirst({
     where: { role: { code: 'ADMIN' } },
     orderBy: { createdAt: 'asc' },

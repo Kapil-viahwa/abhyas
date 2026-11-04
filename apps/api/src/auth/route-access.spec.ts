@@ -6,6 +6,7 @@ import { CatalogController } from '../catalog/catalog.controller';
 import { PublicCatalogController } from '../catalog/public.controller';
 import { HealthController } from '../health/health.controller';
 import { MediaController } from '../media/media.controller';
+import { OtpController } from '../otp/otp.controller';
 import { QuestionsController } from '../questions/questions.controller';
 import { IS_PUBLIC_KEY, AUTHENTICATED_KEY, PERMISSIONS_KEY } from './access';
 import { AccountController } from './account.controller';
@@ -25,6 +26,7 @@ export const HTTP_CONTROLLERS = [
   PublicCatalogController,
   MediaController,
   QuestionsController,
+  OtpController,
 ];
 
 type Handler = (...args: never[]) => unknown;

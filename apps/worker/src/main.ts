@@ -1,35 +1,34 @@
 import { validateEnv, EnvValidationError } from '@abhyas/shared';
-import { Queue, Worker, type Job } from 'bullmq';
+import { PrismaClient } from '@prisma/client';
+import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 
-import { processPing } from './jobs/ping';
+import { runMaintenanceJob } from './queues/dispatch';
 import { MAINTENANCE_QUEUE, PING_JOB } from './queues/maintenance';
+import { registerRepeatableJobs } from './queues/schedule';
 
 async function main(): Promise<void> {
   // Same gate as the API: production refuses test keys, fake SMS and dev login.
   const config = validateEnv(process.env);
 
   const connection = new IORedis(config.REDIS_URL, { maxRetriesPerRequest: null });
+  const prisma = new PrismaClient({ log: ['warn', 'error'] });
 
   const queue = new Queue(MAINTENANCE_QUEUE, { connection });
   const worker = new Worker(
     MAINTENANCE_QUEUE,
-    async (job: Job) => {
-      if (job.name === PING_JOB) {
-        return processPing(
-          { id: job.id, data: job.data },
-          {
-            now: () => new Date(),
-            log: (message, meta) => {
-              // eslint-disable-next-line no-console
-              console.log(message, meta ?? {});
-            },
+    async (job) =>
+      runMaintenanceJob(
+        { id: job.id, name: job.name, data: job.data },
+        {
+          now: () => new Date(),
+          log: (message, meta) => {
+            // eslint-disable-next-line no-console
+            console.log(message, meta ?? {});
           },
-        );
-      }
-
-      throw new Error(`Unknown job "${job.name}" on queue "${MAINTENANCE_QUEUE}"`);
-    },
+          database: prisma,
+        },
+      ),
     { connection, concurrency: 1 },
   );
 
@@ -50,6 +49,11 @@ async function main(): Promise<void> {
     { removeOnComplete: 100, removeOnFail: 100 },
   );
 
+  // The repeatable jobs: BullMQ keeps the schedule in Redis, so a restart does not double it.
+  const registered = await registerRepeatableJobs(queue);
+  // eslint-disable-next-line no-console
+  console.log(`repeatable jobs registered: ${registered.join(', ')}`);
+
   // eslint-disable-next-line no-console
   console.log(`worker listening on "${MAINTENANCE_QUEUE}" (${config.NODE_ENV})`);
 
@@ -59,6 +63,7 @@ async function main(): Promise<void> {
     void (async () => {
       await worker.close();
       await queue.close();
+      await prisma.$disconnect();
       await connection.quit();
       process.exit(0);
     })();

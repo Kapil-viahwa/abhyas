@@ -97,6 +97,11 @@ services:
       S3_ACCESS_KEY_ID: abhyas-dev
       S3_SECRET_ACCESS_KEY: abhyas-dev-secret
       S3_FORCE_PATH_STYLE: 'true'
+      # Development only: the web tier is the only proxy in front of the API, so the address
+      # it forwards is believed. Production names its proxy instead (decision 0052).
+      TRUST_PROXY: 'true'
+      # Mobile OTP is off unless a developer turns it on; both tiers read the one switch.
+      OTP_ENABLED: ${OTP_ENABLED:-false}
     ports:
       - '3001:3001'
     depends_on:
@@ -132,6 +137,11 @@ services:
       REVALIDATE_SECRET: dev-only-revalidate-secret
       # Cloudflare's always-pass test site key; production refuses it.
       TURNSTILE_SITE_KEY: 1x0000000000000000000000000000000AA
+      # The mobile screens and their routes exist only when the API serves them.
+      OTP_ENABLED: ${OTP_ENABLED:-false}
+      # Development only: believe the browser's forwarding header so the browser suite can use
+      # a fresh address per test. Production boot refuses this switch (decision 0052).
+      TRUST_FORWARDED_IP_FOR_TESTS: 'true'
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
       - '3000:3000'

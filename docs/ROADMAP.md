@@ -12,7 +12,7 @@ request, and merges only when every CI job is green on its latest commit.
 | 3 | Administration, the exam catalog, settings, audit viewer, public SEO pages | Merged |
 | 4 | Object storage and upload pipeline, question model and versioning, sanitiser, question API and editor | Merged (PR #16, `0a677c5`) |
 | 4b | The rest of Phase 4: media-reference link table, media view route, CSV import, ZIP import, phase docs | Owed — see `docs/PHASE4-CHECKLIST.md` |
-| 2c | Mobile OTP, fully built but disabled by default behind `OTP_ENABLED` | Next |
+| 2c | Mobile OTP, fully built but disabled by default behind `OTP_ENABLED` | In progress (PR #18): items 1–5 built. The `e2e` job proves both modes — the default stack answers 404 and hides the screens, then a stack started with `docker-compose.otp.yml` is driven through registration, sign-in, linking, the wrong-code lockout and the resend countdown (decision 0051). The runbook's manual staging test (`docs/otp-enable-runbook.md`, §7) is owed — see `docs/PHASE2C-SPEC.md` |
 | 5 | Coins: ledger rules, daily grant, attempt charges, admin adjustments | Planned |
 | 6 | Test builder and enrollment: papers, sections, question selection, snapshot | Planned |
 | 7 | CBT engine: attempts, timers, autosave, submission, snapshot-scoped media | Planned |
@@ -23,7 +23,12 @@ request, and merges only when every CI job is green on its latest commit.
 
 These cannot be proven in CI and must be done before real students use the platform:
 
-- A manual staging test with a real SMS provider (Phase 2c runbook, `docs/otp-enable-runbook.md`).
+- A manual staging test with a real SMS provider (Phase 2c runbook, `docs/otp-enable-runbook.md` §7): a real
+  Indian number and a real DLT-approved template, run by the owner, with the result recorded in `PROGRESS.md`.
+- Nginx in front of the API, **overwriting** (never appending to) `X-Forwarded-For` and `X-Real-IP`, with
+  `TRUST_PROXY` on the API naming Nginx's address. The application rule is now in place (decision 0052): with
+  `TRUST_PROXY` unset, forwarding headers are ignored and production refuses trust-everything. Until the proxy
+  exists, per-IP limits collapse onto the web container's address — secure, but shared.
 - A real SMTP provider delivering verification and reset mail.
 - An integration test against the production S3-compatible service proving a tampered or
   expired presigned URL is refused (decision 0044).

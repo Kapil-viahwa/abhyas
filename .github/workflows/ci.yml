@@ -266,16 +266,33 @@ jobs:
           curl -fsS http://localhost:3001/health | tee "$RUNNER_TEMP/health.log"
           curl -fsS http://localhost:3001/api/docs-json -o /dev/null
           curl -fsS http://localhost:3000/ -o /dev/null
-      - name: Collect API container logs
+      # Every container that can fail at boot is read here, not just the API: a `--wait`
+      # failure only says "container X exited (1)", and the reason is in that container's
+      # own log. The worker's last lines are also raised as annotations, because a long log
+      # step is truncated exactly where it is read.
+      - name: Collect container logs
         if: failure()
         shell: bash
         run: |
-          docker compose logs --no-color api > "$RUNNER_TEMP/api-logs.log" 2>&1 || true
-          echo "### API container log (last 150 lines)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 150 "$RUNNER_TEMP/api-logs.log" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 150 "$RUNNER_TEMP/api-logs.log"
+          docker compose ps -a > "$RUNNER_TEMP/compose-ps.log" 2>&1 || true
+          for service in worker api web; do
+            docker compose logs --no-color "$service" > "$RUNNER_TEMP/$service-logs.log" 2>&1 || true
+            if [ "$service" = "worker" ]; then
+              while IFS= read -r line; do
+                if [ -n "$line" ]; then
+                  echo "::error title=worker::${line//'%'/%25}"
+                fi
+              done < <(tail -n 15 "$RUNNER_TEMP/$service-logs.log")
+            fi
+            {
+              echo "### $service container log (last 80 lines)"
+              echo '```'
+              tail -n 80 "$RUNNER_TEMP/$service-logs.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "--- $service ---"
+            tail -n 80 "$RUNNER_TEMP/$service-logs.log"
+          done
       - name: Tear the stack down
         if: always()
         shell: bash
@@ -297,10 +314,10 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-24.04
-    # A healthy run takes about five minutes (stack build, migrations, Playwright) and
-    # Playwright itself caps every test at 30s. Fifteen minutes is three times the
-    # observed cost, so a spec that hangs fails the job instead of holding it open.
-    timeout-minutes: 15
+    # Two stack boots and two Playwright runs measured at about six minutes. Twelve is the
+    # hard cap, and Playwright's own global timeout (eight minutes) fails a hung run before
+    # it, so a stuck browser cannot hold the job open.
+    timeout-minutes: 12
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -333,33 +350,91 @@ jobs:
         run: |
           set -o pipefail
           docker compose run --rm migrate 2>&1 | tee "$RUNNER_TEMP/migrate.log"
-      - name: Run Playwright
+      # Both halves of the master switch, in one job. The default stack proves the switch is
+      # off: the mobile screens are hidden and their routes and form posts answer 404. Then
+      # the OTP override turns it on with the fake provider and a fixed code (decision 0051),
+      # and the second project drives the real screens — registration, sign-in, linking with
+      # re-authentication, the wrong-code lockout, the resend countdown and the identical
+      # answer for a number nobody has.
+      - name: Run Playwright (OTP disabled)
         shell: bash
         run: |
           set -o pipefail
-          pnpm exec playwright test 2>&1 | tee "$RUNNER_TEMP/playwright.log"
-      - name: Collect API container logs
+          pnpm exec playwright test --project=chromium 2>&1 | tee "$RUNNER_TEMP/playwright.log"
+      - name: Restart the stack with OTP enabled
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose -f docker-compose.yml -f docker-compose.otp.yml up -d --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-otp.log"
+      # `--wait` says the containers are up, not that the new API and web are answering with
+      # the new settings. The mobile page must be 200 here: that is the proof the web tier
+      # really received OTP_ENABLED=true, not just the API.
+      - name: Wait for the enabled stack to answer
+        shell: bash
+        run: |
+          set -o pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:3001/health > /dev/null \
+              && curl -fsS http://localhost:3000/ > /dev/null \
+              && curl -fsS http://localhost:3000/register/mobile > /dev/null; then
+              echo "the enabled stack is answering, with the mobile page at 200"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::the stack did not come back with OTP enabled"
+          docker compose -f docker-compose.yml -f docker-compose.otp.yml logs --no-color --tail 80 api web || true
+          exit 1
+      - name: Run Playwright (OTP enabled, fake provider)
+        shell: bash
+        env:
+          E2E_OTP: '1'
+        run: |
+          set -o pipefail
+          pnpm exec playwright test --project=otp 2>&1 | tee "$RUNNER_TEMP/playwright-otp.log"
+      # Every container that can fail at boot is read here, not just the API: a `--wait`
+      # failure only says "container X exited (1)", and the reason is in that container's
+      # own log. The worker's last lines are also raised as annotations, because a long log
+      # step is truncated exactly where it is read.
+      - name: Collect container logs
         if: failure()
         shell: bash
         run: |
-          docker compose logs --no-color api > "$RUNNER_TEMP/api-logs.log" 2>&1 || true
-          echo "### API container log (last 150 lines)" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 150 "$RUNNER_TEMP/api-logs.log" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          tail -n 150 "$RUNNER_TEMP/api-logs.log"
+          docker compose ps -a > "$RUNNER_TEMP/compose-ps.log" 2>&1 || true
+          for service in worker api web; do
+            docker compose logs --no-color "$service" > "$RUNNER_TEMP/$service-logs.log" 2>&1 || true
+            if [ "$service" = "worker" ]; then
+              while IFS= read -r line; do
+                if [ -n "$line" ]; then
+                  echo "::error title=worker::${line//'%'/%25}"
+                fi
+              done < <(tail -n 15 "$RUNNER_TEMP/$service-logs.log")
+            fi
+            {
+              echo "### $service container log (last 80 lines)"
+              echo '```'
+              tail -n 80 "$RUNNER_TEMP/$service-logs.log"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "--- $service ---"
+            tail -n 80 "$RUNNER_TEMP/$service-logs.log"
+          done
       - name: Tear the stack down
         if: always()
         shell: bash
         run: |
           docker compose logs --no-color > "$RUNNER_TEMP/compose-logs.log" 2>&1 || true
           docker compose down -v > "$RUNNER_TEMP/compose-down.log" 2>&1 || true
-      - name: Upload Playwright report
+      - name: Upload Playwright report and traces
         if: always()
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: playwright-report
-          path: playwright-report/
+          # The report and the trace of every failed test, uploaded even when the job is
+          # cancelled or times out, so a failure always leaves its evidence behind.
+          path: |
+            playwright-report/
+            test-results/
           if-no-files-found: ignore
           retention-days: 7
       - name: Failure summary

@@ -28,6 +28,7 @@ import { DATABASE_PROBE } from '../infra/tokens';
 import { TURNSTILE_VERIFIER, type TurnstileVerifier } from '../infra/turnstile-verifier';
 import type { AuthenticatedUser } from './access';
 import { writeIdentityAudit } from './audit';
+import { isDisposableEmail } from './disposable-email';
 import { hashPassword, verifyPassword } from './password';
 import type { RequestMetadata } from './request';
 import { RefreshTokenReuseError, SESSIONS_SERVICE, type SessionsService } from './sessions.service';
@@ -75,7 +76,8 @@ export interface LoginResult {
   readonly refreshExpiresAt: string;
   readonly user: {
     readonly id: string;
-    readonly email: string;
+    /** Null for an account created with a mobile number and no email yet. */
+    readonly email: string | null;
     readonly roleCode: string;
   };
 }
@@ -129,6 +131,13 @@ export class AuthService {
 
   async register(body: unknown, meta: RequestMetadata = {}): Promise<RegisterResult> {
     const input = parseRegisterBody(body);
+
+    // The signup grant is once per person, so a throwaway inbox must not earn one. This is
+    // checked before the human verification on purpose: it costs nothing and no SMS or
+    // mail is sent for a request that is going to be refused anyway.
+    if (isDisposableEmail(input.email)) {
+      throw new BadRequestException('Use a permanent email address: throwaway inboxes are not accepted.');
+    }
 
     await this.enforceRateLimit([
       { key: ipRateLimitKey('register', meta.ip ?? ''), ...RATE_LIMITS.registerPerIp },

@@ -64,6 +64,13 @@ describe('web configuration', () => {
     expect(config.revalidateSecret).toBe('r'.repeat(32));
   });
 
+  it('keeps the mobile screens off unless the switch is set', () => {
+    expect(webConfig({ NODE_ENV: 'test' }).otpEnabled).toBe(false);
+    expect(webConfig({ NODE_ENV: 'test', OTP_ENABLED: 'false' }).otpEnabled).toBe(false);
+    expect(webConfig({ NODE_ENV: 'test', OTP_ENABLED: 'true' }).otpEnabled).toBe(true);
+    expect(webConfig({ NODE_ENV: 'test', OTP_ENABLED: ' TRUE ' }).otpEnabled).toBe(true);
+  });
+
   it('requires a revalidation secret of a usable length in production', () => {
     const base = {
       NODE_ENV: 'production',

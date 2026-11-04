@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 /**
  * Proves the production compose file has no development shortcuts:
@@ -79,6 +79,33 @@ if (!services.api) {
   passes.push('service "api" publishes no host ports');
 }
 
+// Client-address trust (decision 0052): the API trusts exactly the web container by address,
+// and the web tier trusts exactly the hops in front of it. A subnet, or "true", here would
+// let a caller pick the address it is counted by and step out of the per-IP limits.
+const webNetworks = services.web?.networks ?? {};
+const webNetwork = Array.isArray(webNetworks) ? {} : (Object.values(webNetworks)[0] ?? {});
+const webAddress = String(webNetwork.ipv4_address ?? '');
+const apiTrustProxy = String(services.api?.environment?.TRUST_PROXY ?? '');
+const webTrustProxy = String(services.web?.environment?.TRUST_PROXY ?? '');
+
+if (webAddress === '') {
+  failures.push('service "web" has no fixed address, so the API cannot name it as its only proxy');
+} else if (apiTrustProxy !== `${webAddress}/32`) {
+  failures.push(
+    `service "api" trusts "${apiTrustProxy}" as a proxy; it must be exactly the web tier, "${webAddress}/32"`,
+  );
+} else {
+  passes.push(`service "api" trusts exactly the web tier as its proxy (${apiTrustProxy})`);
+}
+
+if (!/^[0-9]+$/.test(webTrustProxy) || Number(webTrustProxy) < 1 || Number(webTrustProxy) > 10) {
+  failures.push(
+    `service "web" sets TRUST_PROXY "${webTrustProxy}"; it must be the hop count of the edge in front of it (1-10)`,
+  );
+} else {
+  passes.push(`service "web" trusts ${webTrustProxy} edge hop(s) in front of it`);
+}
+
 for (const name of ['api', 'worker', 'migrations']) {
   const environment = services[name]?.environment ?? {};
   if (environment.NODE_ENV !== 'production') {
@@ -98,6 +125,12 @@ for (const [name, service] of Object.entries(services)) {
   const sms = String(environment.SMS_PROVIDER ?? '').toLowerCase();
   if (sms === 'fake' || sms === 'console') {
     failures.push(`service "${name}" uses the "${sms}" SMS provider in production`);
+  }
+
+  // The fixed code exists so a browser test can type a code it knows. It is meaningless
+  // here, and its presence would mean somebody copied the CI fixture into production.
+  if (environment.OTP_FAKE_FIXED_CODE !== undefined) {
+    failures.push(`service "${name}" sets OTP_FAKE_FIXED_CODE, which is a test fixture`);
   }
 
   for (const volume of service.volumes ?? []) {
@@ -126,6 +159,22 @@ for (const [variable, label] of [
   } else {
     failures.push(`${COMPOSE_FILE} rendered without ${label}; a default secret is being used`);
   }
+}
+
+// The OTP override is a development and CI fixture (decision 0051). Production must not
+// mention it, and must not carry the fixed code that only the fake provider may use.
+const composeSource = readFileSync(COMPOSE_FILE, 'utf8');
+
+if (/docker-compose\.otp\.yml/.test(composeSource)) {
+  failures.push(`${COMPOSE_FILE} names docker-compose.otp.yml, which turns on the fake provider`);
+} else {
+  passes.push(`${COMPOSE_FILE} never includes docker-compose.otp.yml`);
+}
+
+if (/OTP_FAKE_FIXED_CODE/.test(composeSource)) {
+  failures.push(`${COMPOSE_FILE} sets OTP_FAKE_FIXED_CODE, which is a test fixture`);
+} else {
+  passes.push(`${COMPOSE_FILE} never sets OTP_FAKE_FIXED_CODE`);
 }
 
 const report = [];

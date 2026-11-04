@@ -104,8 +104,14 @@ describe('auth input validation', () => {
     expect(
       parseChangePasswordBody({ currentPassword: 'old-password-9x', newPassword: 'correct-horse-9battery' }),
     ).toEqual({ currentPassword: 'old-password-9x', newPassword: 'correct-horse-9battery' });
-    expect(() => parseChangePasswordBody({ newPassword: 'correct-horse-9battery' })).toThrow(
-      /current password/,
+    // The proof itself is checked by ReauthenticationService, which is the only place that
+    // knows whether this account has a password to ask for, so the parser accepts either
+    // proof or none — and still refuses one that is malformed.
+    expect(parseChangePasswordBody({ newPassword: 'correct-horse-9battery' })).toEqual({
+      newPassword: 'correct-horse-9battery',
+    });
+    expect(() => parseChangePasswordBody({ newPassword: 'correct-horse-9battery', code: '12ab' })).toThrow(
+      /6-digit code/,
     );
     expect(() =>
       parseChangePasswordBody({ currentPassword: 'old-password-9x', newPassword: 'short' }),
@@ -118,11 +124,13 @@ describe('auth input validation', () => {
     expect(() => parseResetPasswordBody({ newPassword: 'correct-horse-9battery' })).toThrow(/verification token/);
   });
 
-  it('requires the password before an account can be deactivated', () => {
+  it('reads a password or a code before an account can be deactivated', () => {
     expect(parseDeactivateBody({ password: 'correct-horse-9battery' })).toEqual({
       password: 'correct-horse-9battery',
     });
-    expect(() => parseDeactivateBody({})).toThrow(/Enter your password/);
+    // An account created with a mobile number has no password it knows; its proof is a code.
+    expect(parseDeactivateBody({ code: '123456' })).toEqual({ code: '123456' });
+    expect(() => parseDeactivateBody({ code: '12' })).toThrow(/6-digit code/);
   });
 
   it('normalises a role code and refuses anything that is not one', () => {

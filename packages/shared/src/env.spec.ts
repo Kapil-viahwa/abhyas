@@ -108,6 +108,33 @@ describe('validateEnv', () => {
     );
   });
 
+  it('refuses a development secret or a default value in production', () => {
+    expect(() => validateEnv({ ...production, AUTH_SECRET: `dev-${'x'.repeat(40)}` })).toThrow(
+      /AUTH_SECRET: must not be a development or placeholder value in production/,
+    );
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: 'dev-only-revalidate-secret' })).toThrow(
+      /REVALIDATE_SECRET: must not be a well-known default value/,
+    );
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: `${'s'.repeat(24)}-changeme` })).toThrow(
+      /REVALIDATE_SECRET: must not be a well-known default value/,
+    );
+  });
+
+  it('requires the three secrets to be different values in production', () => {
+    expect(() => validateEnv({ ...production, AUTH_SECRET: production.REVALIDATE_SECRET })).toThrow(
+      /AUTH_SECRET: must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production/,
+    );
+  });
+
+  it('requires a gateway secret only when the http gateway is used', () => {
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_AUTH_VALUE: '' })).toThrow(
+      /OTP_GATEWAY_AUTH_VALUE: is required when SMS_PROVIDER is http in production/,
+    );
+
+    // With the switch off, a production boot needs no provider and no gateway secret.
+    expect(validateEnv({ ...production, SMS_PROVIDER: '' }).OTP_ENABLED).toBe(false);
+  });
+
   it('reports every problem at once', () => {
     try {
       validateEnv({ NODE_ENV: 'production' });
@@ -116,7 +143,7 @@ describe('validateEnv', () => {
       expect(error).toBeInstanceOf(EnvValidationError);
       const issues = (error as EnvValidationError).issues;
       expect(issues.map((issue) => issue.variable)).toEqual(
-        expect.arrayContaining(['DATABASE_URL', 'REDIS_URL', 'AUTH_SECRET', 'TURNSTILE_SECRET_KEY', 'SMS_PROVIDER']),
+        expect.arrayContaining(['DATABASE_URL', 'REDIS_URL', 'AUTH_SECRET', 'TURNSTILE_SECRET_KEY', 'S3_ENDPOINT']),
       );
     }
   });
@@ -187,6 +214,243 @@ describe('validateEnv', () => {
   it('refuses a half-configured store in development', () => {
     expect(() => validateEnv({ ...base, S3_ENDPOINT: 'http://minio:9000' })).toThrow(
       /S3_BUCKET: is required whenever S3_ENDPOINT is set/,
+    );
+  });
+});
+
+/** A production environment that turns mobile OTP on through the generic gateway. */
+const otpProduction = {
+  ...production,
+  SMS_PROVIDER: 'http',
+  OTP_ENABLED: 'true',
+  OTP_HMAC_SECRET: 'o'.repeat(48),
+  OTP_SENDER_ID: 'ABHYAS',
+  OTP_DLT_ENTITY_ID: '1000000000000000000',
+  OTP_TEMPLATE_ID: '1107160000000000000',
+  OTP_GATEWAY_URL: 'https://sms.example.com/send',
+  OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}","message":"{{body}}","template":"{{templateId}}"}',
+  OTP_GATEWAY_AUTH_VALUE: 'live-gateway-secret-value',
+};
+
+describe('validateEnv and the OTP master switch', () => {
+  it('keeps mobile OTP off unless it is asked for', () => {
+    const env = validateEnv(base);
+
+    expect(env.OTP_ENABLED).toBe(false);
+    expect(env.OTP_ALLOWED_COUNTRY_CODES).toEqual(['+91']);
+    expect(env.OTP_SMS_DAILY_BUDGET).toBe(100);
+    // Off is not the same as absent: the boundaries are still present and bounded.
+    expect(env.OTP_GATEWAY_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('accepts an OTP-enabled development configuration with the fake provider', () => {
+    const env = validateEnv({ ...base, OTP_ENABLED: 'true', OTP_HMAC_SECRET: 'h'.repeat(32), SMS_PROVIDER: 'fake' });
+
+    expect(env.OTP_ENABLED).toBe(true);
+    expect(env.SMS_PROVIDER).toBe('fake');
+  });
+
+  it('requires an HMAC secret whenever OTP is on', () => {
+    expect(() => validateEnv({ ...base, OTP_ENABLED: 'true' })).toThrow(
+      /OTP_HMAC_SECRET: is required when OTP_ENABLED is true/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_HMAC_SECRET: 'short' })).toThrow(
+      /OTP_HMAC_SECRET: must be at least 32 characters in production/,
+    );
+    expect(() =>
+      validateEnv({ ...otpProduction, OTP_HMAC_SECRET: 'dev-only-insecure-secret-please-change-32chars' }),
+    ).toThrow(/OTP_HMAC_SECRET: must not be a well-known default value/);
+  });
+
+  it('refuses the fake provider for an OTP-enabled production boot', () => {
+    // The fake provider already refuses itself; the environment refuses first, so the
+    // process never even reaches the constructor.
+    expect(() => validateEnv({ ...otpProduction, SMS_PROVIDER: 'fake' })).toThrow(
+      /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+    expect(() => validateEnv({ ...otpProduction, SMS_PROVIDER: 'console' })).toThrow(
+      /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+  });
+
+  it('refuses a provider with no adapter for an OTP-enabled production boot', () => {
+    expect(() => validateEnv({ ...otpProduction, SMS_PROVIDER: 'msg91' })).toThrow(
+      /SMS_PROVIDER: must be "http" when OTP_ENABLED is true in production/,
+    );
+  });
+
+  it('requires the sender id, DLT entity id and template id in production', () => {
+    expect(() => validateEnv({ ...otpProduction, OTP_SENDER_ID: '' })).toThrow(
+      /OTP_SENDER_ID: is required in production when OTP is enabled/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_DLT_ENTITY_ID: '' })).toThrow(
+      /OTP_DLT_ENTITY_ID: is required in production when OTP is enabled/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_TEMPLATE_ID: '' })).toThrow(
+      /OTP_TEMPLATE_ID: is required in production when OTP is enabled/,
+    );
+  });
+
+  it('requires an https gateway and its body template for the generic adapter', () => {
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_URL: '' })).toThrow(
+      /OTP_GATEWAY_URL: is required when SMS_PROVIDER is http/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_URL: 'http://sms.example.com/send' })).toThrow(
+      /OTP_GATEWAY_URL: must be an https URL in production/,
+    );
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_BODY_TEMPLATE: '' })).toThrow(
+      /OTP_GATEWAY_BODY_TEMPLATE: is required when SMS_PROVIDER is http/,
+    );
+  });
+
+  it('refuses a country prefix that is not E.164', () => {
+    expect(() => validateEnv({ ...base, OTP_ALLOWED_COUNTRY_CODES: '91' })).toThrow(
+      /OTP_ALLOWED_COUNTRY_CODES: "91" is not an E.164 country prefix/,
+    );
+    expect(() => validateEnv({ ...base, OTP_ALLOWED_COUNTRY_CODES: ' , ' })).toThrow(
+      /OTP_ALLOWED_COUNTRY_CODES: must name at least one country prefix/,
+    );
+  });
+
+  it('bounds the timeout and the daily budget', () => {
+    expect(() => validateEnv({ ...base, OTP_GATEWAY_TIMEOUT_MS: '10' })).toThrow(
+      /OTP_GATEWAY_TIMEOUT_MS: must be an integer between 1000 and 30000/,
+    );
+    expect(() => validateEnv({ ...base, OTP_SMS_DAILY_BUDGET: '0' })).toThrow(
+      /OTP_SMS_DAILY_BUDGET: must be an integer between 1 and 100000/,
+    );
+  });
+});
+
+
+/**
+ * The fixed code exists so a browser test can type a code it already knows. It is a
+ * development shortcut in the strictest sense: it must be impossible to turn on where a
+ * real message could go out, and the boot refusal is the proof (decision 0051).
+ */
+describe('the fixed OTP code', () => {
+  const fakeOtp = {
+    ...base,
+    TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
+    SMS_PROVIDER: 'fake',
+    OTP_ENABLED: 'true',
+    OTP_HMAC_SECRET: 'h'.repeat(32),
+    OTP_TEMPLATE_ID: 'TPL-DEV',
+  };
+
+  it('is accepted with the fake provider outside production', () => {
+    const env = validateEnv({ ...fakeOtp, OTP_FAKE_FIXED_CODE: '123456' });
+
+    expect(env.OTP_FAKE_FIXED_CODE).toBe('123456');
+    expect(env.SMS_PROVIDER).toBe('fake');
+  });
+
+  it('is empty when it is not asked for, so codes stay random', () => {
+    expect(validateEnv(fakeOtp).OTP_FAKE_FIXED_CODE).toBe('');
+  });
+
+  it('is refused in production, and the fake provider with it', () => {
+    expect(() =>
+      validateEnv({
+        ...production,
+        OTP_ENABLED: 'true',
+        OTP_HMAC_SECRET: 'h'.repeat(32),
+        OTP_SENDER_ID: 'ABHYAS',
+        OTP_DLT_ENTITY_ID: '1201159000000000000',
+        OTP_TEMPLATE_ID: 'TPL-LIVE',
+        SMS_PROVIDER: 'http',
+        OTP_GATEWAY_URL: 'https://sms.example.com/send',
+        OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}","body":"{{body}}"}',
+        OTP_FAKE_FIXED_CODE: '123456',
+      }),
+    ).toThrow(/OTP_FAKE_FIXED_CODE: is refused in production/);
+
+    expect(() => validateEnv({ ...production, SMS_PROVIDER: 'fake', OTP_FAKE_FIXED_CODE: '123456' })).toThrow(
+      /SMS_PROVIDER: fake and console SMS providers are refused in production/,
+    );
+  });
+
+  it('is refused with a provider that would really send, and when it is not six digits', () => {
+    expect(() => validateEnv({ ...fakeOtp, SMS_PROVIDER: 'msg91', OTP_FAKE_FIXED_CODE: '123456' })).toThrow(
+      /OTP_FAKE_FIXED_CODE: may only be set while SMS_PROVIDER is fake/,
+    );
+    expect(() => validateEnv({ ...fakeOtp, OTP_FAKE_FIXED_CODE: '12345' })).toThrow(
+      /OTP_FAKE_FIXED_CODE: must be six digits/,
+    );
+    expect(() => validateEnv({ ...fakeOtp, OTP_FAKE_FIXED_CODE: 'abcdef' })).toThrow(
+      /OTP_FAKE_FIXED_CODE: must be six digits/,
+    );
+  });
+});
+
+
+/**
+ * Client-address trust (decision 0052). The per-IP limits are only as good as the address
+ * they count, so nothing is trusted unless it is named, and "trust everything" is a
+ * development convenience that production refuses at boot.
+ */
+describe('client address trust', () => {
+  const devEnv = {
+    ...base,
+    TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
+    SMS_PROVIDER: 'fake',
+  };
+
+  it('trusts nothing by default', () => {
+    expect(validateEnv(devEnv).TRUST_PROXY).toBe(false);
+    expect(validateEnv(devEnv).TRUST_FORWARDED_IP_FOR_TESTS).toBe(false);
+  });
+
+  it('accepts named proxy addresses, CIDR blocks and a hop count', () => {
+    expect(validateEnv({ ...devEnv, TRUST_PROXY: '127.0.0.1,10.0.0.0/8' }).TRUST_PROXY).toEqual([
+      '127.0.0.1',
+      '10.0.0.0/8',
+    ]);
+    expect(validateEnv({ ...devEnv, TRUST_PROXY: '2' }).TRUST_PROXY).toBe(2);
+    expect(validateEnv({ ...devEnv, TRUST_PROXY: 'true' }).TRUST_PROXY).toBe(true);
+  });
+
+  it('refuses trust-everything in production', () => {
+    expect(() => validateEnv({ ...production, TRUST_PROXY: 'true' })).toThrow(
+      /TRUST_PROXY: is refused in production/,
+    );
+    expect(() => validateEnv({ ...production, TRUST_PROXY: '*' })).toThrow(
+      /TRUST_PROXY: is refused in production/,
+    );
+  });
+
+  it('refuses a malformed entry and an impossible hop count', () => {
+    expect(() => validateEnv({ ...devEnv, TRUST_PROXY: 'not-an-address' })).toThrow(
+      /TRUST_PROXY: "not-an-address" is not an address or CIDR block/,
+    );
+    expect(() => validateEnv({ ...devEnv, TRUST_PROXY: '0' })).toThrow(
+      /TRUST_PROXY: a hop count must be between 1 and 10/,
+    );
+  });
+
+  it('refuses an entry that is not a real address, however plausible it looks', () => {
+    for (const value of ['999.1.1.1', '172.31.0.10/33', '172.31.0.10/8/8', '2001:db8::/129']) {
+      expect(() => validateEnv({ ...devEnv, TRUST_PROXY: value })).toThrow(
+        /is not an address or CIDR block/,
+      );
+    }
+  });
+
+  it('refuses a production range too broad to be a proxy', () => {
+    for (const value of ['0.0.0.0/0', '::/0', '10.0.0.0/7', '2001:db8::/16']) {
+      expect(() => validateEnv({ ...production, TRUST_PROXY: value })).toThrow(
+        /is broader than a \/8 IPv4 or \/32 IPv6 block/,
+      );
+    }
+
+    // The narrowest blocks production does accept: the edge itself, or a /8 at the limit.
+    expect(validateEnv({ ...production, TRUST_PROXY: '172.31.0.10/32' }).TRUST_PROXY).toEqual(['172.31.0.10/32']);
+    expect(validateEnv({ ...production, TRUST_PROXY: '10.0.0.0/8' }).TRUST_PROXY).toEqual(['10.0.0.0/8']);
+  });
+
+  it('refuses the browser-suite switch in production', () => {
+    expect(() => validateEnv({ ...production, TRUST_FORWARDED_IP_FOR_TESTS: 'true' })).toThrow(
+      /TRUST_FORWARDED_IP_FOR_TESTS: is refused in production/,
     );
   });
 });

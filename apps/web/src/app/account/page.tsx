@@ -2,6 +2,8 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../components/auth-shell';
+import { TurnstileField } from '../../components/turnstile-field';
+import { webConfig } from '../../lib/config';
 import { csrfFromCookies, loadSession, loadSessions } from '../../lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -25,6 +27,8 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
   const csrf = await csrfFromCookies();
   const params = await searchParams;
   const error = typeof params.error === 'string' ? params.error : undefined;
+  const mobile = typeof params.mobile === 'string' ? params.mobile : '';
+  const config = webConfig();
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-12">
@@ -33,7 +37,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
           <h1 className="text-2xl font-semibold text-white">Your account</h1>
           <p className="text-sm text-slate-400">
-            {session.profile.fullName} · {session.profile.email}
+            {session.profile.fullName} · {session.profile.email ?? 'No email linked'}
           </p>
         </div>
         <form action="/api/auth/logout" method="post">
@@ -90,6 +94,140 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
 
         {sessions.length === 0 ? <p className="mt-4 text-sm text-slate-400">No live sessions.</p> : null}
       </section>
+
+      {config.otpEnabled ? (
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+          <h2 className="text-lg font-medium text-slate-100">Mobile number</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            A verified number lets you sign in with a six-digit code. Adding or removing one asks you to confirm it is
+            you first.
+          </p>
+
+          <Notice message={mobile === 'linked' ? 'Your mobile number was added.' : undefined} />
+          <Notice message={mobile === 'removed' ? 'Your mobile number was removed.' : undefined} />
+          <Notice message={params.email === 'linked' ? 'Your email address was added and verified.' : undefined} />
+          <Notice
+            message={
+              params.reauth === 'sent' ? 'A confirmation code was sent to your current number.' : undefined
+            }
+          />
+
+          {session.profile.email === null ? (
+            <form action="/api/account/reauth/otp" method="post" className="mt-4 space-y-3">
+              <input type="hidden" name="csrfToken" value={csrf} />
+              <p className="text-sm text-slate-400">
+                This account has no password. Ask for a confirmation code on your number, and type it below when
+                adding or removing one.
+              </p>
+              <TurnstileField siteKey={config.turnstileSiteKey} testMode={config.turnstileTestMode} />
+              <button className={secondaryButtonClass} type="submit">
+                Send confirmation code
+              </button>
+            </form>
+          ) : null}
+
+          <form action="/api/account/mobile/link" method="post" className="mt-4 space-y-3">
+            <input type="hidden" name="csrfToken" value={csrf} />
+
+            <label className={labelClass}>
+              Mobile number to add
+              <input className={inputClass} name="destination" type="tel" autoComplete="tel" required />
+            </label>
+
+            {session.profile.email !== null ? (
+              <label className={labelClass}>
+                Your password
+                <input className={inputClass} name="password" type="password" autoComplete="current-password" />
+              </label>
+            ) : null}
+
+            <TurnstileField siteKey={config.turnstileSiteKey} testMode={config.turnstileTestMode} />
+
+            <button className={buttonClass} type="submit">
+              Send code
+            </button>
+          </form>
+
+          <form action="/api/account/mobile/link/verify" method="post" className="mt-4 space-y-3">
+            <input type="hidden" name="csrfToken" value={csrf} />
+
+            <label className={labelClass}>
+              Number the code was sent to
+              <input className={inputClass} name="destination" type="tel" required />
+            </label>
+
+            <label className={labelClass}>
+              Six-digit code
+              <input
+                className={inputClass}
+                name="code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                required
+              />
+            </label>
+
+            {session.profile.email === null ? (
+              <label className={labelClass}>
+                Confirmation code for your current number
+                <input
+                  className={inputClass}
+                  name="reauthCode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  required
+                />
+              </label>
+            ) : null}
+
+            {session.profile.email !== null ? (
+              <label className={labelClass}>
+                Your password
+                <input className={inputClass} name="password" type="password" autoComplete="current-password" />
+              </label>
+            ) : null}
+
+            <button className={buttonClass} type="submit">
+              Confirm number
+            </button>
+          </form>
+
+          <form action="/api/account/mobile/unlink" method="post" className="mt-4 space-y-3">
+            <input type="hidden" name="csrfToken" value={csrf} />
+
+            <label className={labelClass}>
+              Your password, if you have one
+              <input className={inputClass} name="password" type="password" autoComplete="current-password" />
+            </label>
+
+            {session.profile.email === null ? (
+              <label className={labelClass}>
+                Confirmation code from your number
+                <input
+                  className={inputClass}
+                  name="code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  required
+                />
+              </label>
+            ) : null}
+
+            <button className={secondaryButtonClass} type="submit">
+              Remove mobile number
+            </button>
+          </form>
+        </section>
+      ) : null}
 
       <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
         <h2 className="text-lg font-medium text-slate-100">Change password</h2>
