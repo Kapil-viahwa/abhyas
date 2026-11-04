@@ -127,6 +127,37 @@ grant to require a **verified mobile number** instead, change it to `mobile` fro
 value that is not `email` or `mobile`. The coin grant itself is Phase 5: this phase only records
 which contact must be verified.
 
+## 6b. Turning OTP off again
+
+Flipping `OTP_ENABLED` back to false is one variable and a redeploy — and it is the moment a
+small group of accounts needs help. Read this before you do it.
+
+**Who is stranded.** An account created from a mobile number has no email address and no
+password anybody knows: the stored hash is of a random value the platform generated
+(decision 0050). While OTP is on, that account proves itself for a sensitive change with a code
+sent to its own number — changing the password, signing out the other sessions, deactivating,
+adding or removing an identifier. With the switch off, every OTP route answers 404, so no code
+can be sent and those changes cannot be confirmed. The account can still sign in (with a code,
+before the switch is flipped) but cannot change anything that asks for proof.
+
+**The recovery path, in order of preference:**
+
+1. **Before the switch goes off**, ask those users to add an email address from `/account`
+   (the "Send confirmation code" flow, then the mailed link). An account with an email has
+   the password reset path and needs nothing else.
+2. **Password reset by email**, for an account that has one: `/forgot-password`, open the
+   mailed link, set a password, and from then on the password is the proof.
+3. **Administrator-assisted**, for an account with no email: there is no admin screen that
+   sets a password today. The operator's path is a database intervention — attach an email
+   through the ordinary linking flow once OTP is back on for one deploy, or write a fresh
+   `password_hash` with the API's own `hashPassword` and audit it — and it is recorded as an
+   owed admin feature in `PROGRESS.md`. Treat it as an incident procedure, not routine support:
+   it bypasses the proof the platform normally requires.
+
+**So the order is: add the emails, then flip the switch.** If that was missed, turn
+`OTP_ENABLED` back on for one deploy, let the affected users link an email or set a password,
+then turn it off again. Do not delete an account to solve this.
+
 ## 7. Verification checklist
 
 On staging, with a real provider and a real phone:

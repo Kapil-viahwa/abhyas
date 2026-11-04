@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { API_CALL_MAX_RESPONSE_BYTES, ApiCallConfigurationError, apiCall } from './upstream';
+import { API_CALL_MAX_RESPONSE_BYTES, ApiCallConfigurationError, GENERIC_API_MESSAGE, apiCall } from './upstream';
 
 /**
  * The web tier's only door to the API, and the three ways it can be made to misbehave:
@@ -41,6 +41,19 @@ describe('apiCall', () => {
 
     expect(result.status).toBe(502);
     expect(result.body?.message).toBe('The API response was too large.');
+  });
+
+  it('never hands raw non-JSON text to a page', async () => {
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve(new Response('<html>upstream error at /srv/app/secret-path</html>', { status: 500 })),
+    );
+
+    const result = await apiCall<{ message: string }>('/exams', { method: 'GET' });
+
+    // The status is kept so the page can still say it failed; the body is ours, not theirs.
+    expect(result.status).toBe(500);
+    expect(result.body?.message).toBe(GENERIC_API_MESSAGE);
+    expect(JSON.stringify(result.body)).not.toContain('/srv/app');
   });
 
   it('still parses a normal response', async () => {

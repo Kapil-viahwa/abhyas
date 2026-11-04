@@ -41,10 +41,15 @@ export function trustProxyOption(value: AppEnv['TRUST_PROXY']): FastifyTrustProx
  *   addresses a header claims, and every visitor behind one socket shares one counter.
  * - `true`: the furthest stated address is the client. Development and CI only; a production
  *   boot refuses it.
- * - a hop count: the socket is hop zero, so the entry that many hops in — read from the right
- *   of `X-Forwarded-For` — is the client. A fake address prepended on the left is ignored.
+ * - a hop count: the socket is hop zero, so the entry that many hops in is the client. For
+ *   `X-Forwarded-For` that is read from the right, so a fake address prepended on the left is
+ *   ignored; `X-Real-IP` carries a single address and behaves as a chain of one.
  * - an address list or CIDR blocks: the chain is walked from the socket outwards while each
  *   address is a named proxy; the first address that is not one is the client.
+ *
+ * Exactly one header is read, the one `TRUST_CLIENT_IP_HEADER` names (decision 0055); there
+ * is no fallback to the other, because the header the edge does not write is the one a
+ * browser can forge.
  *
  * Every candidate is validated with `net.isIP` before use. Garbage, a list, an oversized
  * value, a newline or a spreadsheet formula is dropped, so no such value can become a
@@ -67,6 +72,9 @@ export function headerValue(value: string | readonly string[] | undefined): stri
   return undefined;
 }
 
+/** `::ffff:a.b.c.d`, the form a dual-stack socket reports an IPv4 peer in. */
+const MAPPED_IPV4 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i;
+
 /** Exactly one IPv4 or IPv6 address, trimmed, or nothing at all. */
 function singleAddress(value: string | undefined): string | undefined {
   if (value === undefined) {
@@ -79,7 +87,12 @@ function singleAddress(value: string | undefined): string | undefined {
     return undefined;
   }
 
-  return isIP(candidate) === 0 ? undefined : candidate;
+  // A dual-stack socket reports an IPv4 peer as ::ffff:a.b.c.d. Left as IPv6 it would not
+  // match an IPv4 proxy block, and a trusted proxy would look like a client (decision 0057).
+  const mapped = MAPPED_IPV4.exec(candidate);
+  const address = mapped === null ? candidate : String(mapped[1]);
+
+  return isIP(address) === 0 ? undefined : address;
 }
 
 /** The valid addresses of a `X-Forwarded-For` chain, in the order they were written. */
@@ -126,22 +139,18 @@ function isTrustedProxy(list: BlockList, address: string): boolean {
   return list.check(address, familyOf(address));
 }
 
-/** The addresses the trusted edge stated, before the socket itself is considered. */
-function statedPeers(chain: readonly string[], realIp: string | undefined): string[] {
-  if (chain.length > 0) {
-    return [...chain];
-  }
-
-  return realIp === undefined ? [] : [realIp];
-}
-
 export interface ClientAddressInput {
   /** The address of the socket the request arrived on. */
   readonly socketAddress?: string | undefined;
-  /** `X-Forwarded-For`, as written. */
-  readonly forwardedFor?: string | undefined;
-  /** `X-Real-IP`, the single value a well-configured edge overwrites. */
-  readonly realIp?: string | undefined;
+  /**
+   * The value of the one header the boot configured (`TRUST_CLIENT_IP_HEADER`), as written.
+   *
+   * There is deliberately no second field: reading both `X-Real-IP` and `X-Forwarded-For`
+   * would let a caller supply whichever the edge does not overwrite (decision 0055). A value
+   * with commas is a chain and is read from the right for a hop count; a single address is a
+   * chain of one.
+   */
+  readonly headerValue?: string | undefined;
 }
 
 export function resolveClientAddress(
@@ -150,12 +159,12 @@ export function resolveClientAddress(
 ): string | undefined {
   const socket = singleAddress(input.socketAddress);
 
-  // The safe default, and the shipped one: forwarding headers are ignored entirely.
+  // The safe default, and the shipped one: the header is ignored entirely.
   if (policy === false) {
     return socket;
   }
 
-  const peers = statedPeers(statedChain(input.forwardedFor), singleAddress(input.realIp));
+  const peers = statedChain(input.headerValue);
 
   if (policy === true) {
     // Development and CI only (a production boot refuses it): the furthest address wins.

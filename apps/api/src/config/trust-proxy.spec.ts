@@ -29,19 +29,20 @@ describe('the trustProxy adapter option', () => {
 });
 
 /**
- * The address every per-IP limit, audit row and session record counts by (decision 0052).
+ * The address every per-IP limit, audit row and session record counts by (decisions 0052/0055).
  *
- * The bootstrap resolves it once per request with the policy the process booted with, so the
- * rules are tested here directly: what is believed, what is dropped, and the direction every
- * one of them fails in.
+ * The bootstrap resolves it once per request with the policy the process booted with, and
+ * hands the resolver exactly one header's value. The rules are tested here directly: what is
+ * believed, what is dropped, and the direction every one of them fails in. The proof that the
+ * header the boot does *not* name is never read lives in `test/client-ip.test.ts`, where two
+ * boots differ only in which header they name.
  */
 describe('resolving the client address', () => {
-  it('ignores every forwarding header unless a proxy is named', () => {
+  it('ignores the header unless a proxy is named', () => {
     expect(
       resolveClientAddress(false, {
         socketAddress: '127.0.0.1',
-        forwardedFor: '198.51.100.7',
-        realIp: '203.0.113.9',
+        headerValue: '198.51.100.7',
       }),
     ).toBe('127.0.0.1');
 
@@ -49,7 +50,7 @@ describe('resolving the client address', () => {
     expect(
       resolveClientAddress(false, {
         socketAddress: '127.0.0.1',
-        forwardedFor: '203.0.113.1, 198.51.100.7, 10.0.0.1',
+        headerValue: '203.0.113.1, 198.51.100.7, 10.0.0.1',
       }),
     ).toBe('127.0.0.1');
   });
@@ -58,31 +59,23 @@ describe('resolving the client address', () => {
     expect(
       resolveClientAddress(1, {
         socketAddress: '127.0.0.1',
-        forwardedFor: '1.1.1.1, 198.51.100.7',
+        headerValue: '1.1.1.1, 198.51.100.7',
       }),
     ).toBe('198.51.100.7');
 
     expect(
       resolveClientAddress(2, {
         socketAddress: '10.0.0.9',
-        forwardedFor: '1.1.1.1, 198.51.100.7',
+        headerValue: '1.1.1.1, 198.51.100.7',
       }),
     ).toBe('1.1.1.1');
   });
 
-  it('reads the chain a trusted edge wrote, and a single x-real-ip when there is no chain', () => {
+  it('reads a single address as a chain of one, which is what x-real-ip carries', () => {
     expect(
       resolveClientAddress(1, {
         socketAddress: '127.0.0.1',
-        forwardedFor: '198.51.100.7',
-        realIp: '203.0.113.9',
-      }),
-    ).toBe('198.51.100.7');
-
-    expect(
-      resolveClientAddress(1, {
-        socketAddress: '127.0.0.1',
-        realIp: '203.0.113.9',
+        headerValue: '203.0.113.9',
       }),
     ).toBe('203.0.113.9');
   });
@@ -93,7 +86,7 @@ describe('resolving the client address', () => {
     expect(
       resolveClientAddress(policy, {
         socketAddress: '10.1.2.3',
-        forwardedFor: '198.51.100.7',
+        headerValue: '198.51.100.7',
       }),
     ).toBe('198.51.100.7');
 
@@ -101,7 +94,7 @@ describe('resolving the client address', () => {
     expect(
       resolveClientAddress(policy, {
         socketAddress: '10.1.2.3',
-        forwardedFor: '1.1.1.1, 198.51.100.7, 10.2.3.4',
+        headerValue: '1.1.1.1, 198.51.100.7, 10.2.3.4',
       }),
     ).toBe('198.51.100.7');
 
@@ -109,7 +102,7 @@ describe('resolving the client address', () => {
     expect(
       resolveClientAddress(policy, {
         socketAddress: '203.0.113.9',
-        forwardedFor: '198.51.100.7',
+        headerValue: '198.51.100.7',
       }),
     ).toBe('203.0.113.9');
   });
@@ -118,7 +111,7 @@ describe('resolving the client address', () => {
     expect(
       resolveClientAddress(true, {
         socketAddress: '127.0.0.1',
-        forwardedFor: '198.51.100.7, 10.0.0.4',
+        headerValue: '198.51.100.7, 10.0.0.4',
       }),
     ).toBe('198.51.100.7');
   });
@@ -135,14 +128,27 @@ describe('resolving the client address', () => {
 
     for (const value of hostile) {
       // The socket is the client when nothing usable was stated, never the header.
-      expect(resolveClientAddress(1, { socketAddress: '127.0.0.1', forwardedFor: value })).toBe('127.0.0.1');
-      expect(resolveClientAddress(1, { socketAddress: '127.0.0.1', realIp: value })).toBe('127.0.0.1');
+      expect(resolveClientAddress(1, { socketAddress: '127.0.0.1', headerValue: value })).toBe('127.0.0.1');
     }
   });
 
-  it('has no address at all when neither the socket nor the headers name one', () => {
-    expect(resolveClientAddress(false, { forwardedFor: '198.51.100.7' })).toBeUndefined();
-    expect(resolveClientAddress(1, { forwardedFor: 'not-an-address' })).toBeUndefined();
+  it('treats an IPv4-mapped IPv6 address as the IPv4 address it carries', () => {
+    // A dual-stack socket reports an IPv4 peer this way; left as IPv6 it would not match the
+    // IPv4 proxy block and a trusted proxy would be counted as a client (decision 0057).
+    expect(
+      resolveClientAddress(['10.0.0.0/8'], {
+        socketAddress: '::ffff:10.1.2.3',
+        headerValue: '198.51.100.7',
+      }),
+    ).toBe('198.51.100.7');
+
+    expect(resolveClientAddress(false, { socketAddress: '::ffff:203.0.113.9' })).toBe('203.0.113.9');
+  });
+
+  it('has no address at all when neither the socket nor the header names one', () => {
+    expect(resolveClientAddress(false, { headerValue: '198.51.100.7' })).toBeUndefined();
+    expect(resolveClientAddress(1, { headerValue: 'not-an-address' })).toBeUndefined();
     expect(resolveClientAddress(1, { socketAddress: ':not-an-address:' })).toBeUndefined();
   });
 });
+

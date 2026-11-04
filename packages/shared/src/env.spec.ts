@@ -437,20 +437,64 @@ describe('client address trust', () => {
   });
 
   it('refuses a production range too broad to be a proxy', () => {
-    for (const value of ['0.0.0.0/0', '::/0', '10.0.0.0/7', '2001:db8::/16']) {
-      expect(() => validateEnv({ ...production, TRUST_PROXY: value })).toThrow(
-        /is broader than a \/8 IPv4 or \/32 IPv6 block/,
+    for (const value of ['0.0.0.0/0', '::/0', '10.0.0.0/15', '2001:db8::/63']) {
+      expect(() => validateEnv({ ...production, TRUST_PROXY: value, TRUST_CLIENT_IP_HEADER: 'x-real-ip' })).toThrow(
+        /is broader than a \/16 IPv4 or \/64 IPv6 block/,
       );
     }
 
-    // The narrowest blocks production does accept: the edge itself, or a /8 at the limit.
-    expect(validateEnv({ ...production, TRUST_PROXY: '172.31.0.10/32' }).TRUST_PROXY).toEqual(['172.31.0.10/32']);
-    expect(validateEnv({ ...production, TRUST_PROXY: '10.0.0.0/8' }).TRUST_PROXY).toEqual(['10.0.0.0/8']);
+    // A /16 is the widest IPv4 block production trusts, and a /64 the widest IPv6 one.
+    expect(
+      validateEnv({ ...production, TRUST_PROXY: '172.31.0.10/32', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
+    ).toEqual(['172.31.0.10/32']);
+    expect(
+      validateEnv({ ...production, TRUST_PROXY: '10.1.0.0/16', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
+    ).toEqual(['10.1.0.0/16']);
+    expect(
+      validateEnv({ ...production, TRUST_PROXY: '2001:db8:1::/64', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
+    ).toEqual(['2001:db8:1::/64']);
   });
 
   it('refuses the browser-suite switch in production', () => {
     expect(() => validateEnv({ ...production, TRUST_FORWARDED_IP_FOR_TESTS: 'true' })).toThrow(
       /TRUST_FORWARDED_IP_FOR_TESTS: is refused in production/,
     );
+  });
+});
+
+
+describe('the one trusted client-address header', () => {
+  it('defaults to x-real-ip, the header an edge overwrites', () => {
+    expect(validateEnv(base).TRUST_CLIENT_IP_HEADER).toBe('x-real-ip');
+  });
+
+  it('accepts either header, and nothing else', () => {
+    expect(validateEnv({ ...base, TRUST_CLIENT_IP_HEADER: 'x-forwarded-for' }).TRUST_CLIENT_IP_HEADER).toBe(
+      'x-forwarded-for',
+    );
+
+    expect(() => validateEnv({ ...base, TRUST_CLIENT_IP_HEADER: 'forwarded' })).toThrow(
+      /TRUST_CLIENT_IP_HEADER: must be one of x-real-ip, x-forwarded-for/,
+    );
+  });
+
+  it('accepts a named header next to a named proxy in production', () => {
+    const env = validateEnv({
+      ...production,
+      TRUST_PROXY: '172.31.0.10/32',
+      TRUST_CLIENT_IP_HEADER: 'x-real-ip',
+    });
+
+    expect(env.TRUST_CLIENT_IP_HEADER).toBe('x-real-ip');
+    expect(env.TRUST_PROXY).toEqual(['172.31.0.10/32']);
+  });
+
+  it('requires the header to be named in production when a proxy is trusted', () => {
+    expect(() => validateEnv({ ...production, TRUST_PROXY: '172.31.0.10/32' })).toThrow(
+      /TRUST_CLIENT_IP_HEADER: must name the one header the edge writes/,
+    );
+
+    // With no proxy named, no header is read at all, so the default is enough.
+    expect(validateEnv(production).TRUST_CLIENT_IP_HEADER).toBe('x-real-ip');
   });
 });

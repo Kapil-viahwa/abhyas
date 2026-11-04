@@ -122,10 +122,20 @@ export class ReauthenticationService {
     meta: RequestMetadata = {},
     messages: ReauthenticationMessages = DEFAULT_REAUTH_MESSAGES,
   ): Promise<void> {
-    // A stolen session gets five guesses at a proof and no more. The counter is shared by
-    // every sensitive route, because the proofs are interchangeable between them.
-    if ((await this.limiter.count(reauthFailureKey(user.id))) >= REAUTH_FAILURE_LIMIT) {
-      throw new HttpException(REAUTH_LOCKED_MESSAGE, HttpStatus.TOO_MANY_REQUESTS);
+    // A stolen session gets five guesses at a proof and no more. The attempt is claimed before
+    // the proof is checked, so twenty parallel guesses cannot all read the same count and all
+    // be verified (decision 0056); a successful proof resets the counter. A request that offers
+    // no proof at all is not an attempt and does not spend the budget.
+    const offersProof =
+      (typeof proof.password === 'string' && proof.password !== '') ||
+      (typeof proof.code === 'string' && proof.code !== '');
+
+    if (offersProof) {
+      const attempts = await this.limiter.hit(reauthFailureKey(user.id), REAUTH_FAILURE_WINDOW_SECONDS);
+
+      if (attempts > REAUTH_FAILURE_LIMIT) {
+        throw new HttpException(REAUTH_LOCKED_MESSAGE, HttpStatus.TOO_MANY_REQUESTS);
+      }
     }
 
     const account = await this.load(user.id);
@@ -182,13 +192,13 @@ export class ReauthenticationService {
     }
   }
 
-  /** A wrong proof is counted and audited: the refusal is evidence, not just an answer. */
+  /** A wrong proof is audited: the refusal is evidence, not just an answer. The attempt
+   * itself was claimed before the comparison, so it is not counted twice here. */
   private async recordFailure(
     user: AuthenticatedUser,
     reason: 'WRONG_PASSWORD' | 'WRONG_CODE',
     meta: RequestMetadata,
   ): Promise<void> {
-    await this.limiter.hit(reauthFailureKey(user.id), REAUTH_FAILURE_WINDOW_SECONDS);
     await writeIdentityAudit(this.prisma, {
       action: 'IDENTITY_REAUTH_FAILED',
       actorUserId: user.id,

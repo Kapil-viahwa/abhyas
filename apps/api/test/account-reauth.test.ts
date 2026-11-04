@@ -316,6 +316,37 @@ describe('an account with no email address', () => {
     ).toBe(5);
   });
 
+  it('claims an attempt before verifying, so twenty parallel wrong proofs verify at most five', async () => {
+    await redis.flushdb();
+    const account = await registerMobileAccount('Parallel Student');
+
+    const responses = await Promise.all(
+      Array.from({ length: 20 }, (_unused, index) =>
+        app.inject({
+          method: 'POST',
+          url: '/v1/auth/password/change',
+          headers: bearer(account.token),
+          payload: {
+            currentPassword: `wrong-password-${String(index)}`,
+            newPassword: 'another-good-password-1',
+          },
+        }),
+      ),
+    );
+
+    const statuses = responses.map((response) => response.statusCode);
+
+    // The counter is incremented before the password is compared (decision 0056), so the
+    // twenty cannot all read the same count: five comparisons happen, fifteen are refused.
+    expect(statuses.filter((status) => status === 400)).toHaveLength(5);
+    expect(statuses.filter((status) => status === 429)).toHaveLength(15);
+
+    // And every one of the five that was actually compared is audited.
+    expect(
+      await db.client.auditLog.count({ where: { action: 'IDENTITY_REAUTH_FAILED', actorUserId: account.id } }),
+    ).toBe(5);
+  });
+
   it('accepts a code from the account’s own number as the proof, on a stale session', async () => {
     await redis.flushdb();
     const account = await registerMobileAccount('Code Student');

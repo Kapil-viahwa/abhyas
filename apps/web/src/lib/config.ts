@@ -9,6 +9,19 @@
 
 export type WebNodeEnv = 'development' | 'test' | 'production';
 
+/**
+ * The one request header this tier reads for the client address (decision 0055).
+ *
+ * Nginx either overwrites `X-Real-IP` or appends to `X-Forwarded-For`; reading both would let
+ * a browser supply whichever the edge leaves alone, so exactly one is configured and the
+ * other is never opened.
+ */
+export type ClientIpHeader = 'x-real-ip' | 'x-forwarded-for';
+
+export const CLIENT_IP_HEADERS: readonly ClientIpHeader[] = ['x-real-ip', 'x-forwarded-for'];
+
+export const DEFAULT_CLIENT_IP_HEADER: ClientIpHeader = 'x-real-ip';
+
 export interface WebConfig {
   readonly nodeEnv: WebNodeEnv;
   readonly apiInternalUrl: string;
@@ -27,6 +40,11 @@ export interface WebConfig {
   readonly forwardedIpHops: number | null;
   /** True when `forwardedIpHops` names an edge. */
   readonly trustForwardedIp: boolean;
+  /**
+   * The single header read for the client address, and the one this tier forwards to the API.
+   * There is no fallback to the other header (decision 0055).
+   */
+  readonly clientIpHeader: ClientIpHeader;
   /**
    * True when the API serves the mobile OTP routes. The mobile screens and their web
    * routes are hidden and answer 404 when this is false, so the switch cannot be flipped
@@ -85,6 +103,23 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
   const forwardedIpHops = parseForwardedIpHops(env.TRUST_PROXY, nodeEnv) ?? (trustForwardedForTests ? 1 : null);
   const trustForwardedIp = forwardedIpHops !== null;
 
+  // Exactly one header is read (decision 0055). Naming it belongs with naming the edge: the
+  // header the edge does not write is the one a browser can forge, so a production tier that
+  // trusts a hop has to say which header that hop writes.
+  const clientIpHeaderRaw = (env.TRUST_CLIENT_IP_HEADER ?? '').trim().toLowerCase();
+  let clientIpHeader: ClientIpHeader = DEFAULT_CLIENT_IP_HEADER;
+
+  if (clientIpHeaderRaw !== '') {
+    if (!CLIENT_IP_HEADERS.includes(clientIpHeaderRaw as ClientIpHeader)) {
+      throw new Error(`TRUST_CLIENT_IP_HEADER must be one of ${CLIENT_IP_HEADERS.join(', ')}`);
+    }
+    clientIpHeader = clientIpHeaderRaw as ClientIpHeader;
+  } else if (nodeEnv === 'production' && trustForwardedIp) {
+    throw new Error(
+      'TRUST_CLIENT_IP_HEADER must name the one header the edge writes (x-real-ip or x-forwarded-for) when TRUST_PROXY is set in production',
+    );
+  }
+
   if (nodeEnv === 'production') {
     if (revalidateSecret === '') {
       throw new Error('REVALIDATE_SECRET is required in production: the API must prove itself before a page is dropped');
@@ -104,6 +139,7 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
     otpEnabled: (env.OTP_ENABLED ?? '').trim().toLowerCase() === 'true',
     forwardedIpHops,
     trustForwardedIp,
+    clientIpHeader,
   };
 }
 

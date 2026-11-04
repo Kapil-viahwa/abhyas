@@ -64,6 +64,7 @@ describe('the client address behind the per-IP limits', () => {
   let redis!: Redis;
   let untrusted!: NestFastifyApplication;
   let trusted!: NestFastifyApplication;
+  let realIp!: NestFastifyApplication;
 
   let counter = 0;
 
@@ -92,13 +93,22 @@ describe('the client address behind the per-IP limits', () => {
 
     // The injected socket is now the proxy, so the entry it forwards is read.
     process.env.TRUST_PROXY = '1';
+    process.env.TRUST_CLIENT_IP_HEADER = 'x-forwarded-for';
     trusted = await boot();
+
+    // A second trusted boot, differing only in the one header it reads (decision 0055). A
+    // spoofed X-Forwarded-For must be inert here, because the edge writes X-Real-IP.
+    process.env.TRUST_CLIENT_IP_HEADER = 'x-real-ip';
+    realIp = await boot();
+
     delete process.env.TRUST_PROXY;
+    delete process.env.TRUST_CLIENT_IP_HEADER;
   }, 180_000);
 
   afterAll(async () => {
     await untrusted?.close();
     await trusted?.close();
+    await realIp?.close();
     await redis?.quit();
     await db?.dispose();
 
@@ -139,6 +149,37 @@ describe('the client address behind the per-IP limits', () => {
     // Another address the trusted proxy forwarded is a different bucket, not a refusal.
     const other = await trusted.inject(login('newcomer', '198.51.100.8'));
     expect(other.statusCode).toBe(401);
+  }, 60_000);
+
+  it('reads exactly the header it names: a spoofed X-Forwarded-For is ignored when X-Real-IP is configured', async () => {
+    await redis.flushdb();
+    const statuses: number[] = [];
+
+    // A fresh forged address each time, and no X-Real-IP at all: one socket, one counter,
+    // so the cap still trips. Reading both headers would have made these 21 buckets.
+    for (let index = 0; index < 21; index += 1) {
+      const response = await realIp.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        headers: { 'x-forwarded-for': `198.18.${String(index)}.9` },
+        payload: { email: `forged-${String(index)}@example.com`, password: 'wrong-password-1' },
+      });
+
+      statuses.push(response.statusCode);
+    }
+
+    expect(statuses.slice(0, 20)).toEqual(Array.from({ length: 20 }, () => 401));
+    expect(statuses[20]).toBe(429);
+
+    // The header it does read is the client: a new address is a fresh bucket, not a refusal.
+    const counted = await realIp.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      headers: { 'x-real-ip': '203.0.113.44' },
+      payload: { email: 'real-header@example.com', password: 'wrong-password-1' },
+    });
+
+    expect(counted.statusCode).toBe(401);
   }, 60_000);
 
   it('resolves a multi-hop chain to the entry the trusted proxy wrote', async () => {

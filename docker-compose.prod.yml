@@ -7,7 +7,8 @@ name: abhyas-prod
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Pinned by tag and manifest-list digest: the tag alone can move under us.
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
@@ -19,16 +20,40 @@ services:
       interval: 10s
       timeout: 5s
       retries: 20
+    # Sized for a 4 GB VPS: the limits add up to about 3.4 GB, leaving the host room.
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
-    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1']
+    image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+    # A Redis with no password inside the compose network is one misconfigured proxy away
+    # from being an open queue; the API and the worker reach it with the same secret.
+    command:
+      ['redis-server', '--appendonly', 'yes', '--save', '60', '1', '--requirepass', '${REDIS_PASSWORD:?REDIS_PASSWORD is required}']
     healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 10s
       timeout: 5s
       retries: 20
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: unless-stopped
 
   migrations:
@@ -43,6 +68,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: 'no'
 
   api:
@@ -53,7 +87,7 @@ services:
       NODE_ENV: production
       PORT: '3001'
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      REDIS_URL: 'redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379'
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?TURNSTILE_SECRET_KEY is required}
       SMS_PROVIDER: ${SMS_PROVIDER:?SMS_PROVIDER is required}
@@ -72,6 +106,10 @@ services:
       # address on this compose network. Never a subnet and never the internet (decision
       # 0052): anything wider would let an address the attacker chooses pick its own bucket.
       TRUST_PROXY: '172.31.0.10/32'
+      # The one header the web container writes, and the only one this API reads
+      # (decision 0055). Nginx overwrites X-Real-IP, so the web tier forwards it under
+      # the same name; X-Forwarded-For is never read here.
+      TRUST_CLIENT_IP_HEADER: 'x-real-ip'
       # The web container's own address: never route a cache drop through the public edge.
       REVALIDATE_URL: http://web:3000/api/revalidate
     expose:
@@ -83,6 +121,13 @@ services:
         condition: service_healthy
       migrations:
         condition: service_completed_successfully
+    # The process needs no kernel capability beyond the defaults it drops: it binds 3001,
+    # reads its own files and talks over the network. `no-new-privileges` keeps a setuid
+    # helper inside the image from ever gaining them back.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test:
         [
@@ -95,6 +140,15 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 640m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: unless-stopped
 
   web:
@@ -107,13 +161,18 @@ services:
       WEB_URL: ${WEB_URL:?WEB_URL is required}
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY is required}
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
-      # One hop in front of this tier: Nginx, on the host, which overwrites X-Real-IP and
-      # X-Forwarded-For with $remote_addr (docs/deployment.md). A count, not "true": the
-      # browser can send both headers itself (decision 0052).
+      # One hop in front of this tier: Nginx, on the host, which overwrites X-Real-IP with
+      # $remote_addr (docs/deployment.md). A count, not "true": the browser can send both
+      # headers itself (decision 0052).
       TRUST_PROXY: '1'
+      # Exactly one header is read, and it is the one Nginx overwrites (decision 0055).
+      TRUST_CLIENT_IP_HEADER: 'x-real-ip'
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
-      - '${WEB_PORT:-3000}:3000'
+      # Loopback only: Docker publishes around ufw, so a port bound on every interface is
+      # reachable from the internet even when the firewall says otherwise. Only the host's
+      # Nginx may reach this tier, and it connects to 127.0.0.1 (docs/deployment.md).
+      - '127.0.0.1:${WEB_PORT:-3000}:3000'
     # A fixed address so the API can name exactly this container as its trusted proxy.
     networks:
       default:
@@ -121,6 +180,31 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: unless-stopped
 
   worker:
@@ -130,11 +214,14 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
-      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
+      REDIS_URL: 'redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379'
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?TURNSTILE_SECRET_KEY is required}
       SMS_PROVIDER: ${SMS_PROVIDER:?SMS_PROVIDER is required}
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:?EMAIL_PROVIDER is required}
+      # The worker boots through the same validator as the API, which requires this in
+      # production even though the worker never asks for a cache drop itself.
+      REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
@@ -146,6 +233,34 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # The worker has no port to probe; the thing that can fail quietly is its queue
+    # connection, so the check is a real PING over the same URL the job loop uses.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '--input-type=module',
+          '-e',
+          'const { default: Redis } = await import("ioredis"); const client = new Redis(process.env.REDIS_URL); try { await client.ping(); process.exit(0); } catch { process.exit(1); }',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     restart: unless-stopped
 
 volumes:

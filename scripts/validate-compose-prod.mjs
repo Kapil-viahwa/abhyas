@@ -20,6 +20,7 @@ const requiredEnv = {
   DATABASE_URL: 'postgresql://abhyas_app:app-password@postgres:5432/abhyas',
   MIGRATION_DATABASE_URL: 'postgresql://abhyas:compose-check-password@postgres:5432/abhyas',
   REDIS_URL: 'redis://redis:6379',
+  REDIS_PASSWORD: 'compose-check-redis-password',
   AUTH_SECRET: 'c'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   TURNSTILE_SITE_KEY: 'live-site-key',
@@ -79,6 +80,28 @@ if (!services.api) {
   passes.push('service "api" publishes no host ports');
 }
 
+// Docker inserts its own iptables rules for a published port, which bypass ufw: a port bound
+// on 0.0.0.0 is reachable from the internet even when the firewall says it is closed. So the
+// only published port is the web tier's, and only on loopback, where the host's Nginx is the
+// one thing that can reach it (docs/deployment.md).
+const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'];
+
+for (const [name, service] of Object.entries(services)) {
+  for (const port of service.ports ?? []) {
+    const host = String(port.host_ip ?? '');
+
+    if (!LOOPBACK_ADDRESSES.includes(host)) {
+      failures.push(
+        `service "${name}" publishes ${JSON.stringify(port)} on ${
+          host === '' ? 'every interface' : host
+        }; production publishes only on loopback (127.0.0.1 or ::1), behind Nginx`,
+      );
+    } else {
+      passes.push(`service "${name}" publishes ${String(port.published ?? '')} only on loopback (${host})`);
+    }
+  }
+}
+
 // Client-address trust (decision 0052): the API trusts exactly the web container by address,
 // and the web tier trusts exactly the hops in front of it. A subnet, or "true", here would
 // let a caller pick the address it is counted by and step out of the per-IP limits.
@@ -104,6 +127,29 @@ if (!/^[0-9]+$/.test(webTrustProxy) || Number(webTrustProxy) < 1 || Number(webTr
   );
 } else {
   passes.push(`service "web" trusts ${webTrustProxy} edge hop(s) in front of it`);
+}
+
+// Exactly one header per tier, and the same one on both (decision 0055): the web tier forwards
+// the address under the name the API reads, and reading both headers would let a browser
+// forge the one the edge leaves alone.
+const CLIENT_IP_HEADERS = ['x-real-ip', 'x-forwarded-for'];
+const apiClientIpHeader = String(services.api?.environment?.TRUST_CLIENT_IP_HEADER ?? '').toLowerCase();
+const webClientIpHeader = String(services.web?.environment?.TRUST_CLIENT_IP_HEADER ?? '').toLowerCase();
+
+if (!CLIENT_IP_HEADERS.includes(apiClientIpHeader)) {
+  failures.push(
+    `service "api" sets TRUST_CLIENT_IP_HEADER "${apiClientIpHeader}"; it must name the one header it reads (${CLIENT_IP_HEADERS.join(' or ')})`,
+  );
+} else if (!CLIENT_IP_HEADERS.includes(webClientIpHeader)) {
+  failures.push(
+    `service "web" sets TRUST_CLIENT_IP_HEADER "${webClientIpHeader}"; it must name the one header it reads (${CLIENT_IP_HEADERS.join(' or ')})`,
+  );
+} else if (apiClientIpHeader !== webClientIpHeader) {
+  failures.push(
+    `the api reads "${apiClientIpHeader}" but the web tier forwards "${webClientIpHeader}"; both must name the same header`,
+  );
+} else {
+  passes.push(`api and web agree on one client-address header ("${apiClientIpHeader}")`);
 }
 
 for (const name of ['api', 'worker', 'migrations']) {
@@ -175,6 +221,84 @@ if (/OTP_FAKE_FIXED_CODE/.test(composeSource)) {
   failures.push(`${COMPOSE_FILE} sets OTP_FAKE_FIXED_CODE, which is a test fixture`);
 } else {
   passes.push(`${COMPOSE_FILE} never sets OTP_FAKE_FIXED_CODE`);
+}
+
+// Container hardening (decision 0059). A production container that can gain capabilities,
+// that has no memory ceiling, or that writes an unbounded log fills the host at the worst
+// possible moment; each of those is checked here rather than trusted to review.
+for (const [name, service] of Object.entries(services)) {
+  const logging = service.logging ?? {};
+  const logOptions = logging.options ?? {};
+
+  if (
+    logging.driver !== 'json-file' ||
+    logOptions['max-size'] === undefined ||
+    logOptions['max-file'] === undefined
+  ) {
+    failures.push(`service "${name}" has no bounded log (json-file with max-size and max-file)`);
+  } else {
+    passes.push(`service "${name}" rotates its logs at ${String(logOptions['max-size'] ?? '')}`);
+  }
+
+  if (!services[name]?.deploy?.resources?.limits?.memory) {
+    failures.push(`service "${name}" sets no memory limit`);
+  }
+}
+
+for (const name of ['api', 'web', 'worker']) {
+  const service = services[name];
+
+  if (!service) {
+    continue;
+  }
+
+  const securityOpt = (service.security_opt ?? []).map(String);
+  const capDrop = (service.cap_drop ?? []).map(String);
+
+  if (!securityOpt.includes('no-new-privileges:true')) {
+    failures.push(`service "${name}" does not set security_opt no-new-privileges:true`);
+  }
+  if (!capDrop.includes('ALL')) {
+    failures.push(`service "${name}" does not drop all capabilities`);
+  }
+  if (securityOpt.includes('no-new-privileges:true') && capDrop.includes('ALL')) {
+    passes.push(`service "${name}" drops all capabilities and cannot regain them`);
+  }
+}
+
+if (!services.worker?.healthcheck) {
+  failures.push('service "worker" has no healthcheck, so a dead queue loop looks like a live one');
+}
+
+// An unauthenticated Redis inside the compose network is a queue anyone with a foothold can
+// read; the API and the worker must reach it with the same secret (decision 0059).
+const redisCommand = JSON.stringify(services.redis?.command ?? []);
+
+if (!redisCommand.includes('requirepass')) {
+  failures.push('service "redis" runs without requirepass, so the queue is unauthenticated');
+} else {
+  passes.push('service "redis" requires a password');
+}
+
+for (const name of ['api', 'worker']) {
+  const url = String(services[name]?.environment?.REDIS_URL ?? '');
+
+  if (!url.includes('@redis')) {
+    failures.push(`service "${name}" reaches Redis without a password in REDIS_URL`);
+  } else {
+    passes.push(`service "${name}" reaches Redis with a password`);
+  }
+}
+
+// A tag can move under a deployment; the manifest-list digest cannot.
+for (const name of ['postgres', 'redis']) {
+  const image = String(services[name]?.image ?? '');
+
+  if (!/@sha256:[0-9a-f]{64}$/.test(image)) {
+    failures.push(`service "${name}" image "${image}" is not pinned by digest`);
+  } else {
+    passes.push(`service "${name}" is pinned by digest`);
+  }
 }
 
 const report = [];
