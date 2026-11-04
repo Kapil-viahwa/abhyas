@@ -20,6 +20,7 @@ const requiredEnv = {
   DATABASE_URL: 'postgresql://abhyas_app:app-password@postgres:5432/abhyas',
   MIGRATION_DATABASE_URL: 'postgresql://abhyas:compose-check-password@postgres:5432/abhyas',
   REDIS_URL: 'redis://redis:6379',
+  REDIS_PASSWORD: 'compose-check-redis-password',
   AUTH_SECRET: 'c'.repeat(48),
   TURNSTILE_SECRET_KEY: 'live-turnstile-secret',
   TURNSTILE_SITE_KEY: 'live-site-key',
@@ -220,6 +221,84 @@ if (/OTP_FAKE_FIXED_CODE/.test(composeSource)) {
   failures.push(`${COMPOSE_FILE} sets OTP_FAKE_FIXED_CODE, which is a test fixture`);
 } else {
   passes.push(`${COMPOSE_FILE} never sets OTP_FAKE_FIXED_CODE`);
+}
+
+// Container hardening (decision 0059). A production container that can gain capabilities,
+// that has no memory ceiling, or that writes an unbounded log fills the host at the worst
+// possible moment; each of those is checked here rather than trusted to review.
+for (const [name, service] of Object.entries(services)) {
+  const logging = service.logging ?? {};
+  const logOptions = logging.options ?? {};
+
+  if (
+    logging.driver !== 'json-file' ||
+    logOptions['max-size'] === undefined ||
+    logOptions['max-file'] === undefined
+  ) {
+    failures.push(`service "${name}" has no bounded log (json-file with max-size and max-file)`);
+  } else {
+    passes.push(`service "${name}" rotates its logs at ${String(logOptions['max-size'] ?? '')}`);
+  }
+
+  if (!services[name]?.deploy?.resources?.limits?.memory) {
+    failures.push(`service "${name}" sets no memory limit`);
+  }
+}
+
+for (const name of ['api', 'web', 'worker']) {
+  const service = services[name];
+
+  if (!service) {
+    continue;
+  }
+
+  const securityOpt = (service.security_opt ?? []).map(String);
+  const capDrop = (service.cap_drop ?? []).map(String);
+
+  if (!securityOpt.includes('no-new-privileges:true')) {
+    failures.push(`service "${name}" does not set security_opt no-new-privileges:true`);
+  }
+  if (!capDrop.includes('ALL')) {
+    failures.push(`service "${name}" does not drop all capabilities`);
+  }
+  if (securityOpt.includes('no-new-privileges:true') && capDrop.includes('ALL')) {
+    passes.push(`service "${name}" drops all capabilities and cannot regain them`);
+  }
+}
+
+if (!services.worker?.healthcheck) {
+  failures.push('service "worker" has no healthcheck, so a dead queue loop looks like a live one');
+}
+
+// An unauthenticated Redis inside the compose network is a queue anyone with a foothold can
+// read; the API and the worker must reach it with the same secret (decision 0059).
+const redisCommand = JSON.stringify(services.redis?.command ?? []);
+
+if (!redisCommand.includes('requirepass')) {
+  failures.push('service "redis" runs without requirepass, so the queue is unauthenticated');
+} else {
+  passes.push('service "redis" requires a password');
+}
+
+for (const name of ['api', 'worker']) {
+  const url = String(services[name]?.environment?.REDIS_URL ?? '');
+
+  if (!url.includes('@redis')) {
+    failures.push(`service "${name}" reaches Redis without a password in REDIS_URL`);
+  } else {
+    passes.push(`service "${name}" reaches Redis with a password`);
+  }
+}
+
+// A tag can move under a deployment; the manifest-list digest cannot.
+for (const name of ['postgres', 'redis']) {
+  const image = String(services[name]?.image ?? '');
+
+  if (!/@sha256:[0-9a-f]{64}$/.test(image)) {
+    failures.push(`service "${name}" image "${image}" is not pinned by digest`);
+  } else {
+    passes.push(`service "${name}" is pinned by digest`);
+  }
 }
 
 const report = [];

@@ -437,19 +437,22 @@ describe('client address trust', () => {
   });
 
   it('refuses a production range too broad to be a proxy', () => {
-    for (const value of ['0.0.0.0/0', '::/0', '10.0.0.0/7', '2001:db8::/16']) {
-      expect(() => validateEnv({ ...production, TRUST_PROXY: value })).toThrow(
-        /is broader than a \/8 IPv4 or \/32 IPv6 block/,
+    for (const value of ['0.0.0.0/0', '::/0', '10.0.0.0/15', '2001:db8::/63']) {
+      expect(() => validateEnv({ ...production, TRUST_PROXY: value, TRUST_CLIENT_IP_HEADER: 'x-real-ip' })).toThrow(
+        /is broader than a \/16 IPv4 or \/64 IPv6 block/,
       );
     }
 
-    // The narrowest blocks production does accept: the edge itself, or a /8 at the limit.
+    // A /16 is the widest IPv4 block production trusts, and a /64 the widest IPv6 one.
     expect(
       validateEnv({ ...production, TRUST_PROXY: '172.31.0.10/32', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
     ).toEqual(['172.31.0.10/32']);
     expect(
-      validateEnv({ ...production, TRUST_PROXY: '10.0.0.0/8', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
-    ).toEqual(['10.0.0.0/8']);
+      validateEnv({ ...production, TRUST_PROXY: '10.1.0.0/16', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
+    ).toEqual(['10.1.0.0/16']);
+    expect(
+      validateEnv({ ...production, TRUST_PROXY: '2001:db8:1::/64', TRUST_CLIENT_IP_HEADER: 'x-real-ip' }).TRUST_PROXY,
+    ).toEqual(['2001:db8:1::/64']);
   });
 
   it('refuses the browser-suite switch in production', () => {

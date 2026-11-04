@@ -1283,3 +1283,61 @@ header name, and proves that a spoofed `X-Forwarded-For` is ignored when `X-Real
 configured header and the reverse; `apps/web/src/lib/client-ip.spec.ts` proves the same on the
 web tier; `packages/shared/src/env.spec.ts` and `apps/web/src/lib/config.spec.ts` prove the
 production refusal and the default.
+
+
+## 0056 — A re-authentication attempt is claimed before the proof is checked
+
+**Decided in the post-2c hardening review. Date: hardening.**
+
+Re-authentication counted failures *after* a comparison, and refused when the count was already
+at the limit. Twenty parallel wrong passwords could therefore all read the same count and all be
+verified. The counter is now `INCR`ed (atomic in Redis) before the proof is compared, and a
+claim above the limit is answered `429` without comparing anything: five of twenty parallel
+guesses are verified, fifteen are refused, and a successful proof resets the counter. A request
+that offers **no** proof is not an attempt and does not spend the budget, so an account's
+"enter the code" form cannot lock itself by being submitted empty.
+
+`account-reauth.test.ts` sends the twenty in parallel and proves 5 × 400 and 15 × 429, with five
+`IDENTITY_REAUTH_FAILED` rows.
+
+## 0057 — An IPv4-mapped IPv6 address is judged as the IPv4 address it carries
+
+**Decided in the post-2c hardening review.**
+
+A dual-stack socket reports an IPv4 peer as `::ffff:a.b.c.d`. Left in that form it does not
+match an IPv4 proxy block, so a trusted proxy would be counted as the client. The resolver
+normalises the mapped form to the embedded IPv4 address before any trust decision, and
+`trust-proxy.spec.ts` proves a socket of `::ffff:10.1.2.3` is matched by `10.0.0.0/8` while a
+socket of `::ffff:203.0.113.9` is itself the client.
+
+## 0058 — An unreadable API answer becomes our sentence, not the upstream's
+
+**Decided in the post-2c hardening review.**
+
+`apiCall` used to hand a non-JSON response body to the page as `{ message: <raw text> }`. An
+upstream that answers HTML, a stack trace or a proxy error page has said something about
+itself that a visitor should not read. A body that does not parse is now replaced with
+`GENERIC_API_MESSAGE` ("Something went wrong. Please try again."), while the HTTP status is
+kept so the page can still say it failed. `upstream.spec.ts` proves a 500 whose body names an
+internal path never reaches the result.
+
+## 0059 — Socket timeouts, and containers that cannot grow
+
+**Decided in the post-2c hardening review.**
+
+Node has no default connection or request timeout, so a socket that opens and says nothing, or
+a client that sends headers and stalls, holds a slot until something else gives up — a
+slow-loris lever behind Nginx. `bootstrap.ts` sets `connectionTimeout` 10 s, `requestTimeout`
+30 s and `keepAliveTimeout` 72 s (shorter than Nginx's 75 s default, so this tier closes an idle
+connection before the proxy reuses it); the values are recorded in `API_TIMEOUTS`, pinned by
+`test/timeouts.test.ts`, and that test also boots with a 300 ms override and proves a silent
+socket is closed.
+
+The production compose is hardened to match: `no-new-privileges:true` and `cap_drop: ALL` on
+the api, web and worker, memory limits sized for a 4 GB VPS (1 GB postgres, 384 MB redis,
+640 MB api, 768 MB web, 384 MB worker, 256 MB migrations), `json-file` log rotation at 10 MB ×
+3 for every service, a healthcheck for the worker that PINGs its queue, Redis `requirepass`
+with the password carried in `REDIS_URL`, and postgres and redis pinned by manifest-list
+digest. `scripts/validate-compose-prod.mjs` fails the `docker` job when any of that drifts.
+Containers still run as root and the images still copy the whole workspace: both stay in
+`PROGRESS.md`'s Known gaps.

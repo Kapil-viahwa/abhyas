@@ -72,6 +72,9 @@ export function headerValue(value: string | readonly string[] | undefined): stri
   return undefined;
 }
 
+/** `::ffff:a.b.c.d`, the form a dual-stack socket reports an IPv4 peer in. */
+const MAPPED_IPV4 = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i;
+
 /** Exactly one IPv4 or IPv6 address, trimmed, or nothing at all. */
 function singleAddress(value: string | undefined): string | undefined {
   if (value === undefined) {
@@ -84,7 +87,12 @@ function singleAddress(value: string | undefined): string | undefined {
     return undefined;
   }
 
-  return isIP(candidate) === 0 ? undefined : candidate;
+  // A dual-stack socket reports an IPv4 peer as ::ffff:a.b.c.d. Left as IPv6 it would not
+  // match an IPv4 proxy block, and a trusted proxy would look like a client (decision 0057).
+  const mapped = MAPPED_IPV4.exec(candidate);
+  const address = mapped === null ? candidate : String(mapped[1]);
+
+  return isIP(address) === 0 ? undefined : address;
 }
 
 /** The valid addresses of a `X-Forwarded-For` chain, in the order they were written. */

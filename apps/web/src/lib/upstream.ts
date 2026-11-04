@@ -22,6 +22,9 @@ export interface ApiCallOptions {
   readonly timeoutMs?: number | undefined;
 }
 
+/** The one sentence an unreadable or unexpected API answer becomes. */
+export const GENERIC_API_MESSAGE = 'Something went wrong. Please try again.';
+
 export interface ApiResult<T> {
   readonly status: number;
   readonly body: T | null;
@@ -140,7 +143,10 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
       try {
         body = JSON.parse(text) as unknown;
       } catch {
-        body = { message: text };
+        // Never hand raw response text to a page: an upstream that answers HTML, a stack
+        // trace or a proxy error page has said something about itself that a visitor should
+        // not read, and it is not our message anyway (decision 0058).
+        body = { message: GENERIC_API_MESSAGE };
       }
     }
 
@@ -168,7 +174,7 @@ export function errorMessage(body: unknown): string {
     }
   }
 
-  return 'Something went wrong. Please try again.';
+  return GENERIC_API_MESSAGE;
 }
 
 /**

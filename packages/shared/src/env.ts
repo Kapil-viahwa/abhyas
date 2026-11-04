@@ -70,8 +70,8 @@ export const CLIENT_IP_HEADERS: readonly ClientIpHeader[] = ['x-real-ip', 'x-for
 export const DEFAULT_CLIENT_IP_HEADER: ClientIpHeader = 'x-real-ip';
 
 /** The narrowest IPv4 and IPv6 blocks a production boot will trust as a proxy. */
-const MIN_TRUSTED_IPV4_PREFIX = 8;
-const MIN_TRUSTED_IPV6_PREFIX = 32;
+const MIN_TRUSTED_IPV4_PREFIX = 16;
+const MIN_TRUSTED_IPV6_PREFIX = 64;
 
 /**
  * The family and prefix length a `TRUST_PROXY` entry names, or `null` when it is not an

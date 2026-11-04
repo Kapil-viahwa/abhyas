@@ -23,10 +23,28 @@ import { boundUploadBody, type RouteHookHost } from './media/upload-limit';
 
 export const API_BODY_LIMIT_BYTES = 1_048_576;
 
+/**
+ * How long the API will wait on a connection and a request (decision 0059).
+ *
+ * Node's defaults are no connection timeout and no request timeout, so a socket that opens
+ * and says nothing, or a client that sends headers and stalls, holds a slot until something
+ * else gives up. Behind Nginx that is a slow-loris lever, so all three are bounded here and
+ * recorded: `connectionTimeout` bounds reading a whole request from a client, `requestTimeout`
+ * bounds a request once it has started, and `keepAliveTimeout` is deliberately shorter than
+ * Nginx's default 75 s so the upstream closes an idle connection before the proxy reuses it.
+ */
+export const API_TIMEOUTS = {
+  connectionTimeoutMs: 10_000,
+  requestTimeoutMs: 30_000,
+  keepAliveTimeoutMs: 72_000,
+} as const;
+
 export interface CreateApiOptions {
   /** The environment to validate. Defaults to the process's own. */
   readonly env?: NodeJS.ProcessEnv;
   readonly logger?: NestApplicationOptions['logger'];
+  /** Tests only: shorten the socket timeouts so a stalled request can be proven closed. */
+  readonly timeouts?: Partial<typeof API_TIMEOUTS>;
 }
 
 export interface CreatedApi {
@@ -40,6 +58,7 @@ export interface CreatedApi {
 export async function createApiApplication(options: CreateApiOptions = {}): Promise<CreatedApi> {
   // Fails closed: production refuses test Turnstile keys, fake SMS and dev login.
   const config = loadConfig(options.env ?? process.env);
+  const timeouts = { ...API_TIMEOUTS, ...options.timeouts };
 
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -48,6 +67,9 @@ export async function createApiApplication(options: CreateApiOptions = {}): Prom
     new FastifyAdapter({
       trustProxy: trustProxyOption(config.TRUST_PROXY),
       bodyLimit: API_BODY_LIMIT_BYTES,
+      connectionTimeout: timeouts.connectionTimeoutMs,
+      requestTimeout: timeouts.requestTimeoutMs,
+      keepAliveTimeout: timeouts.keepAliveTimeoutMs,
     }),
     { logger: options.logger ?? ['error', 'warn', 'log'] },
   );

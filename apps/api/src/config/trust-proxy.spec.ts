@@ -132,6 +132,19 @@ describe('resolving the client address', () => {
     }
   });
 
+  it('treats an IPv4-mapped IPv6 address as the IPv4 address it carries', () => {
+    // A dual-stack socket reports an IPv4 peer this way; left as IPv6 it would not match the
+    // IPv4 proxy block and a trusted proxy would be counted as a client (decision 0057).
+    expect(
+      resolveClientAddress(['10.0.0.0/8'], {
+        socketAddress: '::ffff:10.1.2.3',
+        headerValue: '198.51.100.7',
+      }),
+    ).toBe('198.51.100.7');
+
+    expect(resolveClientAddress(false, { socketAddress: '::ffff:203.0.113.9' })).toBe('203.0.113.9');
+  });
+
   it('has no address at all when neither the socket nor the header names one', () => {
     expect(resolveClientAddress(false, { headerValue: '198.51.100.7' })).toBeUndefined();
     expect(resolveClientAddress(1, { headerValue: 'not-an-address' })).toBeUndefined();
