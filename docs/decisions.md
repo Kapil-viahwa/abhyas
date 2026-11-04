@@ -1108,3 +1108,71 @@ address still hit the production ceiling (21st 429, 6th 429); with a trusted pro
 forwarded addresses are twenty-five counters and none is refused. `env.spec.ts` refuses
 trust-everything and the test switch in production, and `apps/web/src/lib/client-ip.spec.ts`
 proves the web tier ignores a header it was not told to trust.
+
+
+
+## 0053 — An OTP attempt is claimed in the row, and an address is validated before it is used
+
+**Status:** accepted · **Phase:** 2c
+
+Decision 0052 made the client address trustworthy. This one closes what an attacker could
+still do with a correct address, and what a malformed one could still reach.
+
+**Verify attempts are atomic.** The service used to read `attempts`, compare, and then write
+`attempts + 1`. A hundred requests sent together all read `0` and all compared, so the
+"five attempts" ceiling was five attempts per request in flight, not per code. The comparison
+is now made only after the row itself has been stepped:
+
+```sql
+UPDATE otp_requests
+   SET attempts = attempts + 1
+ WHERE id = $1::uuid
+   AND consumed_at IS NULL
+   AND expires_at > now()
+   AND attempts < 5
+RETURNING attempts
+```
+
+No row returned means the code is spent. A hundred simultaneous guesses therefore get at most
+five comparisons between them, and the fifth wrong one consumes the row. `otp-flow.test.ts`
+fires that hundred at one code and proves, by the `OTP_FAILED` audit rows written per
+comparison, that at most five happened and that the right code is refused afterwards.
+
+**Verifying is metered like requesting.** A destination accepts ten comparisons an hour and an
+address twenty, keyed on the resolved client address; a refusal raises the `OTP_VERIFY_LIMITED`
+alert counter and is audited like every other OTP alert.
+
+**Nothing that is not an address is used, stored, logged or forwarded.** Both tiers validate
+with `net.isIP` before the value is counted by, written to an audit row or logged — one choke
+point on the API (`clientAddress` in `auth/request.ts`, used by `requestMeta`) and one on the
+web tier (`clientAddress` in `lib/upstream.ts`). Garbage, a list, an oversized value, a
+newline, `=HYPERLINK(...)` and `<script>` all become "no address", never a Redis key.
+
+**The web tier names hops, not trust.** It cannot see the socket's peer, so `TRUST_PROXY`
+there accepts only a hop count (1–10): production refuses `true`, `*` and an address list. The
+address is `X-Real-IP` (the single value Nginx overwrites) or the entry at that hop **from the
+right** of `X-Forwarded-For`. The left-most entry is never read, so a chain the browser grew
+still resolves to what the proxy wrote.
+
+**Production refuses a range too broad to be a proxy.** `/0`, an IPv4 block below `/8` and an
+IPv6 block below `/32` are refused at boot, and entries are validated as addresses rather than
+by shape (`999.1.1.1/8` is not an address). `docker-compose.prod.yml` pins the web container
+to a fixed address on a pinned subnet and sets the API's `TRUST_PROXY` to exactly that `/32`;
+the web tier is set to `1` hop, the host Nginx. `scripts/validate-compose-prod.mjs` fails the
+`docker` job if either drifts — a subnet or `true` on the API would let a caller choose the
+address its counters are keyed by.
+
+**One bootstrap.** `apps/api/src/bootstrap.ts` builds the application — adapter options,
+`trustProxy`, the 1 MB body limit, the route hooks and the docs gate — and both `main.ts` and
+the database tests call it, so the tests exercise the wiring the process really uses rather
+than a copy of it. `config/trust-proxy.ts` is the one conversion from the validated
+`TRUST_PROXY` to Fastify's option: a hop count is a number at runtime but is missing from
+Fastify's typings, and an address list is copied out of the immutable configuration.
+
+`apps/api/test/client-ip.test.ts` proves: a spoofed chain still hits one counter; one forwarded
+address repeated twenty-one times trips the cap while a different address does not; a
+multi-hop chain resolves to `198.51.100.7`, not the prepended `1.1.1.1`; registration counts by
+the same address; junk is never stored; and the OTP request and verify routes agree on the
+resolved address. `packages/shared/src/env.spec.ts` refuses broad ranges and impossible
+addresses, and `apps/web/src/lib/client-ip.spec.ts` proves the hop reading and the production
+refusals on the browser tier.

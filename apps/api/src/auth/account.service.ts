@@ -141,7 +141,7 @@ export class AccountService {
 
     // An account with a password types it; an account created by mobile proves itself with a
     // code sent to its own number, or with a sign-in from minutes ago (decision 0050).
-    await this.reauth.assert(user, { password: input.currentPassword, code: input.code });
+    await this.reauth.assert(user, { password: input.currentPassword, code: input.code }, meta);
 
     // Hashing is deliberately slow, so it happens before the transaction opens.
     const passwordHash = await hashPassword(input.newPassword);
@@ -185,10 +185,15 @@ export class AccountService {
   ): Promise<DeactivatedResult> {
     const input = parseDeactivateBody(body);
 
-    await this.reauth.assert(user, { password: input.password, code: input.code }, {
-      missingPasswordMessage: 'Enter your password',
-      wrongPasswordMessage: 'Your password is incorrect.',
-    });
+    await this.reauth.assert(
+      user,
+      { password: input.password, code: input.code },
+      meta,
+      {
+        missingPasswordMessage: 'Enter your password',
+        wrongPasswordMessage: 'Your password is incorrect.',
+      },
+    );
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: user.id }, data: { status: 'DISABLED' } });

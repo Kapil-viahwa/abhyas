@@ -1,9 +1,8 @@
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { AppModule } from '../src/app.module';
+import { createApiApplication } from '../src/bootstrap';
 import { RedisService } from '../src/infra/redis.service';
 import { REDIS_PROBE } from '../src/infra/tokens';
 import { TURNSTILE_TEST_TOKEN } from '../src/infra/turnstile-verifier';
@@ -48,9 +47,7 @@ async function bootApp(budget: number): Promise<{
 }> {
   process.env.OTP_SMS_DAILY_BUDGET = String(budget);
 
-  const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
-    logger: ['error'],
-  });
+  const { app } = await createApiApplication({ logger: ['error'] });
   await app.init();
   await waitForRedis(app);
 
@@ -190,6 +187,43 @@ describe('OTP codes and abuse controls', () => {
 
     await expect(otp.verifyCode({ destination, purpose: 'LOGIN', code })).rejects.toThrow(/not valid/);
   });
+
+  it('compares at most five of a hundred simultaneous guesses, and burns the code', async () => {
+    await redis.flushdb();
+    const destination = nextNumber();
+
+    await request(destination);
+    const code = codeFor(destination);
+    const wrong = code === '000000' ? '111111' : '000000';
+
+    // A hundred guesses at one live code, all in flight at once. The attempt counter is
+    // stepped in the row itself, before the comparison, so the row hands out five.
+    const results = await Promise.allSettled(
+      Array.from({ length: 100 }, () =>
+        otp.verifyCode({ destination, purpose: 'LOGIN', code: wrong }, { ip: '198.51.100.201' }),
+      ),
+    );
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+
+    const row = await db.client.otpRequest.findFirst({ where: { destination }, orderBy: { createdAt: 'desc' } });
+    const entityId = row?.id ?? '';
+
+    expect(row?.attempts).toBe(5);
+    expect(row?.consumedAt).not.toBeNull();
+
+    // One audit row per comparison that actually happened, which is the countable proof
+    // that the other ninety-five never compared anything at all.
+    const comparisons = await db.client.auditLog.count({ where: { action: 'OTP_FAILED', entityId } });
+    expect(comparisons).toBeGreaterThan(0);
+    expect(comparisons).toBeLessThanOrEqual(5);
+
+    // The code is burned: the right one cannot be redeemed afterwards, from any address.
+    const afterwards = await otp
+      .verifyCode({ destination, purpose: 'LOGIN', code }, { ip: '198.51.100.202' })
+      .then(() => 'accepted')
+      .catch(() => 'refused');
+    expect(afterwards).toBe('refused');
+  }, 60_000);
 
   it('refuses an expired code', async () => {
     await redis.flushdb();

@@ -79,6 +79,33 @@ if (!services.api) {
   passes.push('service "api" publishes no host ports');
 }
 
+// Client-address trust (decision 0052): the API trusts exactly the web container by address,
+// and the web tier trusts exactly the hops in front of it. A subnet, or "true", here would
+// let a caller pick the address it is counted by and step out of the per-IP limits.
+const webNetworks = services.web?.networks ?? {};
+const webNetwork = Array.isArray(webNetworks) ? {} : (Object.values(webNetworks)[0] ?? {});
+const webAddress = String(webNetwork.ipv4_address ?? '');
+const apiTrustProxy = String(services.api?.environment?.TRUST_PROXY ?? '');
+const webTrustProxy = String(services.web?.environment?.TRUST_PROXY ?? '');
+
+if (webAddress === '') {
+  failures.push('service "web" has no fixed address, so the API cannot name it as its only proxy');
+} else if (apiTrustProxy !== `${webAddress}/32`) {
+  failures.push(
+    `service "api" trusts "${apiTrustProxy}" as a proxy; it must be exactly the web tier, "${webAddress}/32"`,
+  );
+} else {
+  passes.push(`service "api" trusts exactly the web tier as its proxy (${apiTrustProxy})`);
+}
+
+if (!/^[0-9]+$/.test(webTrustProxy) || Number(webTrustProxy) < 1 || Number(webTrustProxy) > 10) {
+  failures.push(
+    `service "web" sets TRUST_PROXY "${webTrustProxy}"; it must be the hop count of the edge in front of it (1-10)`,
+  );
+} else {
+  passes.push(`service "web" trusts ${webTrustProxy} edge hop(s) in front of it`);
+}
+
 for (const name of ['api', 'worker', 'migrations']) {
   const environment = services[name]?.environment ?? {};
   if (environment.NODE_ENV !== 'production') {

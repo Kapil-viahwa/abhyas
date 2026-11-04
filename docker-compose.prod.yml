@@ -68,6 +68,10 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
       S3_FORCE_PATH_STYLE: 'false'
+      # The only proxy allowed to state a client address: the web container, by its exact
+      # address on this compose network. Never a subnet and never the internet (decision
+      # 0052): anything wider would let an address the attacker chooses pick its own bucket.
+      TRUST_PROXY: '172.31.0.10/32'
       # The web container's own address: never route a cache drop through the public edge.
       REVALIDATE_URL: http://web:3000/api/revalidate
     expose:
@@ -103,9 +107,17 @@ services:
       WEB_URL: ${WEB_URL:?WEB_URL is required}
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY is required}
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
+      # One hop in front of this tier: Nginx, on the host, which overwrites X-Real-IP and
+      # X-Forwarded-For with $remote_addr (docs/deployment.md). A count, not "true": the
+      # browser can send both headers itself (decision 0052).
+      TRUST_PROXY: '1'
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
       - '${WEB_PORT:-3000}:3000'
+    # A fixed address so the API can name exactly this container as its trusted proxy.
+    networks:
+      default:
+        ipv4_address: 172.31.0.10
     depends_on:
       api:
         condition: service_healthy
@@ -138,3 +150,11 @@ services:
 
 volumes:
   pgdata:
+
+# The default network is pinned so the web container can hold a fixed address: the API
+# trusts that one address, not a subnet, as the only source of a forwarded client address.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24

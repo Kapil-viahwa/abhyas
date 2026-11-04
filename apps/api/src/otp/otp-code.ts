@@ -24,6 +24,13 @@ export const OTP_LIMITS = {
   perIpPerHour: 10,
   /** One device may ask five times an hour. */
   perDevicePerHour: 5,
+  /**
+   * Checking a code is metered too. A live code is worth at most ten comparisons an hour
+   * from any number, and one address may submit twenty codes an hour in total: guessing is
+   * expensive before the five-attempt ceiling on a single row even comes into it.
+   */
+  verifyPerNumberPerHour: 10,
+  verifyPerIpPerHour: 20,
 } as const;
 
 /** What one message is recorded as costing, so the ledger reconciles with an invoice. */
@@ -163,6 +170,17 @@ export function otpNumberLimitKey(purpose: string, destinationDigest: string, wi
 
 export function otpDeviceLimitKey(deviceDigest: string): string {
   return `ratelimit:otp:device:${deviceDigest}`;
+}
+
+/** Guesses at one destination's live codes, whatever purpose asked for them. */
+export function otpVerifyNumberKey(destinationDigest: string): string {
+  return `ratelimit:otp:verify:number:${destinationDigest}`;
+}
+
+/** Guesses submitted from one address, using the address the API resolved for the request. */
+export function otpVerifyIpKey(ip: string): string {
+  const value = ip.trim();
+  return `ratelimit:otp:verify:ip:${value === '' ? 'unknown' : value}`;
 }
 
 export function otpBudgetKey(day: string): string {

@@ -55,11 +55,14 @@ export class MobileIdentityService {
     this.otp.assertEnabled();
 
     const input = parseMobileRegisterBody(body);
-    const { destination } = await this.otp.verifyCode({
-      destination: input.destination,
-      purpose: 'SIGNUP',
-      code: input.code,
-    });
+    const { destination } = await this.otp.verifyCode(
+      {
+        destination: input.destination,
+        purpose: 'SIGNUP',
+        code: input.code,
+      },
+      meta,
+    );
 
     const existing = await this.prisma.user.findFirst({
       where: { firstVerifiedMobile: destination },
@@ -132,11 +135,14 @@ export class MobileIdentityService {
     this.otp.assertEnabled();
 
     const input = parseMobileLoginBody(body);
-    const { destination } = await this.otp.verifyCode({
-      destination: input.destination,
-      purpose: 'LOGIN',
-      code: input.code,
-    });
+    const { destination } = await this.otp.verifyCode(
+      {
+        destination: input.destination,
+        purpose: 'LOGIN',
+        code: input.code,
+      },
+      meta,
+    );
 
     const user = await this.prisma.user.findFirst({
       where: { firstVerifiedMobile: destination },

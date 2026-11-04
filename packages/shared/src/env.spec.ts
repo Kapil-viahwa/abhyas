@@ -400,6 +400,26 @@ describe('client address trust', () => {
     );
   });
 
+  it('refuses an entry that is not a real address, however plausible it looks', () => {
+    for (const value of ['999.1.1.1', '172.31.0.10/33', '172.31.0.10/8/8', '2001:db8::/129']) {
+      expect(() => validateEnv({ ...devEnv, TRUST_PROXY: value })).toThrow(
+        /is not an address or CIDR block/,
+      );
+    }
+  });
+
+  it('refuses a production range too broad to be a proxy', () => {
+    for (const value of ['0.0.0.0/0', '::/0', '10.0.0.0/7', '2001:db8::/16']) {
+      expect(() => validateEnv({ ...production, TRUST_PROXY: value })).toThrow(
+        /is broader than a \/8 IPv4 or \/32 IPv6 block/,
+      );
+    }
+
+    // The narrowest blocks production does accept: the edge itself, or a /8 at the limit.
+    expect(validateEnv({ ...production, TRUST_PROXY: '172.31.0.10/32' }).TRUST_PROXY).toEqual(['172.31.0.10/32']);
+    expect(validateEnv({ ...production, TRUST_PROXY: '10.0.0.0/8' }).TRUST_PROXY).toEqual(['10.0.0.0/8']);
+  });
+
   it('refuses the browser-suite switch in production', () => {
     expect(() => validateEnv({ ...production, TRUST_FORWARDED_IP_FOR_TESTS: 'true' })).toThrow(
       /TRUST_FORWARDED_IP_FOR_TESTS: is refused in production/,

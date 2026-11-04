@@ -19,10 +19,13 @@ export interface WebConfig {
   /** Accepted on /api/revalidate, the one route the API is allowed to call. */
   readonly revalidateSecret: string;
   /**
-   * True when the edge proxy in front of this tier is trusted to state the client's address.
-   * With it false a browser-supplied header is ignored, so no request can choose its own
-   * address for the API's per-IP limits (decision 0052).
+   * How many proxy hops in front of this tier to read the client's address from, or `null`
+   * (the default) when none is named and no header is believed at all. A browser can send
+   * its own `X-Forwarded-For`, so only the entries the trusted edge wrote are read, and
+   * production refuses anything that is not an explicit hop count (decision 0052).
    */
+  readonly forwardedIpHops: number | null;
+  /** True when `forwardedIpHops` names an edge. */
   readonly trustForwardedIp: boolean;
   /**
    * True when the API serves the mobile OTP routes. The mobile screens and their web
@@ -70,15 +73,17 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
   const turnstileSiteKey = configuredSiteKey === '' ? TURNSTILE_TEST_SITE_KEY : configuredSiteKey;
   const revalidateSecret = env.REVALIDATE_SECRET?.trim() ?? '';
 
-  // The address a browser claims for itself is only believed when the thing in front of
-  // this tier is named (TRUST_PROXY, meaning "behind a proxy that overwrites the header").
-  // The second switch exists so the browser suite can use a fresh address per test, and
-  // production refuses it.
-  const trustForwardedIpForTests = (env.TRUST_FORWARDED_IP_FOR_TESTS ?? '').trim().toLowerCase() === 'true';
-  if (nodeEnv === 'production' && trustForwardedIpForTests) {
+  // The address a browser claims for itself is only believed when the thing in front of this
+  // tier is named. Here that is a hop count: this tier cannot see who connected, so the only
+  // thing it can be configured with is how many proxies it stands behind. The second switch
+  // exists for the browser suite (a fresh address per test) and is refused in production.
+  const trustForwardedForTests = (env.TRUST_FORWARDED_IP_FOR_TESTS ?? '').trim().toLowerCase() === 'true';
+  if (nodeEnv === 'production' && trustForwardedForTests) {
     throw new Error('TRUST_FORWARDED_IP_FOR_TESTS is refused in production: a client cannot choose its own address');
   }
-  const trustForwardedIp = (env.TRUST_PROXY ?? '').trim() !== '' || trustForwardedIpForTests;
+
+  const forwardedIpHops = parseForwardedIpHops(env.TRUST_PROXY, nodeEnv) ?? (trustForwardedForTests ? 1 : null);
+  const trustForwardedIp = forwardedIpHops !== null;
 
   if (nodeEnv === 'production') {
     if (revalidateSecret === '') {
@@ -97,6 +102,43 @@ export function webConfig(env: Record<string, string | undefined> = process.env)
     turnstileTestMode: TURNSTILE_TEST_SITE_KEY_PATTERN.test(turnstileSiteKey),
     revalidateSecret: revalidateSecret === '' ? DEFAULT_REVALIDATE_SECRET : revalidateSecret,
     otpEnabled: (env.OTP_ENABLED ?? '').trim().toLowerCase() === 'true',
+    forwardedIpHops,
     trustForwardedIp,
   };
+}
+
+/**
+ * How many proxy hops to read the client's address from.
+ *
+ * `TRUST_PROXY` on this tier is not "believe the forwarding header": a browser can send its
+ * own `X-Forwarded-For` and `X-Real-IP`, so only the entries the trusted edge itself wrote
+ * are read. This tier cannot see the socket's peer, so the edge is named as a hop count
+ * rather than an address, and production refuses anything that is not one (decision 0052).
+ */
+export function parseForwardedIpHops(raw: string | undefined, nodeEnv: WebNodeEnv): number | null {
+  const value = (raw ?? '').trim();
+
+  if (value === '') {
+    return null;
+  }
+
+  if (/^[0-9]+$/.test(value)) {
+    const hops = Number(value);
+    if (hops < 1 || hops > 10) {
+      throw new Error('TRUST_PROXY: a hop count must be between 1 and 10');
+    }
+
+    return hops;
+  }
+
+  if (nodeEnv === 'production') {
+    throw new Error('TRUST_PROXY is refused in production: name how many proxy hops stand in front of this tier (1-10)');
+  }
+
+  if (value === 'true' || value === '*') {
+    // A development convenience: exactly one proxy in front, typically the compose edge.
+    return 1;
+  }
+
+  throw new Error('TRUST_PROXY: name how many proxy hops stand in front of this tier (1-10)');
 }

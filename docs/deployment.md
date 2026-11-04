@@ -96,33 +96,53 @@ change the deployment shape, and neither exists yet — they are listed as known
 
 ## The proxy in front of the API, and the client address
 
-The API and the web tier believe a client address from a forwarding header **only** when
-`TRUST_PROXY` names the proxy that sent it (a comma-separated list of addresses or CIDR
-blocks, or a hop count). Unset — the default — means the header is ignored and the socket
-address is used; `true` and `*` are refused at boot in production (decision 0052).
+Per-IP limits are only as good as the address they count, so the address is resolved in one
+place and believed only when a proxy is named (decision 0052).
 
-So the edge proxy must both **overwrite** the header and be **named**:
+**The API.** `TRUST_PROXY` is unset by default, and then every forwarding header is ignored:
+the socket address is the client. It accepts a hop count (1–10) or a comma-separated list of
+addresses and CIDR blocks. `true` and `*` are refused at boot in production, and so is any
+block wider than the platform can call a proxy: `/0`, an IPv4 block below `/8`, or an IPv6
+block below `/32` is refused, because a range that big lets a caller choose the address its
+counters are keyed by. Entries are validated as real addresses with `net.isIP`, not by shape.
+
+`docker-compose.prod.yml` names **exactly one** address: the web container's fixed address on
+the compose network, as a `/32`. It never names a subnet, and `scripts/validate-compose-prod.mjs`
+fails the `docker` job if it does, or if the web service loses its fixed address.
+
+**The web tier.** Behind Nginx on the host, one hop counts as the edge:
+
+```yaml
+TRUST_PROXY: '1'    # web: exactly one proxy — the host Nginx — in front of it
+```
+
+Here `TRUST_PROXY` is a hop count and nothing else; production refuses `true`, `*` and an
+address list, because a Next.js route handler cannot see the socket's peer and therefore
+cannot check an address. The tier reads `X-Real-IP` first — the single value Nginx overwrites
+— and otherwise the entry at the named hop **from the right** of `X-Forwarded-For`. The
+left-most entry is never read: that is the one a browser can write.
+
+**Every value is validated before it is used.** Both tiers drop anything that is not exactly
+one `net.isIP` address, so garbage, a list, an oversized value, a newline or a spreadsheet
+formula never reaches a Redis key, an audit row or a log line.
+
+So the edge must both **overwrite** the headers and be **named**:
 
 ```nginx
 # Nginx, on the server that fronts web:3000 and api:3001
-proxy_set_header X-Real-IP        $remote_addr;
-proxy_set_header X-Forwarded-For  $remote_addr;   # $remote_addr, NOT $proxy_add_x_forwarded_for
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $remote_addr;   # $remote_addr, NOT $proxy_add_x_forwarded_for
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
 `$proxy_add_x_forwarded_for` appends what the browser sent, which is the one thing that must
 not happen. With `proxy_set_header X-Forwarded-For $remote_addr` the browser's own value is
-discarded and the address Nginx actually accepted the connection from is the only one the
-API can see.
+discarded and the address Nginx actually accepted the connection from is the only one either
+tier can see.
 
-Set the variable to the proxy's address, not to `true`:
-
-```bash
-TRUST_PROXY=172.17.0.2            # the Nginx container's address
-# or a block, for a proxy fleet:
-TRUST_PROXY=10.0.0.0/8,172.17.0.2
-```
-
-If the value is wrong in the safe direction — unset, or naming an address the proxy does not
-have — per-IP limits key on the web container's own address: every visitor shares one
-counter. That is a degraded but safe failure; the unsafe direction is refused at boot.
+**Why unset is a safe failure, and a shared one.** With `TRUST_PROXY` unset the socket address
+is used. Behind a proxy that is the proxy's own address, so every visitor shares one per-IP
+counter: the limits still apply, they just apply to everyone at once. That is degraded, not
+unsafe. The unsafe direction — believing whatever header arrives — is refused at boot in
+production, and the browser suite is the only thing allowed to choose an address, through
+`TRUST_FORWARDED_IP_FOR_TESTS`, which production also refuses.

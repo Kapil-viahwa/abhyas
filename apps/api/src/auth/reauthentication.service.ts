@@ -94,6 +94,7 @@ export class ReauthenticationService {
   async assert(
     user: AuthenticatedUser,
     proof: ReauthenticationProof,
+    meta: RequestMetadata = {},
     messages: ReauthenticationMessages = DEFAULT_REAUTH_MESSAGES,
   ): Promise<void> {
     const account = await this.load(user.id);
@@ -109,11 +110,14 @@ export class ReauthenticationService {
       if (account.firstVerifiedMobile === null) {
         throw new BadRequestException('This account has no verified mobile number to confirm with.');
       }
-      await this.otp.verifyCode({
-        destination: account.firstVerifiedMobile,
-        purpose: 'REAUTH',
-        code: proof.code,
-      });
+      await this.otp.verifyCode(
+        {
+          destination: account.firstVerifiedMobile,
+          purpose: 'REAUTH',
+          code: proof.code,
+        },
+        meta,
+      );
       return;
     }
 

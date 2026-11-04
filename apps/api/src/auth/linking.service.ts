@@ -96,7 +96,7 @@ export class LinkingService {
       throw new BadRequestException('This account already has an email address.');
     }
 
-    await this.reauth.assert(user, { password: input.password, code: input.code });
+    await this.reauth.assert(user, { password: input.password, code: input.code }, meta);
 
     if (isDisposableEmail(input.email)) {
       throw new BadRequestException('Use a permanent email address: throwaway inboxes are not accepted.');
@@ -212,13 +212,16 @@ export class LinkingService {
     this.otp.assertEnabled();
 
     const input = parseMobileLinkBody(body);
-    await this.reauth.assert(user, { password: input.password });
+    await this.reauth.assert(user, { password: input.password }, meta);
 
-    const { destination } = await this.otp.verifyCode({
-      destination: input.destination,
-      purpose: 'LINK',
-      code: input.code,
-    });
+    const { destination } = await this.otp.verifyCode(
+      {
+        destination: input.destination,
+        purpose: 'LINK',
+        code: input.code,
+      },
+      meta,
+    );
 
     const owner = await this.prisma.user.findFirst({
       where: { firstVerifiedMobile: destination },
@@ -268,7 +271,7 @@ export class LinkingService {
     const input = parseUnlinkMobileBody(body);
     const account = await this.load(user.id);
 
-    await this.reauth.assert(user, { password: input.password, code: input.code });
+    await this.reauth.assert(user, { password: input.password, code: input.code }, meta);
 
     if (account.firstVerifiedMobile === null) {
       throw new BadRequestException('This account has no mobile number to remove.');

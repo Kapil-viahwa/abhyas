@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   InvalidMobileError,
   OTP_CODE_PATTERN,
+  OTP_LIMITS,
   OTP_MAX_ATTEMPTS,
   OTP_RESEND_COOLDOWN_SECONDS,
   OTP_TTL_SECONDS,
@@ -14,6 +15,9 @@ import {
   isSequentialDigits,
   nationalDigits,
   normaliseMobile,
+  otpNumberLimitKey,
+  otpVerifyIpKey,
+  otpVerifyNumberKey,
   resendCooldownSeconds,
   startOfBusinessDay,
 } from './otp-code';
@@ -143,5 +147,24 @@ describe('the fixed code', () => {
     expect(OTP_MAX_ATTEMPTS).toBe(5);
     expect(resendCooldownSeconds(0)).toBe(OTP_RESEND_COOLDOWN_SECONDS[0]);
     expect(resendCooldownSeconds(4)).toBeLessThanOrEqual(resendCooldownSeconds(5));
+  });
+});
+
+
+/**
+ * Checking a code is metered like asking for one. A live code is worth at most five
+ * comparisons on its own row; these are the ceilings that stop an attacker from asking for
+ * a hundred new rows an hour and comparing against each of them.
+ */
+describe('the verify limits', () => {
+  it('caps one destination and one address, and names them apart from the request keys', () => {
+    expect(OTP_LIMITS.verifyPerNumberPerHour).toBe(10);
+    expect(OTP_LIMITS.verifyPerIpPerHour).toBe(20);
+
+    expect(otpVerifyNumberKey('digest')).toBe('ratelimit:otp:verify:number:digest');
+    expect(otpVerifyNumberKey('digest')).not.toBe(otpNumberLimitKey('LOGIN', 'digest', 'hour'));
+
+    expect(otpVerifyIpKey('198.51.100.7')).toBe('ratelimit:otp:verify:ip:198.51.100.7');
+    expect(otpVerifyIpKey('   ')).toBe('ratelimit:otp:verify:ip:unknown');
   });
 });

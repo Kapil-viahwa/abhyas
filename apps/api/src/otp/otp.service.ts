@@ -34,6 +34,8 @@ import {
   otpBudgetKey,
   otpDeviceLimitKey,
   otpNumberLimitKey,
+  otpVerifyIpKey,
+  otpVerifyNumberKey,
   resendCooldownSeconds,
   startOfBusinessDay,
 } from './otp-code';
@@ -53,6 +55,7 @@ export type OtpPurpose = (typeof OTP_PURPOSES)[number];
 
 export const OTP_ALERTS = {
   requestLimited: 'OTP_REQUEST_LIMITED',
+  verifyLimited: 'OTP_VERIFY_LIMITED',
   sendFailed: 'OTP_SEND_FAILED',
   budgetExhausted: 'SMS_BUDGET_EXHAUSTED',
   anomaly: 'OTP_ANOMALY_DETECTED',
@@ -102,12 +105,6 @@ export interface OtpVerifyInput {
 export interface OtpVerifyResult {
   /** E.164, normalised. The caller resolves the account; this service never does. */
   readonly destination: string;
-}
-
-interface OtpRow {
-  readonly id: string;
-  readonly codeHmac: string;
-  readonly attempts: number;
 }
 
 @Injectable()
@@ -306,7 +303,7 @@ export class OtpService {
     return { status: 'accepted', resendAfterSeconds: resendCooldownSeconds(recent + 1) };
   }
 
-  async verifyCode(input: OtpVerifyInput): Promise<OtpVerifyResult> {
+  async verifyCode(input: OtpVerifyInput, meta: RequestMetadata = {}): Promise<OtpVerifyResult> {
     this.assertEnabled();
 
     const purpose = parseOtpPurpose(input.purpose);
@@ -316,10 +313,39 @@ export class OtpService {
     const secret = this.hmacSecret;
     const destinationDigest = destinationHash(destination, secret);
 
+    // Checking a code is metered as well. Without this a live code could be guessed at for an
+    // hour from any address, five attempts at a time, on as many rows as an attacker cares
+    // to ask for.
+    const denial = await this.limiter.consumeAll([
+      {
+        key: otpVerifyNumberKey(destinationDigest),
+        limit: OTP_LIMITS.verifyPerNumberPerHour,
+        windowSeconds: 3600,
+      },
+      {
+        key: otpVerifyIpKey(meta.ip ?? ''),
+        limit: OTP_LIMITS.verifyPerIpPerHour,
+        windowSeconds: 3600,
+      },
+    ]);
+
+    if (denial !== null) {
+      await this.recordAlarm(
+        OTP_ALERTS.verifyLimited,
+        {
+          purpose,
+          destinationHash: destinationDigest,
+          ipHash: meta.ip === undefined ? null : destinationHash(meta.ip, secret),
+        },
+        now,
+      );
+      throw new OtpThrottledException('Too many attempts. Please wait before trying again.', denial.retryAfterSeconds);
+    }
+
     const request = await this.prisma.otpRequest.findFirst({
       where: { destinationHash: destinationDigest, purpose, consumedAt: null, expiresAt: { gt: now } },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, codeHmac: true, attempts: true },
+      select: { id: true, codeHmac: true },
     });
 
     if (request === null) {
@@ -328,25 +354,39 @@ export class OtpService {
       throw new BadRequestException('That code is not valid');
     }
 
-    const row: OtpRow = request;
+    // The attempt is counted in the row itself, before the comparison, and only while the
+    // code is live and unspent. A hundred simultaneous guesses therefore get at most five
+    // comparisons between them: every later one finds no row left to claim.
+    const claimed = await this.prisma.$queryRaw<{ attempts: number }[]>`
+      UPDATE otp_requests
+         SET attempts = attempts + 1
+       WHERE id = CAST(${request.id} AS uuid)
+         AND consumed_at IS NULL
+         AND expires_at > ${now}
+         AND attempts < ${OTP_MAX_ATTEMPTS}
+      RETURNING attempts`;
 
-    if (row.attempts >= OTP_MAX_ATTEMPTS) {
-      await this.consume(row.id, now);
+    const attempts = claimed[0]?.attempts ?? null;
+
+    if (attempts === null) {
+      // Every attempt this row allowed is spent, or another guess took the last one.
+      await this.consume(request.id, now);
       throw new BadRequestException('That code is not valid');
     }
 
-    if (!codeMatches(row.codeHmac, secret, destination, code)) {
-      const attempts = row.attempts + 1;
-      await this.prisma.otpRequest.update({
-        where: { id: row.id },
-        data: { attempts, consumedAt: attempts >= OTP_MAX_ATTEMPTS ? now : null },
-      });
+    if (!codeMatches(request.codeHmac, secret, destination, code)) {
+      // The fifth wrong guess spends the code in the same breath as the count that made it
+      // the fifth, so a code is never left live with no comparisons left to give.
+      if (attempts >= OTP_MAX_ATTEMPTS) {
+        await this.consume(request.id, now);
+      }
 
       await writeIdentityAudit(this.prisma, {
         action: 'OTP_FAILED',
         entityType: 'otp_request',
-        entityId: row.id,
+        entityId: request.id,
         metadata: { purpose, destinationHash: destinationDigest, attempts },
+        ip: meta.ip ?? null,
       });
 
       throw new BadRequestException('That code is not valid');
@@ -354,7 +394,7 @@ export class OtpService {
 
     // One winner: a second verifier using the same code finds it already consumed.
     const consumed = await this.prisma.otpRequest.updateMany({
-      where: { id: row.id, consumedAt: null },
+      where: { id: request.id, consumedAt: null },
       data: { consumedAt: now },
     });
 
@@ -365,8 +405,9 @@ export class OtpService {
     await writeIdentityAudit(this.prisma, {
       action: 'OTP_VERIFIED',
       entityType: 'otp_request',
-      entityId: row.id,
+      entityId: request.id,
       metadata: { purpose, destinationHash: destinationDigest },
+      ip: meta.ip ?? null,
     });
 
     return { destination };

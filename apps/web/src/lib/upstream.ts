@@ -3,6 +3,8 @@
  * API URL and no token is ever shipped to a page.
  */
 
+import { isIP } from 'node:net';
+
 import { webConfig } from './config';
 
 export interface ApiCallOptions {
@@ -93,25 +95,55 @@ export function errorMessage(body: unknown): string {
 /**
  * The end user's address, as the edge proxy stated it.
  *
- * Only read when this tier is configured to trust that edge (TRUST_PROXY), or, in
- * development and CI only, when TRUST_FORWARDED_IP_FOR_TESTS lets the browser suite choose
- * a fresh address per test. Otherwise a browser could name any address it liked and step
- * out of the API's per-IP counters, so the header is ignored and no address is forwarded at
+ * Only read when this tier is configured to stand behind a named number of proxy hops
+ * (`TRUST_PROXY`), or, in development and CI only, when TRUST_FORWARDED_IP_FOR_TESTS lets
+ * the browser suite choose a fresh address per test. Otherwise a browser could name any
+ * address it liked and step out of the API's per-IP counters, so no address is forwarded at
  * all (decision 0052).
+ *
+ * The header is never believed as a whole. `X-Real-IP` is the single value the edge
+ * overwrites with the connection's address, and `X-Forwarded-For` is read from the right,
+ * so a chain the browser prepended a fake address to still resolves to the one the trusted
+ * proxy wrote.
  */
 export function clientIpFrom(request: Request): string | undefined {
-  if (!webConfig().trustForwardedIp) {
+  const hops = webConfig().forwardedIpHops;
+
+  if (hops === null) {
     return undefined;
   }
 
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded !== null) {
-    const first = forwarded.split(',')[0]?.trim();
-    if (first !== undefined && first !== '') {
-      return first;
-    }
+  const realIp = clientAddress(request.headers.get('x-real-ip'));
+  if (realIp !== undefined) {
+    return realIp;
   }
 
-  const realIp = request.headers.get('x-real-ip');
-  return realIp === null || realIp === '' ? undefined : realIp;
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded === null) {
+    return undefined;
+  }
+
+  const chain = forwarded
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+
+  return clientAddress(chain[chain.length - hops]);
+}
+
+/**
+ * An address this tier is willing to forward: exactly one IPv4 or IPv6 address.
+ *
+ * A header value is whatever the edge — or a browser pretending to be one — wrote. Garbage,
+ * a list, an oversized value, a newline or a spreadsheet formula must never reach the API,
+ * where it would become a rate-limit key, an audit row or a log line.
+ */
+export function clientAddress(value: string | null | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const candidate = value.trim();
+
+  return candidate !== '' && isIP(candidate) !== 0 ? candidate : undefined;
 }

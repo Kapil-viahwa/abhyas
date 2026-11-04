@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 /**
  * Environment validation shared by the API and the worker.
  *
@@ -44,6 +46,51 @@ export const MIN_AUTH_SECRET_LENGTH = 32;
 export const MIN_REVALIDATE_SECRET_LENGTH = 16;
 
 export const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
+
+/** The narrowest IPv4 and IPv6 blocks a production boot will trust as a proxy. */
+const MIN_TRUSTED_IPV4_PREFIX = 8;
+const MIN_TRUSTED_IPV6_PREFIX = 32;
+
+/**
+ * The family and prefix length a `TRUST_PROXY` entry names, or `null` when it is not an
+ * address at all. A bare address counts as its own /32 or /128.
+ */
+function trustedPrefix(entry: string): { readonly family: 4 | 6; readonly prefix: number } | null {
+  const slash = entry.indexOf('/');
+  const address = slash === -1 ? entry : entry.slice(0, slash);
+
+  const version = isIP(address);
+  if (version === 0) {
+    return null;
+  }
+
+  const family: 4 | 6 = version === 4 ? 4 : 6;
+  const maximum = family === 4 ? 32 : 128;
+
+  if (slash === -1) {
+    return { family, prefix: maximum };
+  }
+
+  const raw = entry.slice(slash + 1);
+  if (!/^[0-9]{1,3}$/.test(raw)) {
+    return null;
+  }
+
+  const prefix = Number(raw);
+
+  return prefix <= maximum ? { family, prefix } : null;
+}
+
+/** Whether a trusted proxy block is wider than production will accept. */
+function isTooBroad(details: { readonly family: 4 | 6; readonly prefix: number }): boolean {
+  if (details.prefix === 0) {
+    return true;
+  }
+
+  return details.family === 4
+    ? details.prefix < MIN_TRUSTED_IPV4_PREFIX
+    : details.prefix < MIN_TRUSTED_IPV6_PREFIX;
+}
 
 export interface EnvIssue {
   readonly variable: string;
@@ -466,13 +513,33 @@ export function validateEnv(raw: RawEnv): AppEnv {
       .split(',')
       .map((entry) => entry.trim())
       .filter((entry) => entry !== '');
-    const invalid = entries.filter((entry) => !/^[0-9a-fA-F:.]{2,45}(\/[0-9]{1,3})?$/.test(entry));
+
+    const parsed = entries.map((entry) => ({ entry, block: trustedPrefix(entry) }));
+    const invalid = parsed.filter((item) => item.block === null);
 
     if (entries.length === 0 || invalid.length > 0) {
       issues.push({
         variable: 'TRUST_PROXY',
-        message: `"${invalid[0] ?? trustProxyRaw}" is not an address or CIDR block`,
+        message: `"${invalid[0]?.entry ?? trustProxyRaw}" is not an address or CIDR block`,
       });
+    } else if (isProduction) {
+      // A trusted range is one that may state any address inside it. A block wider than a
+      // /8 (IPv4) or a /32 (IPv6) is not a proxy address, it is the internet: naming one
+      // would let an address the attacker chooses pick its own per-IP bucket (decision 0052).
+      const broad = parsed
+        .filter(
+          (item): item is { entry: string; block: { family: 4 | 6; prefix: number } } =>
+            item.block !== null && isTooBroad(item.block),
+        )[0];
+
+      if (broad !== undefined) {
+        issues.push({
+          variable: 'TRUST_PROXY',
+          message: `"${broad.entry}" is broader than a /${String(MIN_TRUSTED_IPV4_PREFIX)} IPv4 or /${String(MIN_TRUSTED_IPV6_PREFIX)} IPv6 block, which production refuses to trust`,
+        });
+      } else {
+        trustProxy = entries;
+      }
     } else {
       trustProxy = entries;
     }
