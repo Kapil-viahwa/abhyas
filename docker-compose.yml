@@ -100,8 +100,9 @@ services:
       # Development only: the web tier is the only proxy in front of the API, so the address
       # it forwards is believed. Production names its proxy instead (decision 0052).
       TRUST_PROXY: 'true'
-      # The one header the web tier forwards and this API reads (decision 0055).
-      TRUST_CLIENT_IP_HEADER: 'x-real-ip'
+      # The one header the web tier forwards and this API reads (decision 0055). Development
+      # and CI keep X-Forwarded-For because the browser suite states an address with it.
+      TRUST_CLIENT_IP_HEADER: 'x-forwarded-for'
       # Mobile OTP is off unless a developer turns it on; both tiers read the one switch.
       OTP_ENABLED: ${OTP_ENABLED:-false}
     ports:
@@ -144,8 +145,9 @@ services:
       # Development only: believe the browser's forwarding header so the browser suite can use
       # a fresh address per test. Production boot refuses this switch (decision 0052).
       TRUST_FORWARDED_IP_FOR_TESTS: 'true'
-      # The one header this tier reads, and the name the API it calls reads (decision 0055).
-      TRUST_CLIENT_IP_HEADER: 'x-real-ip'
+      # The browser suite states its address in X-Forwarded-For, so that is the one header
+      # this tier reads and the name the API it calls reads (decision 0055).
+      TRUST_CLIENT_IP_HEADER: 'x-forwarded-for'
       NEXT_TELEMETRY_DISABLED: '1'
     ports:
       - '3000:3000'

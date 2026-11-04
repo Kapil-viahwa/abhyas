@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -96,7 +97,7 @@ describe('web configuration', () => {
  * production, including the one client-address header (decision 0055). The block is read
  * without a YAML dependency, so only the two levels this file uses are recognised.
  */
-const COMPOSE_FILE = new URL('../../../../docker-compose.prod.yml', import.meta.url);
+const COMPOSE_FILE = join(process.cwd(), '../../docker-compose.prod.yml');
 
 const DUMMIES: Record<string, string> = {
   WEB_URL: 'https://abhyas.example.com',

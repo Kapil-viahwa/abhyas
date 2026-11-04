@@ -128,7 +128,10 @@ describe('the web tier and the client address', () => {
   it('lets the browser suite choose an address only outside production', () => {
     process.env.TRUST_FORWARDED_IP_FOR_TESTS = 'true';
 
-    expect(clientIpFrom(request({ 'x-forwarded-for': '198.51.100.7' }))).toBe('198.51.100.7');
+    expect(clientIpFrom(request({ 'x-real-ip': '198.51.100.7' }))).toBe('198.51.100.7');
+    // Still only the configured header: the switch loosens who may state an address, not which
+    // header carries it.
+    expect(clientIpFrom(request({ 'x-forwarded-for': '198.51.100.7' }))).toBeUndefined();
 
     expect(() => webConfig({ ...PRODUCTION, TRUST_FORWARDED_IP_FOR_TESTS: 'true' })).toThrow(
       /TRUST_FORWARDED_IP_FOR_TESTS is refused in production/,
