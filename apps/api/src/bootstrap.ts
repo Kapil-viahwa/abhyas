@@ -3,21 +3,22 @@ import 'reflect-metadata';
 import type { NestApplicationOptions } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { FastifyRequest } from 'fastify';
 
 import type { AppEnv } from '@abhyas/shared';
 
 import { AppModule } from './app.module';
 import { configureApiDocs } from './config/api-docs';
 import { loadConfig } from './config/config';
-import { trustProxyOption } from './config/trust-proxy';
+import { headerValue, resolveClientAddress, trustProxyOption } from './config/trust-proxy';
 import { boundUploadBody, type RouteHookHost } from './media/upload-limit';
 
 /**
  * One place where the API is built.
  *
  * `main.ts` and the database tests both call `createApiApplication`, so a test exercises the
- * adapter options the process really uses — trustProxy, the body limit and the route hooks —
- * rather than a copy that can drift away from them (decision 0052).
+ * adapter options the process really uses — trustProxy, the body limit, the request hook and
+ * the route hooks — rather than a copy that can drift away from them (decision 0052).
  */
 
 export const API_BODY_LIMIT_BYTES = 1_048_576;
@@ -53,9 +54,27 @@ export async function createApiApplication(options: CreateApiOptions = {}): Prom
 
   app.enableShutdownHooks();
 
+  // The client address, resolved once per request from this boot's own policy. Every
+  // per-IP limit, audit row and session record reads `request.clientIp` through
+  // `requestMeta`, so the policy the process booted with is the policy the request is
+  // counted under — not a value a header can choose (decision 0052).
+  const instance = app.getHttpAdapter().getInstance();
+
+  // Fastify seals its request objects, so the value is declared before a request can set it.
+  instance.decorateRequest('clientIp', null);
+  instance.addHook('onRequest', (request, _reply, done) => {
+    (request as FastifyRequest & { clientIp: string | null }).clientIp =
+      resolveClientAddress(config.TRUST_PROXY, {
+        socketAddress: request.raw.socket?.remoteAddress,
+        forwardedFor: headerValue(request.headers['x-forwarded-for']),
+        realIp: headerValue(request.headers['x-real-ip']),
+      }) ?? null;
+    done();
+  });
+
   // Every route keeps the adapter's 1 MB body limit; the base64 image upload gets its own,
   // so an oversized upload is refused with 413 before Fastify buffers it (decision 0045).
-  boundUploadBody(app.getHttpAdapter().getInstance() as unknown as RouteHookHost);
+  boundUploadBody(instance as unknown as RouteHookHost);
 
   // Development and CI only: in production the OpenAPI UI and document are not mounted at
   // all, so /api/docs and /api/docs-json answer 404 (decision 0028).

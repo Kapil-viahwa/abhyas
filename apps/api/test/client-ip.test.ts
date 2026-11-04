@@ -150,7 +150,7 @@ describe('the client address behind the per-IP limits', () => {
 
     const row = await db.client.auditLog.findFirst({
       where: { action: 'IDENTITY_LOGIN_FAILED' },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { occurredAt: 'desc' },
       select: { ip: true },
     });
 
@@ -266,7 +266,7 @@ describe('the client address behind the per-IP limits', () => {
     // And the audit trail names the resolved address, not the raw header.
     const requested = await db.client.auditLog.findFirst({
       where: { action: 'OTP_REQUESTED' },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { occurredAt: 'desc' },
       select: { ip: true },
     });
     expect(requested?.ip).toBe('203.0.113.79');

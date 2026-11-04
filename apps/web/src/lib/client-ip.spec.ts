@@ -63,12 +63,11 @@ describe('the web tier and the client address', () => {
     expect(clientIpFrom(request({ 'x-forwarded-for': '6.6.6.6, 198.51.100.7' }))).toBe('198.51.100.7');
   });
 
-  it('forwards nothing that is not exactly one address', () => {
+  it('forwards only the one address the hop names, never a raw header', () => {
     process.env.TRUST_PROXY = '1';
 
-    const hostile = [
+    const rejected = [
       'not-an-address',
-      '203.0.113.9, 10.0.0.1',
       '999.999.999.999',
       '=HYPERLINK("http://example.com")',
       '<script>alert(1)</script>',
@@ -76,11 +75,18 @@ describe('the web tier and the client address', () => {
       '1'.repeat(4000),
     ];
 
-    for (const value of hostile) {
+    for (const value of rejected) {
       expect(clientAddress(value)).toBeUndefined();
       expect(clientIpFrom(request({ 'x-forwarded-for': value }))).toBeUndefined();
       expect(clientIpFrom(request({ 'x-real-ip': value }))).toBeUndefined();
     }
+
+    // A list is never forwarded as written: only the entry at the trusted hop is, so the API
+    // receives one address — the one the proxy wrote — and never the header itself.
+    const fromChain = clientIpFrom(request({ 'x-forwarded-for': '203.0.113.9, 10.0.0.1' }));
+
+    expect(fromChain).toBe('10.0.0.1');
+    expect(fromChain).not.toContain(',');
 
     expect(clientAddress(' 2001:db8::1 ')).toBe('2001:db8::1');
   });

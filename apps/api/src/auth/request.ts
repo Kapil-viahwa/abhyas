@@ -10,6 +10,11 @@ import { isIP } from 'node:net';
  */
 export interface RequestLike {
   readonly ip?: string;
+  /**
+   * The client address resolved once per request by the bootstrap's `onRequest` hook, under
+   * the boot's own `TRUST_PROXY`. Absent only on the plain objects the unit tests build.
+   */
+  readonly clientIp?: string | null;
   readonly headers: Record<string, string | string[] | undefined>;
 }
 
@@ -31,9 +36,12 @@ export function clientAddress(value: unknown): string | undefined {
 
 export function requestMeta(request: RequestLike): RequestMetadata {
   const agent = request.headers['user-agent'];
+  // Whichever the server resolved, it is validated here as well: nothing that is not exactly
+  // one address may become a Redis key or an audit row (decision 0052).
+  const address: unknown = 'clientIp' in request ? request.clientIp : request.ip;
 
   return {
-    ip: clientAddress(request.ip),
+    ip: clientAddress(address),
     userAgent: typeof agent === 'string' ? agent : undefined,
   };
 }
