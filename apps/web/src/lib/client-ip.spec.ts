@@ -43,10 +43,15 @@ describe('the web tier and the client address', () => {
     process.env.TRUST_FORWARDED_IP_FOR_TESTS = 'true';
     expect(clientIpFrom(request())).toBe('203.0.113.9');
 
-    process.env.NODE_ENV = 'production';
-    process.env.TURNSTILE_SITE_KEY = 'live-site-key';
-    process.env.WEB_URL = 'https://abhyas.example.com';
-
-    expect(() => webConfig()).toThrow(/TRUST_FORWARDED_IP_FOR_TESTS is refused in production/);
+    // Asked directly with a production environment: NODE_ENV on the real process object
+    // is read-only, and the point is the policy, not the environment it happens to run in.
+    expect(() =>
+      webConfig({
+        NODE_ENV: 'production',
+        TURNSTILE_SITE_KEY: 'live-site-key',
+        WEB_URL: 'https://abhyas.example.com',
+        TRUST_FORWARDED_IP_FOR_TESTS: 'true',
+      }),
+    ).toThrow(/TRUST_FORWARDED_IP_FOR_TESTS is refused in production/);
   });
 });
