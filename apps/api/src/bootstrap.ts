@@ -33,18 +33,24 @@ export const API_BODY_LIMIT_BYTES = 1_048_576;
  * bounds a request once it has started, and `keepAliveTimeout` is deliberately shorter than
  * Nginx's default 75 s so the upstream closes an idle connection before the proxy reuses it.
  */
-export const API_TIMEOUTS = {
+export interface ApiTimeoutOptions {
+  readonly connectionTimeoutMs: number;
+  readonly requestTimeoutMs: number;
+  readonly keepAliveTimeoutMs: number;
+}
+
+export const API_TIMEOUTS: ApiTimeoutOptions = {
   connectionTimeoutMs: 10_000,
   requestTimeoutMs: 30_000,
   keepAliveTimeoutMs: 72_000,
-} as const;
+};
 
 export interface CreateApiOptions {
   /** The environment to validate. Defaults to the process's own. */
   readonly env?: NodeJS.ProcessEnv;
   readonly logger?: NestApplicationOptions['logger'];
   /** Tests only: shorten the socket timeouts so a stalled request can be proven closed. */
-  readonly timeouts?: Partial<typeof API_TIMEOUTS>;
+  readonly timeouts?: Partial<ApiTimeoutOptions>;
 }
 
 export interface CreatedApi {
