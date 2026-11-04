@@ -132,6 +132,19 @@ describe('linking an identifier', () => {
     expect(response.statusCode, response.body).toBe(202);
   }
 
+  /** A confirmation code to the account's own number, for an account with no password. */
+  async function reauthCode(account: { readonly number: string; readonly token: string }): Promise<string> {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/reauth/otp',
+      headers: bearer(account.token),
+      payload: { turnstileToken: TURNSTILE_TEST_TOKEN },
+    });
+    expect(response.statusCode, response.body).toBe(202);
+
+    return codeFor(account.number);
+  }
+
   beforeAll(async () => {
     db = await createMigratedTestDatabase('linking');
 
@@ -180,7 +193,7 @@ describe('linking an identifier', () => {
       method: 'POST',
       url: '/v1/auth/email/link',
       headers: bearer(account.token),
-      payload: { email: address },
+      payload: { email: address, code: await reauthCode(account) },
     });
     expect(requested.statusCode, requested.body).toBe(202);
     expect(requested.json<{ status: string }>().status).toBe('ACCEPTED');
@@ -220,7 +233,7 @@ describe('linking an identifier', () => {
       method: 'POST',
       url: '/v1/auth/email/link',
       headers: bearer(first.token),
-      payload: { email: address },
+      payload: { email: address, code: await reauthCode(first) },
     });
     const token = linkTokenFor(address);
 
@@ -245,7 +258,7 @@ describe('linking an identifier', () => {
       method: 'POST',
       url: '/v1/auth/email/link',
       headers: bearer(account.token),
-      payload: { email: owner.email },
+      payload: { email: owner.email, code: await reauthCode(account) },
     });
 
     expect(requested.statusCode).toBe(202);
@@ -364,7 +377,7 @@ describe('linking an identifier', () => {
       method: 'DELETE',
       url: '/v1/auth/mobile/link',
       headers: bearer(mobileOnly.token),
-      payload: {},
+      payload: { code: await reauthCode(mobileOnly) },
     });
     expect(lastOne.statusCode).toBe(400);
     expect(lastOne.body).toMatch(/only way to sign in/);

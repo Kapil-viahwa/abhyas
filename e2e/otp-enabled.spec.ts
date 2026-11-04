@@ -82,21 +82,26 @@ test('signs in with a code on a later visit, on the same session as a password w
   await expect(page).toHaveURL(/\/account$/);
 });
 
-test('links a second number from the account page, proving the session is fresh', async ({ page }) => {
+test('links a second number from the account page, proving it with a confirmation code', async ({ page }) => {
   await register(page, nextNumber());
   const added = nextNumber();
+
+  // A mobile-first account has no password, so with OTP on the confirmation code is the proof
+  // the account has to offer. It goes to the number the account already owns.
+  await page.locator('form[action="/api/account/reauth/otp"] button[type="submit"]').click();
+  await expect(page).toHaveURL(/\/account\?reauth=sent/);
+  await expect(page.getByText('A confirmation code was sent to your current number.')).toBeVisible();
 
   const link = page.locator('form[action="/api/account/mobile/link"]');
   await link.locator('input[name="destination"]').fill(added);
   await link.locator('button[type="submit"]').click();
   await expect(page).toHaveURL(/\/account\?.*sent=1/);
 
-  // A mobile-first account has no password to offer, so re-authentication is the fresh
-  // session the account page rendered for; the form therefore has no password field.
   const confirm = page.locator('form[action="/api/account/mobile/link/verify"]');
   await expect(confirm.locator('input[name="password"]')).toHaveCount(0);
   await confirm.locator('input[name="destination"]').fill(added);
   await confirm.locator('input[name="code"]').fill(CODE);
+  await confirm.locator('input[name="reauthCode"]').fill(CODE);
   await confirm.locator('button[type="submit"]').click();
 
   await expect(page).toHaveURL(/\/account\?mobile=linked/);

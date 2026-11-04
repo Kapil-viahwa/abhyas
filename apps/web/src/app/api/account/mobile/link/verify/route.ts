@@ -25,6 +25,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   const password = stringField(guard.form, 'password');
+  const reauthCode = stringField(guard.form, 'reauthCode').trim();
   const result = await apiCall<{ status: string }>('/v1/auth/mobile/link', {
     method: 'POST',
     accessToken,
@@ -33,6 +34,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       destination: stringField(guard.form, 'destination').trim(),
       code: stringField(guard.form, 'code').trim(),
       ...(password === '' ? {} : { password }),
+      ...(reauthCode === '' ? {} : { reauthCode }),
     },
   });
 

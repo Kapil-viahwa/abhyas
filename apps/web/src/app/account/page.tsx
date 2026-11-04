@@ -106,6 +106,25 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
           <Notice message={mobile === 'linked' ? 'Your mobile number was added.' : undefined} />
           <Notice message={mobile === 'removed' ? 'Your mobile number was removed.' : undefined} />
           <Notice message={params.email === 'linked' ? 'Your email address was added and verified.' : undefined} />
+          <Notice
+            message={
+              params.reauth === 'sent' ? 'A confirmation code was sent to your current number.' : undefined
+            }
+          />
+
+          {session.profile.email === null ? (
+            <form action="/api/account/reauth/otp" method="post" className="mt-4 space-y-3">
+              <input type="hidden" name="csrfToken" value={csrf} />
+              <p className="text-sm text-slate-400">
+                This account has no password. Ask for a confirmation code on your number, and type it below when
+                adding or removing one.
+              </p>
+              <TurnstileField siteKey={config.turnstileSiteKey} testMode={config.turnstileTestMode} />
+              <button className={secondaryButtonClass} type="submit">
+                Send confirmation code
+              </button>
+            </form>
+          ) : null}
 
           <form action="/api/account/mobile/link" method="post" className="mt-4 space-y-3">
             <input type="hidden" name="csrfToken" value={csrf} />
@@ -151,6 +170,22 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
               />
             </label>
 
+            {session.profile.email === null ? (
+              <label className={labelClass}>
+                Confirmation code for your current number
+                <input
+                  className={inputClass}
+                  name="reauthCode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  required
+                />
+              </label>
+            ) : null}
+
             {session.profile.email !== null ? (
               <label className={labelClass}>
                 Your password
@@ -170,6 +205,22 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
               Your password, if you have one
               <input className={inputClass} name="password" type="password" autoComplete="current-password" />
             </label>
+
+            {session.profile.email === null ? (
+              <label className={labelClass}>
+                Confirmation code from your number
+                <input
+                  className={inputClass}
+                  name="code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  required
+                />
+              </label>
+            ) : null}
 
             <button className={secondaryButtonClass} type="submit">
               Remove mobile number

@@ -212,7 +212,7 @@ export class LinkingService {
     this.otp.assertEnabled();
 
     const input = parseMobileLinkBody(body);
-    await this.reauth.assert(user, { password: input.password }, meta);
+    await this.reauth.assert(user, { password: input.password, code: input.reauthCode }, meta);
 
     const { destination } = await this.otp.verifyCode(
       {

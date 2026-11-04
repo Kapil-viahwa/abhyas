@@ -143,7 +143,7 @@ describe('validateEnv', () => {
       expect(error).toBeInstanceOf(EnvValidationError);
       const issues = (error as EnvValidationError).issues;
       expect(issues.map((issue) => issue.variable)).toEqual(
-        expect.arrayContaining(['DATABASE_URL', 'REDIS_URL', 'AUTH_SECRET', 'TURNSTILE_SECRET_KEY', 'SMS_PROVIDER']),
+        expect.arrayContaining(['DATABASE_URL', 'REDIS_URL', 'AUTH_SECRET', 'TURNSTILE_SECRET_KEY', 'S3_ENDPOINT']),
       );
     }
   });

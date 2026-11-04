@@ -268,6 +268,8 @@ export interface MobileLinkInput {
   readonly destination: string;
   readonly code: string;
   readonly password: string | undefined;
+  /** The re-authentication code sent to the account's own number, when it has no password. */
+  readonly reauthCode: string | undefined;
 }
 
 export function parseMobileLinkBody(body: unknown): MobileLinkInput {
@@ -277,6 +279,7 @@ export function parseMobileLinkBody(body: unknown): MobileLinkInput {
     destination: parseDestination(record.destination),
     code: parseOtpCode(record.code),
     password: optionalSecret(record.password),
+    reauthCode: parseOptionalOtpCode(record.reauthCode),
   };
 }
 

@@ -579,9 +579,6 @@ export function validateEnv(raw: RawEnv): AppEnv {
     issues.push({ variable: 'TRUST_FORWARDED_IP_FOR_TESTS', message: 'is refused in production' });
   }
 
-  if (issues.length > 0) {
-    throw new EnvValidationError(issues);
-  }
   // One leaked secret must not open every door. In production the three secrets the platform
   // signs with are separate values, and each is refused if it is a development placeholder.
   if (isProduction) {
@@ -597,6 +594,10 @@ export function validateEnv(raw: RawEnv): AppEnv {
         message: 'must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production',
       });
     }
+  }
+
+  if (issues.length > 0) {
+    throw new EnvValidationError(issues);
   }
 
   return {

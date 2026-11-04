@@ -1176,3 +1176,52 @@ the same address; junk is never stored; and the OTP request and verify routes ag
 resolved address. `packages/shared/src/env.spec.ts` refuses broad ranges and impossible
 addresses, and `apps/web/src/lib/client-ip.spec.ts` proves the hop reading and the production
 refusals on the browser tier.
+
+
+## 0053 — The client address, the proof counter, and the OTP wallet
+
+**Decided in phase 2c, after a security review of items 1–5. Date: phase 2c.**
+
+**The client address is resolved once, by us.** `resolveClientAddress` (`apps/api/src/config/trust-proxy.ts`)
+is a pure function over the boot's own `TRUST_PROXY`, the socket address and the two forwarding
+headers. The bootstrap runs it in an `onRequest` hook and stores the answer on the request;
+`requestMeta` reads that value and validates it with `net.isIP` again before it becomes a Redis
+key, an audit row or a session record. The framework's own resolution is kept for logging, but no
+per-IP decision depends on it, so a Fastify version change cannot quietly change who is counted.
+Every candidate is dropped unless it is exactly one address: garbage, a list, an oversized value,
+a newline and a spreadsheet formula never reach the database or a log.
+
+**Re-authentication is metered.** Five wrong proofs (password or code) in fifteen minutes closes
+the counter for that account with `429`; every wrong proof writes `IDENTITY_REAUTH_FAILED` with
+the reason. A successful proof resets the counter. A request that offers no proof at all is not a
+failed proof and is not counted — it is refused with the message that says what to offer.
+
+**The code is required while the switch is on.** For an account with no email address, the fresh
+session was the third proof (0050). It now applies only when `OTP_ENABLED` is false or the account
+has no verified mobile: with the switch on, a code to the account's own number is required even on
+the no-email path. A session minutes old is a weaker proof than a code only the holder's phone
+receives, and an account with a verified number always has that option.
+
+**OTP spend is counted atomically.** The daily SMS budget was read from `sms_cost_ledger`, which
+is a record of what was sent, not a gate: two requests arriving together could both read "one
+more is fine". A Redis counter (`otp:budget:count:<business day>`) is now `INCR`ed before a
+provider is called, expires with the business day, and the `INCR` that takes the day past its
+budget is the one that is refused and latches the breaker. The ledger stays the record. Requests
+are also capped per number across every purpose (6 an hour, 12 a day), so relabelling a request
+from `LOGIN` to `SIGNUP` cannot multiply the per-purpose ceiling.
+
+**Secrets are checked for shape, not just for names.** In production, `AUTH_SECRET`,
+`OTP_HMAC_SECRET` and `REVALIDATE_SECRET` must be different from each other, and each is refused
+if it is the shipped default, starts with `dev-`, or contains `change-me`/`changeme`. A
+production boot that uses the HTTP SMS gateway must present `OTP_GATEWAY_AUTH_VALUE`;
+`SMS_PROVIDER` itself is required only when `OTP_ENABLED` is true.
+
+**The SSRF guard judges every way an IPv4 address can be hidden in IPv6.** NAT64
+(`64:ff9b::/96`) and 6to4 (`2002::/16`) are refused when the IPv4 address they embed is refused;
+Teredo (`2001::/32`), the documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`,
+`2001:db8::/32`) and the benchmarking ranges (`198.18.0.0/15`, `2001:2::/48`) are refused outright.
+
+**`apiCall` refuses to leak and refuses to wait.** A response cached under Next tags is never
+built from an access token (it would be shared between visitors); a request is abandoned after
+10 s; and a response is streamed through a reader with a 1 MB cap, so an oversized body is refused
+rather than buffered.
