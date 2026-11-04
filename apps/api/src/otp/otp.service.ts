@@ -31,6 +31,8 @@ import {
   isSequentialDigits,
   normaliseMobile,
   otpAlertKey,
+  otpAnyPurposeLimitKey,
+  otpBudgetCountKey,
   otpBudgetKey,
   otpDeviceLimitKey,
   otpNumberLimitKey,
@@ -152,6 +154,11 @@ export class OtpService {
     }
   }
 
+  /** Whether the master switch is on for this boot, for a caller that offers a proof instead. */
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
   async requestCode(input: OtpRequestInput, meta: RequestMetadata = {}): Promise<OtpRequestResult> {
     this.assertEnabled();
 
@@ -188,6 +195,17 @@ export class OtpService {
         key: ipRateLimitKey('otp-request', meta.ip ?? ''),
         limit: OTP_LIMITS.perIpPerHour,
         windowSeconds: 3600,
+      },
+      {
+        // Across every purpose: the way to multiply a per-flow cap is to relabel the request.
+        key: otpAnyPurposeLimitKey(destinationDigest, 'hour'),
+        limit: OTP_LIMITS.anyPurposePerNumberPerHour,
+        windowSeconds: 3600,
+      },
+      {
+        key: otpAnyPurposeLimitKey(destinationDigest, 'day'),
+        limit: OTP_LIMITS.anyPurposePerNumberPerDay,
+        windowSeconds: 86_400,
       },
       ...(deviceDigest === null
         ? []
@@ -434,9 +452,15 @@ export class OtpService {
   }
 
   /**
-   * The daily budget, as a hard stop. The ledger is the count (one row per message actually
-   * handed to a provider), and the breaker is latched in Redis for the rest of the business
-   * day so a flood of requests cannot turn into a flood of queries.
+   * The daily budget, as a hard stop.
+   *
+   * A Redis counter is incremented before the message is handed to a provider, so two requests
+   * that arrive together cannot both read "one more is fine" and overshoot: the `INCR` that
+   * takes the day past its budget is the one that is refused. The counter expires with the
+   * business day, and `sms_cost_ledger` stays the record of what was actually sent.
+   *
+   * The breaker is latched in Redis for the rest of the day, so a flood of requests cannot
+   * turn into a flood of counters.
    */
   private async assertBudget(now: Date): Promise<void> {
     const day = businessDate(now);
@@ -446,11 +470,11 @@ export class OtpService {
       throw new ServiceUnavailableException('Codes are paused for today. Please try again tomorrow.');
     }
 
-    const start = startOfBusinessDay(now);
-    const end = new Date(start.getTime() + 86_400_000);
-    const sent = await this.prisma.smsCostLedger.count({ where: { createdAt: { gte: start, lt: end } } });
+    const endOfDay = startOfBusinessDay(now).getTime() + 86_400_000;
+    const secondsLeft = Math.max(60, Math.ceil((endOfDay - now.getTime()) / 1_000));
+    const attempted = await this.limiter.hit(otpBudgetCountKey(day), secondsLeft);
 
-    if (sent >= this.dailyBudget) {
+    if (attempted > this.dailyBudget) {
       await this.limiter.hit(breakerKey, 86_400);
       await this.recordAlarm(OTP_ALERTS.budgetExhausted, { day, budget: this.dailyBudget }, now);
       throw new ServiceUnavailableException('Codes are paused for today. Please try again tomorrow.');

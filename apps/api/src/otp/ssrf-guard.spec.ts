@@ -52,7 +52,7 @@ describe('the SSRF guard around the SMS gateway', () => {
     for (const address of [
       '8.8.8.8',
       '1.1.1.1',
-      '203.0.113.10',
+      '93.184.216.34',
       '100.63.255.255',
       '100.128.0.1',
       '172.32.0.1',
@@ -67,6 +67,26 @@ describe('the SSRF guard around the SMS gateway', () => {
   it('fails closed on an address it cannot classify', () => {
     expect(isBlockedAddress('not-an-address')).toBe(true);
     expect(isBlockedAddress('')).toBe(true);
+  });
+
+  it('refuses tunnelled, documentation and benchmarking ranges', () => {
+    for (const address of [
+      '64:ff9b::127.0.0.1', // NAT64 wrapping loopback
+      '64:ff9b::169.254.169.254', // NAT64 wrapping the metadata address
+      '2002:7f00:1::', // 6to4 wrapping 127.0.0.1
+      '2002:c0a8:0101::', // 6to4 wrapping 192.168.1.1
+      '2001::1', // Teredo
+      '2001:0:4136:e378::', // Teredo
+      '2001:db8::1', // IPv6 documentation
+      '2001:2::1', // IPv6 benchmarking
+      '192.0.2.10', // IPv4 documentation, TEST-NET-1
+      '198.51.100.7', // TEST-NET-2
+      '203.0.113.10', // TEST-NET-3
+      '198.18.0.1', // benchmarking
+      '198.19.255.255', // benchmarking
+    ]) {
+      expect(isBlockedAddress(address), address).toBe(true);
+    }
   });
 
   it('parses the shapes it claims to parse, and nothing else', () => {
@@ -119,7 +139,7 @@ describe('the SSRF guard around the SMS gateway', () => {
   });
 
   it('refuses a name when any of its answers is private, before it connects', async () => {
-    const lookup = lookupReturning('203.0.113.10', '10.0.0.5');
+    const lookup = lookupReturning('93.184.216.34', '10.0.0.5');
 
     await expect(resolvePublicAddress('sms.example.com', { nodeEnv: 'production', lookup })).rejects.toBeInstanceOf(
       BlockedAddressError,
@@ -131,14 +151,14 @@ describe('the SSRF guard around the SMS gateway', () => {
     const lookup = async (): Promise<readonly DnsRecord[]> => {
       calls += 1;
       return [
-        { address: '203.0.113.10', family: 4 },
+        { address: '93.184.216.34', family: 4 },
         { address: '2606:4700::1111', family: 6 },
       ];
     };
 
     const answer = await resolvePublicAddress('sms.example.com', { nodeEnv: 'production', lookup });
 
-    expect(answer.address).toBe('203.0.113.10');
+    expect(answer.address).toBe('93.184.216.34');
     expect(calls).toBe(1);
   });
 

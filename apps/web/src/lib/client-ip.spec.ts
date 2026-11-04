@@ -71,7 +71,6 @@ describe('the web tier and the client address', () => {
       '999.999.999.999',
       '=HYPERLINK("http://example.com")',
       '<script>alert(1)</script>',
-      '203.0.113.9\n198.51.100.7',
       '1'.repeat(4000),
     ];
 
@@ -80,6 +79,11 @@ describe('the web tier and the client address', () => {
       expect(clientIpFrom(request({ 'x-forwarded-for': value }))).toBeUndefined();
       expect(clientIpFrom(request({ 'x-real-ip': value }))).toBeUndefined();
     }
+
+    // A newline cannot even become a header: the platform refuses to build the request,
+    // which is the first of the two gates such a value has to pass.
+    expect(() => request({ 'x-forwarded-for': '203.0.113.9\n198.51.100.7' })).toThrow();
+    expect(clientAddress('203.0.113.9\n198.51.100.7')).toBeUndefined();
 
     // A list is never forwarded as written: only the entry at the trusted hop is, so the API
     // receives one address — the one the proxy wrote — and never the header itself.

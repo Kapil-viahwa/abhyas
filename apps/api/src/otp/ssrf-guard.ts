@@ -159,6 +159,17 @@ function isBlockedIpv4([first, second, third]: Ipv4): boolean {
   if (first === 198 && (second === 18 || second === 19)) {
     return true;
   }
+  // 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 are the documentation networks
+  // (TEST-NET-1/2/3): nobody owns them, so nothing legitimate dials out to one.
+  if (first === 192 && second === 0 && third === 2) {
+    return true;
+  }
+  if (first === 198 && second === 51 && third === 100) {
+    return true;
+  }
+  if (first === 203 && second === 0 && third === 113) {
+    return true;
+  }
   // 224.0.0.0/4 multicast, 240.0.0.0/4 reserved, 255.255.255.255 broadcast.
   return first >= 224;
 }
@@ -194,6 +205,24 @@ function isBlockedIpv6(groups: readonly number[]): boolean {
   // ff00::/8 multicast.
   if ((g0 & 0xff00) === 0xff00) {
     return true;
+  }
+  // 2001:db8::/32 is the IPv6 documentation range, and 2001:2::/48 the benchmarking range.
+  if (g0 === 0x2001 && (g1 === 0x0db8 || (g1 === 0x0002 && g2 === 0))) {
+    return true;
+  }
+  // 2001::/32 is Teredo: the client address inside it is obfuscated, so it is never dialed.
+  if (g0 === 0x2001 && g1 === 0x0000) {
+    return true;
+  }
+  // 2002::/16 is 6to4, which carries an IPv4 address in its next two groups.
+  if (g0 === 0x2002) {
+    const embedded6to4: Ipv4 = [g1 >> 8, g1 & 0xff, g2 >> 8, g2 & 0xff];
+    return isBlockedIpv4(embedded6to4);
+  }
+  // 64:ff9b::/96 is NAT64, which carries the IPv4 address it translates in its last two
+  // groups — the same shape as the IPv4-mapped form above, so it is judged the same way.
+  if (g0 === 0x0064 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
+    return isBlockedIpv4(embedded);
   }
 
   return false;

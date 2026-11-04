@@ -9,6 +9,7 @@ import { AppModule } from '../src/app.module';
 import { hashPassword } from '../src/auth/password';
 import { REAUTH_WINDOW_MS } from '../src/auth/reauthentication.service';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
+import { createApiApplication } from '../src/bootstrap';
 import { RedisService } from '../src/infra/redis.service';
 import { REDIS_PROBE } from '../src/infra/tokens';
 import { TURNSTILE_TEST_TOKEN } from '../src/infra/turnstile-verifier';
@@ -238,36 +239,81 @@ describe('an account with no email address', () => {
     expect(sessions.statusCode).toBe(200);
   });
 
-  it('changes the password of a password-less account on a fresh session, and refuses a stale one', async () => {
+  it('requires the code from a password-less account while OTP is on, and takes a fresh session once it is off', async () => {
     await redis.flushdb();
     const account = await registerMobileAccount('Fresh Student');
 
-    // A sign-in from a moment ago is the evidence an account with no password can offer.
-    const changed = await app.inject({
+    // With the switch on, a session minutes old is not the proof: a code to the account's
+    // own number is (decision 0050, as tightened in phase 2c).
+    const refused = await app.inject({
       method: 'POST',
       url: '/v1/auth/password/change',
       headers: bearer(account.token),
       payload: { newPassword: 'another-good-password-7' },
     });
-    expect(changed.statusCode, changed.body).toBe(200);
+    expect(refused.statusCode, refused.body).toBe(400);
+    expect(refused.body).toMatch(/Enter the code sent to your mobile number/);
+
+    // With the switch off there is no code to ask for, so a fresh session is the proof.
+    process.env.OTP_ENABLED = 'false';
+    const withoutOtp = await createApiApplication({ logger: ['error'] });
+    try {
+      await withoutOtp.app.init();
+
+      const changed = await withoutOtp.app.inject({
+        method: 'POST',
+        url: '/v1/auth/password/change',
+        headers: bearer(account.token),
+        payload: { newPassword: 'another-good-password-7' },
+      });
+      expect(changed.statusCode, changed.body).toBe(200);
+      expect(
+        await db.client.auditLog.count({ where: { action: 'IDENTITY_PASSWORD_CHANGED', actorUserId: account.id } }),
+      ).toBe(1);
+
+      // The freshness rule still bites: a session older than the window is refused.
+      const second = await registerMobileAccount('Stale Student');
+      await db.client.session.updateMany({
+        where: { userId: second.id },
+        data: { issuedAt: new Date(Date.now() - REAUTH_WINDOW_MS - 60_000) },
+      });
+
+      const stale = await withoutOtp.app.inject({
+        method: 'POST',
+        url: '/v1/auth/password/change',
+        headers: bearer(second.token),
+        payload: { newPassword: 'another-good-password-8' },
+      });
+      expect(stale.statusCode).toBe(403);
+      expect(stale.body).toMatch(/Confirm it is you/);
+    } finally {
+      process.env.OTP_ENABLED = 'true';
+      await withoutOtp.app.close();
+    }
+  });
+
+  it('locks confirmation after five wrong proofs, and audits every one of them', async () => {
+    await redis.flushdb();
+    const account = await registerMobileAccount('Locked Student');
+    const statuses: number[] = [];
+
+    for (let index = 0; index < 6; index += 1) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/password/change',
+        headers: bearer(account.token),
+        payload: { currentPassword: `wrong-password-${String(index)}`, newPassword: 'another-good-password-1' },
+      });
+      statuses.push(response.statusCode);
+    }
+
+    // Five refusals that each name the wrong password, then the counter closes the door.
+    expect(statuses.slice(0, 5)).toEqual([400, 400, 400, 400, 400]);
+    expect(statuses[5]).toBe(429);
+
     expect(
-      await db.client.auditLog.count({ where: { action: 'IDENTITY_PASSWORD_CHANGED', actorUserId: account.id } }),
-    ).toBe(1);
-
-    const second = await registerMobileAccount('Stale Student');
-    await db.client.session.updateMany({
-      where: { userId: second.id },
-      data: { issuedAt: new Date(Date.now() - REAUTH_WINDOW_MS - 60_000) },
-    });
-
-    const refused = await app.inject({
-      method: 'POST',
-      url: '/v1/auth/password/change',
-      headers: bearer(second.token),
-      payload: { newPassword: 'another-good-password-8' },
-    });
-    expect(refused.statusCode).toBe(403);
-    expect(refused.body).toMatch(/Confirm it is you/);
+      await db.client.auditLog.count({ where: { action: 'IDENTITY_REAUTH_FAILED', actorUserId: account.id } }),
+    ).toBe(5);
   });
 
   it('accepts a code from the account’s own number as the proof, on a stale session', async () => {

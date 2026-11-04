@@ -31,6 +31,13 @@ export const OTP_LIMITS = {
    */
   verifyPerNumberPerHour: 10,
   verifyPerIpPerHour: 20,
+  /**
+   * Across every purpose, one number may ask six times an hour and twelve times a day.
+   * The per-purpose cap above is the stricter one for a single flow; this is the ceiling that
+   * holds when an attacker spreads requests over SIGNUP, LOGIN and LINK to multiply them.
+   */
+  anyPurposePerNumberPerHour: 6,
+  anyPurposePerNumberPerDay: 12,
 } as const;
 
 /** What one message is recorded as costing, so the ledger reconciles with an invoice. */
@@ -168,11 +175,19 @@ export function otpNumberLimitKey(purpose: string, destinationDigest: string, wi
   return `ratelimit:otp:number:${window}:${purpose}:${destinationDigest}`;
 }
 
-export function otpDeviceLimitKey(deviceDigest: string): string {
-  return `ratelimit:otp:device:${deviceDigest}`;
+/** The same number across every purpose, so a caller cannot multiply its ceiling by relabelling. */
+export function otpAnyPurposeLimitKey(destinationDigest: string, window: 'hour' | 'day'): string {
+  return `ratelimit:otp:any:${window}:${destinationDigest}`;
 }
 
-/** Guesses at one destination's live codes, whatever purpose asked for them. */
+/** The messages attempted for a business day: incremented before a provider is called. */
+export function otpBudgetCountKey(day: string): string {
+  return `otp:budget:count:${day}`;
+}
+
+export function otpDeviceLimitKey(deviceDigest: string): string {
+  return `ratelimit:otp:device:${deviceDigest}`;
+}/** Guesses at one destination's live codes, whatever purpose asked for them. */
 export function otpVerifyNumberKey(destinationDigest: string): string {
   return `ratelimit:otp:verify:number:${destinationDigest}`;
 }

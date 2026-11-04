@@ -1,9 +1,19 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
 import { DatabaseService } from '../infra/database.service';
+import { RateLimiter } from '../infra/rate-limiter';
 import { DATABASE_PROBE } from '../infra/tokens';
 import { OtpService, type OtpRequestResult } from '../otp/otp.service';
 import type { AuthenticatedUser } from './access';
+import { writeIdentityAudit } from './audit';
 import { verifyPassword } from './password';
 import type { RequestMetadata } from './request';
 import { parseReauthenticationBody } from './validation';
@@ -31,6 +41,20 @@ import { parseReauthenticationBody } from './validation';
 
 export const REAUTH_WINDOW_MS = 15 * 60 * 1000;
 
+/** Five wrong proofs in fifteen minutes: a stolen session does not get unlimited guesses. */
+export const REAUTH_FAILURE_LIMIT = 5;
+export const REAUTH_FAILURE_WINDOW_SECONDS = 900;
+
+export const REAUTH_LOCKED_MESSAGE = 'Too many confirmation attempts. Try again in fifteen minutes.';
+
+export const REAUTH_CODE_REQUIRED_MESSAGE =
+  'Enter the code sent to your mobile number to confirm this change.';
+
+/** One key per account: every route that asks for a proof shares the counter. */
+export function reauthFailureKey(userId: string): string {
+  return `ratelimit:reauth:failures:user:${userId}`;
+}
+
 /** What a sensitive route accepts alongside the change itself. */
 export interface ReauthenticationProof {
   readonly password?: string | undefined;
@@ -56,6 +80,7 @@ export class ReauthenticationService {
   constructor(
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
     @Inject(OtpService) private readonly otp: OtpService,
+    @Inject(RateLimiter) private readonly limiter: RateLimiter,
   ) {}
 
   private get prisma() {
@@ -97,12 +122,20 @@ export class ReauthenticationService {
     meta: RequestMetadata = {},
     messages: ReauthenticationMessages = DEFAULT_REAUTH_MESSAGES,
   ): Promise<void> {
+    // A stolen session gets five guesses at a proof and no more. The counter is shared by
+    // every sensitive route, because the proofs are interchangeable between them.
+    if ((await this.limiter.count(reauthFailureKey(user.id))) >= REAUTH_FAILURE_LIMIT) {
+      throw new HttpException(REAUTH_LOCKED_MESSAGE, HttpStatus.TOO_MANY_REQUESTS);
+    }
+
     const account = await this.load(user.id);
 
     if (typeof proof.password === 'string' && proof.password !== '') {
       if (!(await verifyPassword(account.passwordHash, proof.password))) {
+        await this.recordFailure(user, 'WRONG_PASSWORD', meta);
         throw new BadRequestException(messages.wrongPasswordMessage);
       }
+      await this.limiter.reset(reauthFailureKey(user.id));
       return;
     }
 
@@ -110,21 +143,33 @@ export class ReauthenticationService {
       if (account.firstVerifiedMobile === null) {
         throw new BadRequestException('This account has no verified mobile number to confirm with.');
       }
-      await this.otp.verifyCode(
-        {
-          destination: account.firstVerifiedMobile,
-          purpose: 'REAUTH',
-          code: proof.code,
-        },
-        meta,
-      );
+      try {
+        await this.otp.verifyCode(
+          {
+            destination: account.firstVerifiedMobile,
+            purpose: 'REAUTH',
+            code: proof.code,
+          },
+          meta,
+        );
+      } catch (error) {
+        await this.recordFailure(user, 'WRONG_CODE', meta);
+        throw error;
+      }
+      await this.limiter.reset(reauthFailureKey(user.id));
       return;
     }
 
-    // No proof offered. Only an account with no email address may rely on a fresh session,
+    // No proof offered. Only an account with no email address may rely on anything else,
     // because it has no password anybody could type.
     if (account.email !== null) {
       throw new BadRequestException(messages.missingPasswordMessage);
+    }
+
+    // With the switch on and a verified number, the code is required even here: a session
+    // minutes old is a weaker proof than a code only the holder's own phone receives.
+    if (this.otp.isEnabled() && account.firstVerifiedMobile !== null) {
+      throw new BadRequestException(REAUTH_CODE_REQUIRED_MESSAGE);
     }
 
     const session = await this.prisma.session.findFirst({
@@ -135,6 +180,23 @@ export class ReauthenticationService {
     if (session === null || Date.now() - session.issuedAt.getTime() > REAUTH_WINDOW_MS) {
       throw new ForbiddenException(REAUTH_REFUSED_MESSAGE);
     }
+  }
+
+  /** A wrong proof is counted and audited: the refusal is evidence, not just an answer. */
+  private async recordFailure(
+    user: AuthenticatedUser,
+    reason: 'WRONG_PASSWORD' | 'WRONG_CODE',
+    meta: RequestMetadata,
+  ): Promise<void> {
+    await this.limiter.hit(reauthFailureKey(user.id), REAUTH_FAILURE_WINDOW_SECONDS);
+    await writeIdentityAudit(this.prisma, {
+      action: 'IDENTITY_REAUTH_FAILED',
+      actorUserId: user.id,
+      entityType: 'user',
+      entityId: user.id,
+      metadata: { reason },
+      ip: meta.ip ?? null,
+    });
   }
 
   private async load(userId: string): Promise<{

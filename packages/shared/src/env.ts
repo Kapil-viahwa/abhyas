@@ -37,6 +37,13 @@ const FORBIDDEN_PRODUCTION_SECRETS: readonly string[] = [
   'abhyas',
 ];
 
+/** Whether a secret is a development or placeholder value rather than a real one. */
+function isDevelopmentSecret(value: string): boolean {
+  const lower = value.toLowerCase();
+
+  return lower.startsWith('dev-') || lower.includes('change-me') || lower.includes('changeme');
+}
+
 /** Cloudflare Turnstile test secrets all start with 1x0..., 2x0... or 3x0.... */
 const TURNSTILE_TEST_SECRET_PATTERN = /^[123]x0{20,}/i;
 
@@ -232,6 +239,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
         variable: 'AUTH_SECRET',
         message: 'must not be a well-known default value',
       });
+    } else if (isDevelopmentSecret(authSecret)) {
+      issues.push({ variable: 'AUTH_SECRET', message: 'must not be a development or placeholder value in production' });
     }
   }
 
@@ -247,11 +256,17 @@ export function validateEnv(raw: RawEnv): AppEnv {
     }
   }
 
+  // The master switch is read here as well as in the OTP block below, because it decides
+  // whether a provider has to be configured at all.
+  const otpEnabled = read(raw, 'OTP_ENABLED').toLowerCase() === 'true';
+
   const smsRaw = read(raw, 'SMS_PROVIDER').toLowerCase();
   let smsProvider: SmsProvider = 'fake';
   if (smsRaw === '') {
-    if (isProduction) {
-      issues.push({ variable: 'SMS_PROVIDER', message: 'is required in production' });
+    // Nothing sends while the switch is off: the provider is only required once the mobile
+    // routes can actually be reached (decision 0048).
+    if (isProduction && otpEnabled) {
+      issues.push({ variable: 'SMS_PROVIDER', message: 'is required in production when OTP is enabled' });
     }
   } else if (!SMS_PROVIDERS.includes(smsRaw as SmsProvider)) {
     issues.push({
@@ -308,6 +323,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
         variable: 'REVALIDATE_SECRET',
         message: `must be at least ${MIN_REVALIDATE_SECRET_LENGTH} characters`,
       });
+    } else if (revalidateRaw === DEFAULT_REVALIDATE_SECRET || isDevelopmentSecret(revalidateRaw)) {
+      issues.push({ variable: 'REVALIDATE_SECRET', message: 'must not be a well-known default value' });
     }
   }
 
@@ -372,7 +389,6 @@ export function validateEnv(raw: RawEnv): AppEnv {
   // Mobile OTP (phase 2c). The switch is off unless it is asked for, and everything that
   // would be a development shortcut is refused in production when it is on: a fake
   // provider, a missing HMAC secret, missing DLT identifiers, or an insecure gateway.
-  const otpEnabled = read(raw, 'OTP_ENABLED').toLowerCase() === 'true';
   const otpHmacSecret = read(raw, 'OTP_HMAC_SECRET');
   const otpSenderId = read(raw, 'OTP_SENDER_ID');
   const otpDltEntityId = read(raw, 'OTP_DLT_ENTITY_ID');
@@ -446,6 +462,11 @@ export function validateEnv(raw: RawEnv): AppEnv {
       });
     } else if (isProduction && FORBIDDEN_PRODUCTION_SECRETS.includes(otpHmacSecret.toLowerCase())) {
       issues.push({ variable: 'OTP_HMAC_SECRET', message: 'must not be a well-known default value' });
+    } else if (isProduction && isDevelopmentSecret(otpHmacSecret)) {
+      issues.push({
+        variable: 'OTP_HMAC_SECRET',
+        message: 'must not be a development or placeholder value in production',
+      });
     }
 
     if (isProduction) {
@@ -479,6 +500,14 @@ export function validateEnv(raw: RawEnv): AppEnv {
           issues.push({
             variable: 'OTP_GATEWAY_BODY_TEMPLATE',
             message: 'is required when SMS_PROVIDER is http',
+          });
+        }
+        if (otpGatewayAuthValue === '') {
+          // A gateway that takes an unauthenticated POST is an open relay for anybody who
+          // finds it, so a production boot that talks to one has to present a secret.
+          issues.push({
+            variable: 'OTP_GATEWAY_AUTH_VALUE',
+            message: 'is required when SMS_PROVIDER is http in production',
           });
         }
       }
@@ -553,6 +582,23 @@ export function validateEnv(raw: RawEnv): AppEnv {
   if (issues.length > 0) {
     throw new EnvValidationError(issues);
   }
+  // One leaked secret must not open every door. In production the three secrets the platform
+  // signs with are separate values, and each is refused if it is a development placeholder.
+  if (isProduction) {
+    const named = [
+      { variable: 'AUTH_SECRET', value: authSecret },
+      { variable: 'OTP_HMAC_SECRET', value: otpHmacSecret },
+      { variable: 'REVALIDATE_SECRET', value: revalidateRaw },
+    ].filter((item) => item.value !== '');
+
+    if (new Set(named.map((item) => item.value)).size !== named.length) {
+      issues.push({
+        variable: 'AUTH_SECRET',
+        message: 'must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production',
+      });
+    }
+  }
+
   return {
     NODE_ENV: nodeEnv,
     PORT: port,

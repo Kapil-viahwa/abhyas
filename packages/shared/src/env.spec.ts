@@ -108,6 +108,33 @@ describe('validateEnv', () => {
     );
   });
 
+  it('refuses a development secret or a default value in production', () => {
+    expect(() => validateEnv({ ...production, AUTH_SECRET: `dev-${'x'.repeat(40)}` })).toThrow(
+      /AUTH_SECRET: must not be a development or placeholder value in production/,
+    );
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: 'dev-only-revalidate-secret' })).toThrow(
+      /REVALIDATE_SECRET: must not be a well-known default value/,
+    );
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: `${'s'.repeat(24)}-changeme` })).toThrow(
+      /REVALIDATE_SECRET: must not be a well-known default value/,
+    );
+  });
+
+  it('requires the three secrets to be different values in production', () => {
+    expect(() => validateEnv({ ...production, AUTH_SECRET: production.REVALIDATE_SECRET })).toThrow(
+      /AUTH_SECRET: must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production/,
+    );
+  });
+
+  it('requires a gateway secret only when the http gateway is used', () => {
+    expect(() => validateEnv({ ...otpProduction, OTP_GATEWAY_AUTH_VALUE: '' })).toThrow(
+      /OTP_GATEWAY_AUTH_VALUE: is required when SMS_PROVIDER is http in production/,
+    );
+
+    // With the switch off, a production boot needs no provider and no gateway secret.
+    expect(validateEnv({ ...production, SMS_PROVIDER: '' }).OTP_ENABLED).toBe(false);
+  });
+
   it('reports every problem at once', () => {
     try {
       validateEnv({ NODE_ENV: 'production' });
@@ -202,6 +229,7 @@ const otpProduction = {
   OTP_TEMPLATE_ID: '1107160000000000000',
   OTP_GATEWAY_URL: 'https://sms.example.com/send',
   OTP_GATEWAY_BODY_TEMPLATE: '{"to":"{{to}}","message":"{{body}}","template":"{{templateId}}"}',
+  OTP_GATEWAY_AUTH_VALUE: 'live-gateway-secret-value',
 };
 
 describe('validateEnv and the OTP master switch', () => {

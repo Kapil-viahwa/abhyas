@@ -309,6 +309,37 @@ describe('OTP codes and abuse controls', () => {
     expect(JSON.stringify(audited)).toContain(OTP_ALERTS.budgetExhausted);
   }, 60_000);
 
+  it('never sends more messages than the daily budget when requests arrive together', async () => {
+    await redis.flushdb();
+    await db.client.smsCostLedger.deleteMany({});
+
+    // Its own boot with a budget of two, and ten requests fired at once: the counter is
+    // incremented before any provider is called, so exactly two can win (decision 0053).
+    const tiny = await bootApp(2);
+    try {
+      const statuses = await Promise.all(
+        Array.from({ length: 10 }, (_, index) =>
+          tiny.app
+            .inject({
+              method: 'POST',
+              url: '/v1/auth/otp',
+              headers: { 'x-forwarded-for': `203.0.113.${String(index + 1)}` },
+              payload: { destination: nextNumber(), purpose: 'LOGIN', turnstileToken: TURNSTILE_TEST_TOKEN },
+            })
+            .then((response) => response.statusCode),
+        ),
+      );
+
+      expect(statuses.filter((status) => status === 202)).toHaveLength(2);
+      expect(statuses.filter((status) => status === 503)).toHaveLength(8);
+    } finally {
+      await tiny.app.close();
+      process.env.OTP_SMS_DAILY_BUDGET = String(BUDGET);
+    }
+
+    expect(await db.client.smsCostLedger.count()).toBe(2);
+  }, 120_000);
+
   it('sends nothing when the human check fails', async () => {
     await redis.flushdb();
     const destination = nextNumber();

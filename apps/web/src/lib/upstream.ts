@@ -18,6 +18,8 @@ export interface ApiCallOptions {
    * Public catalog pages use this so /api/revalidate can drop them after a write.
    */
   readonly tags?: readonly string[] | undefined;
+  /** Overrides the 10 s ceiling; only tests should pass this. */
+  readonly timeoutMs?: number | undefined;
 }
 
 export interface ApiResult<T> {
@@ -25,39 +27,113 @@ export interface ApiResult<T> {
   readonly body: T | null;
 }
 
+/** How long the web tier waits for the API before it gives up and renders an error page. */
+export const API_CALL_TIMEOUT_MS = 10_000;
+
+/** The most of an API response this tier will read: anything larger is refused, not buffered. */
+export const API_CALL_MAX_RESPONSE_BYTES = 1_048_576;
+
+/** A misconfiguration, not a request failure: it never reaches the API. */
+export class ApiCallConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ApiCallConfigurationError';
+  }
+}
+
+/**
+ * Reads a body up to the cap, and answers `null` when it is larger.
+ *
+ * `response.text()` would buffer however much the API (or something pretending to be it) sent,
+ * so the body is streamed through the reader and abandoned the moment it passes the ceiling.
+ */
+async function readCapped(response: Response): Promise<string | null> {
+  const body = response.body;
+
+  if (body === null) {
+    return '';
+  }
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  let size = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    size += value.byteLength;
+
+    if (size > API_CALL_MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      return null;
+    }
+
+    text += decoder.decode(value, { stream: true });
+  }
+
+  return text + decoder.decode();
+}
+
 export async function apiCall<T>(path: string, options: ApiCallOptions): Promise<ApiResult<T>> {
   const headers: Record<string, string> = { accept: 'application/json' };
+  const cached = options.tags !== undefined && options.tags.length > 0;
+  const authenticated = options.accessToken !== undefined && options.accessToken !== '';
+
+  if (cached && authenticated) {
+    // Cached under a tag means shared between visitors: a response built from one person's
+    // token would hand their data to everyone who asks for the same page.
+    throw new ApiCallConfigurationError('apiCall: a response cached under tags cannot be built from an access token');
+  }
 
   if (options.body !== undefined) {
     headers['content-type'] = 'application/json';
   }
-  if (options.accessToken !== undefined && options.accessToken !== '') {
-    headers.authorization = `Bearer ${options.accessToken}`;
+  if (authenticated) {
+    headers.authorization = `Bearer ${String(options.accessToken)}`;
   }
   if (options.clientIp !== undefined && options.clientIp !== '') {
     headers['x-forwarded-for'] = options.clientIp;
   }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? API_CALL_TIMEOUT_MS);
 
   try {
     const init: RequestInit & { next?: { tags?: string[] } } = {
       method: options.method,
       headers,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: controller.signal,
     };
 
-    if (options.tags !== undefined && options.tags.length > 0) {
+    if (cached) {
       // Cached under a tag so /api/revalidate can drop it after a catalog write.
       // `force-cache` is explicit: a page may be rendered per request and still read
       // the payload from the data cache until the tag is revalidated.
       init.cache = 'force-cache';
-      init.next = { tags: [...options.tags] };
+      init.next = { tags: [...(options.tags ?? [])] };
     } else {
       init.cache = 'no-store';
     }
 
     const response = await fetch(`${webConfig().apiInternalUrl}${path}`, init);
+    const declared = Number(response.headers.get('content-length') ?? '');
 
-    const text = await response.text();
+    if (Number.isFinite(declared) && declared > API_CALL_MAX_RESPONSE_BYTES) {
+      return { status: 502, body: { message: 'The API response was too large.' } as unknown as T };
+    }
+
+    const text = await readCapped(response);
+
+    if (text === null) {
+      return { status: 502, body: { message: 'The API response was too large.' } as unknown as T };
+    }
+
     let body: unknown = null;
     if (text !== '') {
       try {
@@ -69,8 +145,10 @@ export async function apiCall<T>(path: string, options: ApiCallOptions): Promise
 
     return { status: response.status, body: body as T | null };
   } catch {
-    // A dead API must become a clean error page, not a stack trace in the browser.
+    // A dead or slow API must become a clean error page, not a stack trace in the browser.
     return { status: 503, body: null };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
