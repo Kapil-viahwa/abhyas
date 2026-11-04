@@ -1225,3 +1225,33 @@ Teredo (`2001::/32`), the documentation ranges (`192.0.2.0/24`, `198.51.100.0/24
 built from an access token (it would be shared between visitors); a request is abandoned after
 10 s; and a response is streamed through a reader with a 1 MB cap, so an oversized body is refused
 rather than buffered.
+
+
+## 0054 — Accepted risks in phase 2c: a burnable code and a hard budget stop
+
+**Decided in phase 2c, at the end of the security review. Date: phase 2c.**
+
+Two risks are accepted rather than fixed in this phase, recorded here so they are judged again when
+the switch goes on. `OTP_ENABLED` stays false in production (decision 0048), so neither is live yet.
+
+**Anyone who knows a number can burn its code.** Verification is metered per destination and per
+client address, and five wrong guesses spend the row (decision 0053). That rule is also a lever: a
+caller who can reach `POST /v1/auth/otp/verify` with a victim's number can send five wrong codes and
+leave the holder unable to use the code they were sent, or exhaust the per-number verify cap for the
+hour. The holder cannot request a replacement while the cooldown holds either. The cost to the
+attacker is bounded — one paid message per number per cooldown, and every guess writes an audit row
+and an alert counter — and the obvious fix, a human check on every verification, taxes the honest
+case more than the attack, so it is not taken now. Before OTP is enabled, one of these is chosen and
+recorded in its own decision: bind the attempt counter to a client cookie set by the request route,
+so burning a code requires the same browser that asked for it; or answer a wrong code with a
+challenge instead of a refusal, so guesses cannot spend the code at all.
+
+**The daily SMS budget is a cliff.** `OTP_SMS_DAILY_BUDGET` is counted by an atomic Redis counter
+incremented before the provider call and trips a breaker for the rest of the Asia/Kolkata day
+(0053). That is the right failure direction for money, but it takes mobile sign-in and sign-up down
+for every user until midnight, whether the day was busy or attacked. The mitigation is on the
+operator side and is written into the runbook: `docs/otp-enable-runbook.md` §4 tells the on-call
+operator to read `otp:budget:count:<day>` against the budget, to alert when it passes about 80%,
+and to page when `otp:alerts:SMS_BUDGET_EXHAUSTED:<day>` becomes non-zero or
+`otp:budget:closed:<day>` latches. Sharing the budget per client address, so one attacker cannot
+spend the day's allowance for everybody, is the next step and is owed with the staging test.

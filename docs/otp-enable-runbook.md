@@ -78,16 +78,28 @@ only the codes that are in flight, which is a five-minute window.
 
 ## 4. Pick the daily budget
 
-`OTP_SMS_DAILY_BUDGET` is the hard stop: once that many messages have been handed to the
-provider in one business day (counted from `sms_cost_ledger`, Asia/Kolkata), the breaker latches
-for the rest of the day, one `SMS_BUDGET_EXHAUSTED` alert row is written, and every further
-request answers 503 until midnight IST. Start with expected signups × 3 and watch it.
+`OTP_SMS_DAILY_BUDGET` is the hard stop. A Redis counter, `otp:budget:count:<YYYY-MM-DD>` (the
+business day in Asia/Kolkata), is incremented before the provider is called, so two requests that
+arrive together cannot both slip under the limit (decision 0053). The increment that takes the day
+past the budget is refused with **503**, one `SMS_BUDGET_EXHAUSTED` alert is recorded, the breaker
+`otp:budget:closed:<YYYY-MM-DD>` latches, and every further request answers 503 until midnight IST.
+`sms_cost_ledger` stays the record of what was actually sent; the counter is the gate. Start with
+expected signups × 3 and watch it.
 
-Read the alert counter without touching the audit table:
+The budget is a cliff: once it trips, mobile sign-in and sign-up stop for **every** user until
+midnight, not only for whoever spent it. So alert on it rather than discovering it from support
+messages. Read both counters without touching the audit table:
 
 ```
-GET redis: otp:alerts:SMS_BUDGET_EXHAUSTED:<YYYY-MM-DD>
+GET redis: otp:budget:count:<YYYY-MM-DD>                    # messages attempted today
+GET redis: otp:alerts:SMS_BUDGET_EXHAUSTED:<YYYY-MM-DD>     # non-zero: the budget has tripped
+GET redis: otp:budget:closed:<YYYY-MM-DD>                   # non-zero: codes are paused today
 ```
+
+Alert when the count passes about 80% of the budget — that is a capacity decision either way — and
+page when `SMS_BUDGET_EXHAUSTED` becomes non-zero. The remedy is to raise `OTP_SMS_DAILY_BUDGET` and
+redeploy (the new value applies at once) or to accept OTP being down until midnight. Do not delete
+`otp:budget:closed:<day>` to "test" the reset: that defeats the stop (decision 0054).
 
 ## 5. Turn the switch on
 
