@@ -534,4 +534,40 @@ describe('the coin wallet and its ledger', () => {
 
     expect(await db.client.coinWallet.count({ where: { userId } })).toBe(1);
   });
+
+  it('finishes thirty parallel spends on one wallet under a default pool', async () => {
+    const userId = await insertUser();
+    await coins.credit({ userId, amount: 3_000, type: 'SIGNUP_GRANT', idempotencyKey: `grant:${userId}` });
+
+    // Nothing narrows the pool here: this is a second client on the plain DATABASE_URL, the
+    // way a deployment opens one, and every one of the thirty must still be served.
+    const plain = new DatabaseService();
+    const service = new CoinService(plain);
+
+    try {
+      const results = await Promise.all(
+        Array.from({ length: 30 }, async (_, index) => {
+          try {
+            await service.spend({
+              userId,
+              amount: 100,
+              type: 'ENROLLMENT',
+              idempotencyKey: `pooled:${userId}:${String(index)}`,
+              reference: { type: 'attempt', id: randomUUID() },
+            });
+            return true;
+          } catch {
+            return false;
+          }
+        }),
+      );
+
+      expect(results.every((charged) => charged)).toBe(true);
+    } finally {
+      await plain.onModuleDestroy();
+    }
+
+    expect(await coins.balanceOf(userId)).toBe(0);
+    expect(await db.client.coinTransaction.count({ where: { userId, type: 'ENROLLMENT' } })).toBe(30);
+  });
 });

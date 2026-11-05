@@ -52,6 +52,7 @@ describe('signup and daily rewards', () => {
   }, 60_000);
 
   async function insertUser(options: {
+    email?: string;
     emailVerified?: boolean;
     mobileVerified?: boolean;
     status?: string;
@@ -63,7 +64,7 @@ describe('signup and daily rewards', () => {
     await db.client.$executeRawUnsafe(
       'INSERT INTO "users" ("id", "email", "mobile", "first_verified_mobile", "mobile_verified_at", "password_hash", "full_name", "role_id", "status", "email_verified_at") VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8::uuid, $9, $10)',
       id,
-      hasEmail ? `grant-${id.slice(0, 8)}@example.com` : null,
+      hasEmail ? (options.email ?? `grant-${id.slice(0, 8)}@example.com`) : null,
       options.mobileVerified === true ? mobile : null,
       options.mobileVerified === true ? `+91${mobile}` : null,
       options.mobileVerified === true ? new Date() : null,
@@ -245,5 +246,57 @@ describe('signup and daily rewards', () => {
     expect(granted?.amount).toBe(700);
     expect(granted?.replayed).toBe(true);
     expect(await db.client.coinTransaction.count({ where: { userId, type: 'SIGNUP_GRANT' } })).toBe(1);
+  });
+
+  it('treats a 0 coin setting as disabled, and writes nothing', async () => {
+    await setText('signup_grant_requirement', 'email');
+    await setInteger('signup_coins', 0);
+    await setInteger('daily_reward_coins', 0);
+
+    const userId = await insertUser({ emailVerified: true });
+
+    expect(await coins.grantSignupCoins(userId)).toBeNull();
+
+    const reward = await coins.payDailyReward(userId, { now: new Date('2026-06-01T06:00:00Z') });
+    expect(reward.paid).toBe(false);
+    expect(reward.amount).toBe(0);
+
+    expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(0);
+    expect(await db.client.coinDailyReward.count({ where: { userId } })).toBe(0);
+
+    await setInteger('signup_coins', 1_000);
+    await setInteger('daily_reward_coins', 10);
+  });
+
+  it('pays the daily reward only for the identifier the setting names', async () => {
+    await setText('signup_grant_requirement', 'mobile');
+    await setInteger('daily_reward_coins', 10);
+    const now = new Date('2026-07-01T06:00:00Z');
+
+    const emailOnly = await insertUser({ emailVerified: true });
+    const mobileUser = await insertUser({ mobileVerified: true });
+
+    expect((await coins.payDailyReward(emailOnly, { now })).paid).toBe(false);
+    expect((await coins.payDailyReward(mobileUser, { now })).paid).toBe(true);
+    expect(await coins.balanceOf(emailOnly)).toBe(0);
+    expect(await coins.balanceOf(mobileUser)).toBe(10);
+
+    await setText('signup_grant_requirement', 'email');
+  });
+
+  it('lets one Gmail mailbox earn the grant once, however it is spelled', async () => {
+    await setText('signup_grant_requirement', 'email');
+    await setInteger('signup_coins', 1_000);
+
+    const local = `mailbox${String(Math.floor(Math.random() * 1e6))}`;
+    const first = await insertUser({ email: `${local}+1@gmail.com`, emailVerified: true });
+    const second = await insertUser({ email: `${local}@googlemail.com`, emailVerified: true });
+
+    const granted = await coins.grantSignupCoins(first);
+    expect(granted?.newBalance).toBe(1_000);
+
+    expect(await coins.grantSignupCoins(second)).toBeNull();
+    expect(await coins.balanceOf(second)).toBe(0);
+    expect(await db.client.coinTransaction.count({ where: { userId: second } })).toBe(0);
   });
 });

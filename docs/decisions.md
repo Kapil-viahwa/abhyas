@@ -1420,3 +1420,33 @@ surreal number in one statement; bulk work composes several bounded entries inst
 restrict foreign key, the amount bound, 404 for an unknown account, and twenty parallel credits
 on one key) and `apps/api/test/coin-grants.test.ts` (a grant another path wrote is read back,
 not refused).
+
+
+## 0062 — One mailbox, one grant — and the farming risk that remains
+
+**Decided in phase 5, item 2b (review findings).**
+
+**The identity a grant is paid against is not always the address typed.** Gmail ignores dots
+in the local part and everything from a plus onwards, and googlemail.com is gmail.com, so
+`a+1@gmail.com` and `a.b@gmail.com` are one inbox. `coin_grant_identities` records the
+normalised identity a grant paid out against, keyed `(kind, value)` and written inside the
+same transaction as the ledger row: a second account spelling the same mailbox differently
+finds the key taken and earns nothing, without an error and without a second grant. The
+address a person signs in with is untouched — this value is for grant eligibility only.
+
+**The email-only grant is a farming risk until OTP is on.** With `signup_grant_requirement`
+at `email`, one person can register a second account with a mailbox they control at another
+domain (or a domain whose dots are significant) and earn the 1,000 coins again. The index
+above closes the Gmail spelling, not the business model: a disposable-address domain defeats
+it. Before launch, either `signup_coins` should be lowered for accounts that have verified
+only an email (the mobile requirement paying the full amount), or the requirement should be
+`mobile` once SMS is live. Recorded here rather than solved, because the fix is a product
+decision about the launch economics, and `signup_coins` is a setting an Administrator can
+already change without a deployment.
+
+**Proof.** `apps/api/src/coins/email-identity.spec.ts` (unit) and
+`apps/api/test/coin-grants.test.ts` (`lets one Gmail mailbox earn the grant once, however it
+is spelled`), plus `coin-safety.test.ts` for the rule that a coin failure never breaks the
+flow that called it: a 0 setting means disabled, a missing setting row is counted and
+audited as `COIN_REWARD_ERROR` with a kind and an error class only, and a sign-in or
+verification still succeeds.

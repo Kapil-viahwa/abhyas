@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
@@ -7,6 +7,7 @@ import { businessDate } from '../otp/otp-code';
 import { writeIdentityAudit } from '../auth/audit';
 import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
+import { normaliseEmail } from './email-identity';
 
 /**
  * The coin ledger, and the only code that writes it.
@@ -81,6 +82,24 @@ export interface DailyRewardResult {
   readonly rewardDate: string;
   readonly amount: number;
   readonly newBalance: number;
+}
+
+/** One page of an account's history, with what the wallet earned and spent overall. */
+export interface CoinHistoryResult {
+  readonly items: CoinEntryResult[];
+  readonly total: number;
+  readonly page: number;
+  readonly pageSize: number;
+  readonly balance: number;
+  readonly totalEarned: number;
+  readonly totalSpent: number;
+}
+
+/** What one batch of a bulk assignment did, and how much is left. */
+export interface BulkBatchResult {
+  readonly processed: number;
+  readonly remaining: number;
+  readonly status: string;
 }
 
 interface LedgerRow {
@@ -180,17 +199,18 @@ export class CoinService {
   /**
    * The signup grant, paid once the identifier the setting names has been verified.
    *
-   * Idempotent by construction: the key is the account, so the second call (a replayed
-   * verification, a backfill that runs after the grant already happened, two verifications
-   * racing) returns the original row and writes nothing. It returns null when the account
-   * is not active or has not verified the required identifier yet.
+   * Three rules, all inside the wallet's own transaction: a 0 setting means the grant is
+   * disabled and nothing is written; a grant that already exists is returned rather than
+   * attempted again; and one normalized email address earns the grant once, whichever
+   * account it is spelled on. The partial unique index on the ledger stays as the backstop
+   * for a caller that ever bypasses this path.
    */
   async grantSignupCoins(userId: string): Promise<CoinEntryResult | null> {
     const id = accountId(userId);
 
     const user = await this.prisma.user.findUnique({
       where: { id },
-      select: { status: true, emailVerifiedAt: true, firstVerifiedMobile: true },
+      select: { status: true, email: true, emailVerifiedAt: true, firstVerifiedMobile: true },
     });
     if (user === null || user.status !== 'ACTIVE') {
       return null;
@@ -203,39 +223,73 @@ export class CoinService {
     }
 
     const amount = await this.settingInt(SIGNUP_COINS_SETTING);
+    if (amount === 0) {
+      return null;
+    }
+
+    const reference: CoinReference = { type: 'signup', id };
+    const fingerprint = requestFingerprint({ type: 'SIGNUP_GRANT', amount, reference });
+    const normalized = requirement === 'email' ? normaliseEmail(user.email) : null;
 
     try {
-      return await this.credit({
-        userId: id,
-        amount,
-        type: 'SIGNUP_GRANT',
-        idempotencyKey: `signup:${id}`,
-        reference: { type: 'signup', id },
-        description: 'Signup coins',
-      });
+      const outcome = await this.prisma.$transaction(
+        async (tx) =>
+          this.applyEntry(
+            tx,
+            {
+              userId: id,
+              type: 'SIGNUP_GRANT',
+              signedAmount: amount,
+              idempotencyKey: `signup:${id}`,
+              referenceType: reference.type,
+              referenceId: id,
+              description: 'Signup coins',
+              createdBy: null,
+              fingerprint,
+            },
+            async (locked) => {
+              const existing = await locked.$queryRaw<LedgerRow[]>`
+                SELECT "id", "user_id", "type", "amount", "previous_balance", "new_balance",
+                       "idempotency_key", "request_fingerprint", "created_at"
+                FROM "coin_transactions"
+                WHERE "user_id" = ${id}::uuid AND "type" = 'SIGNUP_GRANT'
+                LIMIT 1
+              `;
+
+              const row = existing[0];
+              if (row !== undefined) {
+                return row;
+              }
+
+              if (normalized !== null) {
+                const claimed = await locked.$executeRaw`
+                  INSERT INTO "coin_grant_identities" ("kind", "value", "user_id")
+                  VALUES ('EMAIL', ${normalized}, ${id}::uuid)
+                  ON CONFLICT ("kind", "value") DO NOTHING
+                `;
+
+                if (claimed === 0) {
+                  throw new GrantNotEarned();
+                }
+              }
+
+              return null;
+            },
+          ),
+        { timeout: 10_000, maxWait: 10_000 },
+      );
+
+      if (outcome.kind === 'conflict') {
+        throw new ConflictException('That idempotency key was already used for a different coin entry');
+      }
+
+      return toResult(outcome.row, outcome.kind === 'replay');
     } catch (error) {
-      // One grant per account is a database invariant (20260801000000). A caller that
-      // reaches it with a different key has asked for a second grant, which is not an
-      // error to report but a fact to read back: the first grant is the answer.
-      if (isOneGrantPerUser(error)) {
-        return this.existingSignupGrant(id);
+      if (error instanceof GrantNotEarned) {
+        return null;
       }
       throw error;
     }
-  }
-
-  /** The grant this account already holds, if it holds one. */
-  private async existingSignupGrant(userId: string): Promise<CoinEntryResult | null> {
-    const rows = await this.prisma.$queryRaw<LedgerRow[]>`
-      SELECT "id", "user_id", "type", "amount", "previous_balance", "new_balance",
-             "idempotency_key", "request_fingerprint", "created_at"
-      FROM "coin_transactions"
-      WHERE "user_id" = ${userId}::uuid AND "type" = 'SIGNUP_GRANT'
-      LIMIT 1
-    `;
-
-    const row = rows[0];
-    return row === undefined ? null : toResult(row, true);
   }
 
   /** A wallet insert for an account that does not exist is a 404, not a server error. */
@@ -259,6 +313,9 @@ export class CoinService {
     const id = accountId(userId);
     const rewardDate = businessDate(options.now ?? new Date());
     const amount = await this.settingInt(DAILY_REWARD_COINS_SETTING);
+    if (amount === 0) {
+      return { paid: false, rewardDate, amount, newBalance: await this.balanceOf(id) };
+    }
 
     const user = await this.prisma.user.findUnique({
       where: { id },
@@ -268,7 +325,12 @@ export class CoinService {
     if (user === null || user.status !== 'ACTIVE') {
       return { paid: false, rewardDate, amount, newBalance: await this.balanceOf(id) };
     }
-    if (user.emailVerifiedAt === null && user.firstVerifiedMobile === null) {
+
+    // The reward follows the same identifier the grant does: with 'mobile' required, an
+    // account that has only verified an email has not identified itself yet.
+    const requirement = await this.settingText(SIGNUP_GRANT_REQUIREMENT_SETTING);
+    const identified = requirement === 'mobile' ? user.firstVerifiedMobile !== null : user.emailVerifiedAt !== null;
+    if (!identified) {
       return { paid: false, rewardDate, amount, newBalance: await this.balanceOf(id) };
     }
 
@@ -311,6 +373,154 @@ export class CoinService {
     return { paid: outcome.kind === 'posted', rewardDate, amount, newBalance: outcome.row.new_balance };
   }
 
+  /**
+   * An Administrator's single add or deduct.
+   *
+   * The remark is mandatory because a ledger row that says nothing is not an explanation,
+   * the amount is capped by a setting, and the entry names its author. The key is fresh per
+   * action: two clicks are two decisions, and the audit trail should show both.
+   */
+  async adjust(
+    actor: { readonly id: string; readonly roleCode: string },
+    input: { readonly userId: string; readonly amount: number; readonly remark: string },
+  ): Promise<CoinEntryResult> {
+    const userId = accountId(input.userId);
+    const amount = magnitude(Math.abs(input.amount));
+    const remark = input.remark.trim();
+
+    if (remark.length === 0) {
+      throw new BadRequestException('A coin adjustment needs a remark');
+    }
+    if (remark.length > 500) {
+      throw new BadRequestException('A coin adjustment remark is at most 500 characters');
+    }
+
+    const cap = await this.settingInt('coin_max_adjustment_per_operation');
+    if (amount > cap) {
+      throw new BadRequestException(`One adjustment moves at most ${String(cap)} coins`);
+    }
+
+    const isCredit = input.amount > 0;
+
+    return this.post(
+      {
+        userId,
+        amount,
+        type: isCredit ? 'ADMIN_CREDIT' : 'ADMIN_DEBIT',
+        idempotencyKey: `admin:${randomUUID()}`,
+        reference: { type: 'admin_adjustment', id: actor.id },
+        description: remark,
+        createdBy: actor.id,
+      },
+      isCredit ? 'credit' : 'debit',
+    );
+  }
+
+  /** One page of an account's history, with what the wallet has earned and spent overall. */
+  async history(
+    userId: string,
+    query: { readonly type?: string; readonly page: number; readonly pageSize: number },
+  ): Promise<CoinHistoryResult> {
+    const id = accountId(userId);
+    const where: Prisma.CoinTransactionWhereInput = { userId: id, ...(query.type ? { type: query.type } : {}) };
+
+    const [rows, total, earned, spent, wallet] = await Promise.all([
+      this.prisma.coinTransaction.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.coinTransaction.count({ where }),
+      this.prisma.coinTransaction.aggregate({ _sum: { amount: true }, where: { userId: id, amount: { gt: 0 } } }),
+      this.prisma.coinTransaction.aggregate({ _sum: { amount: true }, where: { userId: id, amount: { lt: 0 } } }),
+      this.prisma.coinWallet.findUnique({ where: { userId: id }, select: { balance: true } }),
+    ]);
+
+    return {
+      items: rows.map((row) => toResultFromModel(row)),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      balance: wallet?.balance ?? 0,
+      totalEarned: earned._sum.amount ?? 0,
+      totalSpent: Math.abs(spent._sum.amount ?? 0),
+    };
+  }
+
+  /**
+   * One batch of a bulk assignment, run where the ledger is written: here.
+   *
+   * Every person's row is its own ledger entry, keyed `<job>:<user>`, so a job killed
+   * halfway and run again pays nobody twice however many times it is resumed. A row that
+   * fails is remembered and does not stop the rest.
+   */
+  async runBulkJob(jobId: string, options: { readonly batchSize?: number } = {}): Promise<BulkBatchResult> {
+    const job = await this.prisma.coinBulkJob.findUnique({ where: { id: jobId } });
+    if (job === null) {
+      throw new NotFoundException('No such bulk job');
+    }
+
+    if (job.status === 'COMPLETED' || job.status === 'FAILED') {
+      return { processed: 0, remaining: 0, status: job.status };
+    }
+
+    await this.prisma.coinBulkJob.update({
+      where: { id: jobId },
+      data: { status: 'RUNNING', startedAt: job.startedAt ?? new Date() },
+    });
+
+    const rows = await this.prisma.coinBulkJobRow.findMany({
+      where: { jobId, status: 'PENDING' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: options.batchSize ?? 50,
+    });
+
+    let credited = 0;
+    let failed = 0;
+
+    for (const row of rows) {
+      try {
+        const entry = await this.credit({
+          userId: row.userId,
+          amount: job.amount,
+          type: 'ADMIN_CREDIT',
+          idempotencyKey: `${job.id}:${row.userId}`,
+          reference: { type: 'bulk_assignment', id: job.id },
+          description: job.remark,
+          createdBy: job.createdBy,
+        });
+
+        await this.prisma.coinBulkJobRow.update({
+          where: { id: row.id },
+          data: { status: 'CREDITED', coinTransactionId: entry.id },
+        });
+        credited += 1;
+      } catch (error) {
+        await this.prisma.coinBulkJobRow.update({
+          where: { id: row.id },
+          data: { status: 'FAILED', errorMessage: String(error).slice(0, 500) },
+        });
+        failed += 1;
+      }
+    }
+
+    const remaining = await this.prisma.coinBulkJobRow.count({ where: { jobId, status: 'PENDING' } });
+    const status = remaining === 0 ? 'COMPLETED' : 'RUNNING';
+
+    await this.prisma.coinBulkJob.update({
+      where: { id: jobId },
+      data: {
+        creditedUsers: { increment: credited },
+        failedUsers: { increment: failed },
+        status,
+        finishedAt: remaining === 0 ? new Date() : null,
+      },
+    });
+
+    return { processed: credited + failed, remaining, status };
+  }
+
   private async post(
     command: CoinCreditCommand | CoinSpendCommand,
     direction: 'credit' | 'debit',
@@ -345,6 +555,9 @@ export class CoinService {
         createdBy,
         fingerprint,
       }),
+      // Thirty callers can queue on one wallet. Lock acquisition is the only wait, so a
+      // generous ceiling costs nothing and keeps a slow CI runner from timing out.
+      { timeout: 10_000, maxWait: 10_000 },
     );
 
     if (outcome.kind === 'conflict') {
@@ -362,7 +575,11 @@ export class CoinService {
    * then reads the balance this one committed. The replay lookup happens after the lock for
    * the same reason: only one transaction at a time can decide what the next balance is.
    */
-  private async applyEntry(tx: Prisma.TransactionClient, request: EntryRequest): Promise<EntryOutcome> {
+  private async applyEntry(
+    tx: Prisma.TransactionClient,
+    request: EntryRequest,
+    guard?: (locked: Prisma.TransactionClient) => Promise<LedgerRow | null>,
+  ): Promise<EntryOutcome> {
     try {
       await tx.$executeRaw`
         INSERT INTO "coin_wallets" ("user_id")
@@ -399,6 +616,15 @@ export class CoinService {
       }
 
       return { kind: 'replay', row: replayed };
+    }
+
+    // A caller with a rule of its own (the signup grant) decides here, under the lock and in
+    // this transaction, so the decision and the row it produces cannot come apart.
+    if (guard !== undefined) {
+      const settled = await guard(tx);
+      if (settled !== null) {
+        return { kind: 'replay', row: settled };
+      }
     }
 
     const newBalance = wallet.balance + request.signedAmount;
@@ -507,18 +733,8 @@ function isMissingAccount(error: unknown): boolean {
   return error instanceof Error && /23503/.test(error.message) && /coin_wallets/.test(error.message);
 }
 
-function isOneGrantPerUser(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  // A partial unique index reports the key it collided on, not its own name, so the claim
-  // is matched by the key: only one index holds a single column of coin_transactions.
-  return (
-    /coin_transactions_one_signup_grant_per_user/.test(error.message) ||
-    /Key \(user_id\)=\([^)]*\) already exists/.test(error.message)
-  );
-}
+/** Raised by the grant's own guard when another account already used the identity. */
+class GrantNotEarned extends Error {}
 
 function toResult(row: LedgerRow, replayed: boolean): CoinEntryResult {
   return {
@@ -531,5 +747,29 @@ function toResult(row: LedgerRow, replayed: boolean): CoinEntryResult {
     idempotencyKey: row.idempotency_key,
     replayed,
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+/** The same answer from a row the ORM already typed. */
+function toResultFromModel(row: {
+  readonly id: string;
+  readonly userId: string;
+  readonly type: string;
+  readonly amount: number;
+  readonly previousBalance: number;
+  readonly newBalance: number;
+  readonly idempotencyKey: string;
+  readonly createdAt: Date;
+}): CoinEntryResult {
+  return {
+    id: row.id,
+    userId: row.userId,
+    type: row.type as CoinTransactionType,
+    amount: row.amount,
+    previousBalance: row.previousBalance,
+    newBalance: row.newBalance,
+    idempotencyKey: row.idempotencyKey,
+    replayed: false,
+    createdAt: row.createdAt.toISOString(),
   };
 }

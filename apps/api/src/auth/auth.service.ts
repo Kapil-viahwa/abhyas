@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
-import { CoinService } from '../coins/coin.service';
+import { CoinsHooksService } from '../coins/hooks.service';
 import { loadConfig } from '../config/config';
 import { webUrlFor } from '../config/links';
 import { DatabaseService } from '../infra/database.service';
@@ -121,7 +121,7 @@ export class AuthService {
     @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
     // Injected by token, so the container never has to infer it from metadata.
     @Inject(RateLimiter) private readonly rateLimiter: RateLimiter,
-    @Inject(CoinService) private readonly coins: CoinService,
+    @Inject(CoinsHooksService) private readonly coins: CoinsHooksService,
   ) {
     const config = loadConfig(process.env);
     this.webUrl = webUrlFor(config.NODE_ENV, process.env.WEB_URL);
@@ -345,24 +345,15 @@ export class AuthService {
   }
 
   /**
-   * Coins must never be the reason a verification or a sign-in fails: the ledger's own
-   * idempotency key makes a missed grant harmless, and the backfill job repairs it, so a
-   * failure here is logged and the person carries on.
+   * Coins must never be the reason a verification or a sign-in fails: the hook counts and
+   * audits a failure and the person carries on.
    */
   private async grantCoinsQuietly(userId: string): Promise<void> {
-    try {
-      await this.coins.grantSignupCoins(userId);
-    } catch (error) {
-      this.logger.warn(`Signup coins were not granted for ${userId}: ${String(error)}`);
-    }
+    await this.coins.grantSafely(userId);
   }
 
   private async rewardLoginQuietly(userId: string): Promise<void> {
-    try {
-      await this.coins.payDailyReward(userId);
-    } catch (error) {
-      this.logger.warn(`The daily reward was not paid for ${userId}: ${String(error)}`);
-    }
+    await this.coins.rewardSafely(userId);
   }
 
   async logout(user: AuthenticatedUser, meta: RequestMetadata = {}): Promise<LogoutResult> {

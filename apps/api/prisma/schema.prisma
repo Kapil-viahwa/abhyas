@@ -74,6 +74,8 @@ model User {
   coinTransactions   CoinTransaction[] @relation("CoinLedgerOwner")
   coinEntriesCreated CoinTransaction[] @relation("CoinLedgerCreator")
   coinRewards        CoinDailyReward[] @relation("CoinRewardOwner")
+  coinBulkJobs       CoinBulkJob[]    @relation("CoinBulkJobCreator")
+  coinBulkRows       CoinBulkJobRow[] @relation("CoinBulkRowUser")
 
   @@map("users")
 }
@@ -523,6 +525,7 @@ model CoinTransaction {
   user    User  @relation("CoinLedgerOwner", fields: [userId], references: [id], onDelete: Restrict)
   creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   dailyReward CoinDailyReward? @relation("CoinRewardEntry")
+  bulkRow     CoinBulkJobRow?  @relation("CoinBulkRowEntry")
 
   @@unique([userId, idempotencyKey], map: "coin_transactions_user_idempotency_key")
   @@index([userId, createdAt], map: "coin_transactions_user_created_at_idx")
@@ -547,4 +550,47 @@ model CoinDailyReward {
 
   @@unique([userId, rewardDate], map: "daily_rewards_user_date_key")
   @@map("daily_rewards")
+}
+
+
+/// Phase 5: one Administrator bulk coin assignment. The job row is the record; the worker
+/// drains `QUEUED` jobs and writes one ledger row per person, keyed `<job_id>:<user_id>`, so
+/// a job killed halfway and resumed credits everybody exactly once.
+model CoinBulkJob {
+  id            String    @id @default(uuid()) @db.Uuid
+  createdBy     String    @map("created_by") @db.Uuid
+  amount        Int
+  remark        String
+  status        String    @default("QUEUED")
+  totalUsers    Int       @default(0) @map("total_users")
+  creditedUsers Int       @default(0) @map("credited_users")
+  failedUsers   Int       @default(0) @map("failed_users")
+  errorMessage  String?   @map("error_message")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt     DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt    DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  creator User             @relation("CoinBulkJobCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  rows    CoinBulkJobRow[]
+
+  @@index([status, createdAt], map: "coin_bulk_jobs_status_created_at_idx")
+  @@map("coin_bulk_jobs")
+}
+
+/// Phase 5: one person in one bulk assignment, and what happened to them.
+model CoinBulkJobRow {
+  id                String   @id @default(uuid()) @db.Uuid
+  jobId             String   @map("job_id") @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  status            String   @default("PENDING")
+  coinTransactionId String?  @unique(map: "coin_bulk_job_rows_coin_transaction_id_key") @map("coin_transaction_id") @db.Uuid
+  errorMessage      String?  @map("error_message")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job             CoinBulkJob      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user            User             @relation("CoinBulkRowUser", fields: [userId], references: [id], onDelete: Restrict)
+  coinTransaction CoinTransaction? @relation("CoinBulkRowEntry", fields: [coinTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, userId], map: "coin_bulk_job_rows_job_user_key")
+  @@map("coin_bulk_job_rows")
 }

@@ -16,7 +16,7 @@ import { DATABASE_PROBE } from '../infra/tokens';
 import { nationalDigits } from '../otp/otp-code';
 import { OtpService } from '../otp/otp.service';
 import type { AuthenticatedUser } from './access';
-import { CoinService } from '../coins/coin.service';
+import { CoinsHooksService } from '../coins/hooks.service';
 import { writeIdentityAudit } from './audit';
 import { isDisposableEmail } from './disposable-email';
 import { ReauthenticationService } from './reauthentication.service';
@@ -72,7 +72,7 @@ export class LinkingService {
     @Inject(EMAIL_SENDER) private readonly email: EmailSender,
     @Inject(OtpService) private readonly otp: OtpService,
     @Inject(ReauthenticationService) private readonly reauth: ReauthenticationService,
-    @Inject(CoinService) private readonly coins: CoinService,
+    @Inject(CoinsHooksService) private readonly coins: CoinsHooksService,
   ) {
     this.webUrl = webUrlFor(loadConfig(process.env).NODE_ENV, process.env.WEB_URL);
   }
@@ -272,13 +272,9 @@ export class LinkingService {
     return MOBILE_LINKED;
   }
 
-  /** A coin grant must never be the reason a link fails; the ledger makes a retry harmless. */
+  /** A coin grant must never be the reason a link fails; the hook counts it instead. */
   private async grantCoinsQuietly(userId: string): Promise<void> {
-    try {
-      await this.coins.grantSignupCoins(userId);
-    } catch (error) {
-      this.logger.warn(`Signup coins were not granted for ${userId}: ${String(error)}`);
-    }
+    await this.coins.grantSafely(userId);
   }
 
   /** Removes the mobile number, refusing when it is the only identifier the account has. */

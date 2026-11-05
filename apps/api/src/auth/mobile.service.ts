@@ -1,7 +1,7 @@
 import { ConflictException, ForbiddenException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 
-import { CoinService } from '../coins/coin.service';
+import { CoinsHooksService } from '../coins/hooks.service';
 import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
 import { nationalDigits } from '../otp/otp-code';
@@ -44,7 +44,7 @@ export class MobileIdentityService {
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
     @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
     @Inject(OtpService) private readonly otp: OtpService,
-    @Inject(CoinService) private readonly coins: CoinService,
+    @Inject(CoinsHooksService) private readonly coins: CoinsHooksService,
   ) {}
 
   private get prisma() {
@@ -204,21 +204,13 @@ export class MobileIdentityService {
     return toLoginResult(issued, userId, email, roleCode);
   }
 
-  /** Coins must never be the reason a sign-up or a sign-in fails; the ledger makes up for it. */
+  /** Coins must never be the reason a sign-up or a sign-in fails; the hook counts them. */
   private async grantCoinsQuietly(userId: string): Promise<void> {
-    try {
-      await this.coins.grantSignupCoins(userId);
-    } catch (error) {
-      this.logger.warn(`Signup coins were not granted for ${userId}: ${String(error)}`);
-    }
+    await this.coins.grantSafely(userId);
   }
 
   private async rewardLoginQuietly(userId: string): Promise<void> {
-    try {
-      await this.coins.payDailyReward(userId);
-    } catch (error) {
-      this.logger.warn(`The daily reward was not paid for ${userId}: ${String(error)}`);
-    }
+    await this.coins.rewardSafely(userId);
   }
 }
 

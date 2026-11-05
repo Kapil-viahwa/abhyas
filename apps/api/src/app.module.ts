@@ -21,6 +21,7 @@ import { CatalogService } from './catalog/catalog.service';
 import { PublicCatalogController } from './catalog/public.controller';
 import { CatalogRevalidationService } from './catalog/revalidation.service';
 import { CoinService } from './coins/coin.service';
+import { CoinsHooksService } from './coins/hooks.service';
 import { loadConfig } from './config/config';
 import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
@@ -84,6 +85,7 @@ import { QuestionsService } from './questions/questions.service';
     AuditService,
     DashboardService,
     CoinService,
+    CoinsHooksService,
     CatalogRevalidationService,
     CatalogService,
     {
