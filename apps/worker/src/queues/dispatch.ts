@@ -1,6 +1,12 @@
 import { processPing } from '../jobs/ping';
 import { OTP_RETENTION_MINUTES, purgeOtpRequests, type OtpPurgeClient } from '../jobs/otp-purge';
-import { COIN_BULK_DRAIN_JOB, MAINTENANCE_QUEUE, OTP_PURGE_JOB, PING_JOB } from './maintenance';
+import {
+  COIN_BULK_DRAIN_JOB,
+  COIN_RECONCILIATION_JOB,
+  MAINTENANCE_QUEUE,
+  OTP_PURGE_JOB,
+  PING_JOB,
+} from './maintenance';
 
 /**
  * The one place a maintenance job is dispatched. Keeping it out of `main.ts` means the job
@@ -19,6 +25,10 @@ export interface MaintenanceDeps {
   readonly database: OtpPurgeClient;
   /** Drains queued bulk coin assignments through the API, which owns the ledger writer. */
   readonly coinBulk?: { drain(): Promise<{ jobs: number; rounds: number; finished: number }> } | undefined;
+  /** Compares every wallet with its ledger, through the API's internal route. */
+  readonly coinReconciliation?:
+    | { run(): Promise<{ walletsChecked: number; mismatches: number } | null> }
+    | undefined;
 }
 
 export interface OtpPurgeResult {
@@ -50,6 +60,18 @@ export async function runMaintenanceJob(job: MaintenanceJob, deps: MaintenanceDe
 
     const result = await deps.coinBulk.drain();
     deps.log(`coins: ${String(result.jobs)} bulk job(s), ${String(result.finished)} finished`);
+    return result;
+  }
+
+  if (job.name === COIN_RECONCILIATION_JOB) {
+    if (deps.coinReconciliation === undefined) {
+      throw new Error('The worker has no coin reconciliation configured');
+    }
+
+    const result = await deps.coinReconciliation.run();
+    deps.log(
+      `coins: reconciliation checked ${String(result?.walletsChecked ?? 0)} wallet(s), ${String(result?.mismatches ?? 0)} mismatch(es)`,
+    );
     return result;
   }
 

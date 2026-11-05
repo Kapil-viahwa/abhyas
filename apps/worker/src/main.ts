@@ -4,6 +4,7 @@ import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 
 import { drainCoinBulkJobs } from './jobs/coin-bulk';
+import { reconcileCoinWallets } from './jobs/coin-reconciliation';
 import { runMaintenanceJob } from './queues/dispatch';
 import { MAINTENANCE_QUEUE, PING_JOB } from './queues/maintenance';
 import { registerRepeatableJobs } from './queues/schedule';
@@ -67,6 +68,18 @@ async function main(): Promise<void> {
                   await connection.expire(key, 30 * 24 * 60 * 60);
                   console.error(`bulk job ${jobId} was given up on (${reason}); alerts today: ${String(raised)}`);
                 },
+                apiUrl: process.env.INTERNAL_API_URL ?? 'http://api:3001',
+                secret: config.INTERNAL_API_SECRET,
+                log: (message, meta) => {
+                  // eslint-disable-next-line no-console
+                  console.log(message, meta ?? {});
+                },
+              }),
+          },
+          // Nightly: the API owns the ledger, so the worker asks it to compare wallets.
+          coinReconciliation: {
+            run: () =>
+              reconcileCoinWallets({
                 apiUrl: process.env.INTERNAL_API_URL ?? 'http://api:3001',
                 secret: config.INTERNAL_API_SECRET,
                 log: (message, meta) => {

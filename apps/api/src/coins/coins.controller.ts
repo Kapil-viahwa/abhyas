@@ -10,6 +10,7 @@ import { RedisService } from '../infra/redis.service';
 import { REDIS_PROBE } from '../infra/tokens';
 import { CoinService, type BulkBatchResult, type CoinEntryResult, type CoinHistoryResult } from './coin.service';
 import { CoinsService, type BulkJobView, type BulkPreview, type CoinRecipient } from './coins.service';
+import { CoinReconciliationService, type ReconciliationResult } from './reconciliation.service';
 import {
   INTERNAL_FAILURE_LIMIT,
   INTERNAL_FAILURE_WINDOW_SECONDS,
@@ -209,6 +210,7 @@ export class CoinsController {
 export class CoinsInternalController {
   constructor(
     @Inject(CoinService) private readonly coins: CoinService,
+    @Inject(CoinReconciliationService) private readonly reconciliation: CoinReconciliationService,
     @Inject(REDIS_PROBE) private readonly redisService: RedisService,
   ) {}
 
@@ -217,6 +219,24 @@ export class CoinsInternalController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Run one batch of a queued bulk assignment' })
   async drain(@Req() request: RequestLike, @Body() body: unknown): Promise<BulkBatchResult> {
+    await this.assertInternal(request);
+
+    const input = (body ?? {}) as { jobId?: unknown };
+    return this.coins.runBulkJob(parseUuid(input.jobId, 'jobId'));
+  }
+
+  @Public()
+  @Post('reconcile')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Compare every wallet with its ledger, without changing any' })
+  async reconcile(@Req() request: RequestLike): Promise<ReconciliationResult> {
+    await this.assertInternal(request);
+
+    return this.reconciliation.reconcile();
+  }
+
+  /** The secret, the source address, and a per-address failure counter; 404 on any failure. */
+  private async assertInternal(request: RequestLike): Promise<void> {
     const config = loadConfig(process.env);
     const address = requestMeta(request).ip;
     const networks: AllowedAddress[] = config.INTERNAL_ALLOWED_ADDRESSES.map((entry) =>
@@ -242,8 +262,5 @@ export class CoinsInternalController {
         .exec();
       throw new NotFoundException();
     }
-
-    const input = (body ?? {}) as { jobId?: unknown };
-    return this.coins.runBulkJob(parseUuid(input.jobId, 'jobId'));
   }
 }

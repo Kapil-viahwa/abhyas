@@ -7,3 +7,6 @@ export const PING_JOB = 'system.ping';
 export const OTP_PURGE_JOB = 'otp.purge';
 
 export const COIN_BULK_DRAIN_JOB = 'coin-bulk-drain';
+
+/** Phase 5, item 4a: compares every wallet with its ledger, once a night. */
+export const COIN_RECONCILIATION_JOB = 'coin-reconciliation';
