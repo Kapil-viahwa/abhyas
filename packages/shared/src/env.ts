@@ -116,8 +116,9 @@ function isIpAddress(value: string): 0 | 4 | 6 {
     return 0;
   }
 
-  const head = halves[0] === '' ? [] : halves[0].split(':');
-  const tail = halves.length === 2 && halves[1] !== '' ? halves[1].split(':') : [];
+  const [first = '', second = ''] = halves;
+  const head = first === '' ? [] : first.split(':');
+  const tail = halves.length === 2 && second !== '' ? second.split(':') : [];
   const groups = [...head, ...tail];
 
   if (!groups.every((group) => /^[0-9a-fA-F]{1,4}$/.test(group))) {

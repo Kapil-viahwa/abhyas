@@ -51,9 +51,7 @@ export class CoinsHooksService {
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => reject(new Error('CoinRewardTimeout')), timeoutMs);
           // The timer must not hold the process open if this was the only thing left.
-          if (typeof timer === 'object' && 'unref' in timer) {
-            timer.unref();
-          }
+          timer.unref();
         }),
       ]);
     } catch (error) {

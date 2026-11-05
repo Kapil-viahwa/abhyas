@@ -69,8 +69,13 @@ export function parseRemark(value: unknown): string {
     throw new BadRequestException('remark must be text');
   }
 
-  const remark = value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+  // Control characters are removed by code point rather than by a regex: a regex that names
+  // them is what `no-control-regex` forbids, and rightly so in every other file.
+  const remark = Array.from(value, (character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 0x20 || code === 0x7f ? ' ' : character;
+  })
+    .join('')
     .replace(/\s+/g, ' ')
     .trim();
 
