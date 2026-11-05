@@ -42,9 +42,33 @@ async function main(): Promise<void> {
                     });
                     return rows.map((row) => row.id);
                   },
+                  markFailed: async (jobId, reason) => {
+                    await prisma.coinBulkJob.update({
+                      where: { id: jobId },
+                      data: { status: 'FAILED', errorMessage: reason.slice(0, 500), finishedAt: new Date() },
+                    });
+                  },
+                },
+                failures: {
+                  bump: async (jobId, reason) => {
+                    const key = `coins:bulk_failures:${jobId}`;
+                    const count = await connection.incr(key);
+                    await connection.expire(key, 24 * 60 * 60);
+                    await connection.set(`coins:bulk_failure_reason:${jobId}`, reason.slice(0, 200), 'EX', 24 * 60 * 60);
+                    return count;
+                  },
+                  clear: async (jobId) => {
+                    await connection.del(`coins:bulk_failures:${jobId}`, `coins:bulk_failure_reason:${jobId}`);
+                  },
+                },
+                alert: async ({ jobId, reason }) => {
+                  const key = `coins:bulk_alerts:${new Date().toISOString().slice(0, 10)}`;
+                  const raised = await connection.incr(key);
+                  await connection.expire(key, 30 * 24 * 60 * 60);
+                  console.error(`bulk job ${jobId} was given up on (${reason}); alerts today: ${String(raised)}`);
                 },
                 apiUrl: process.env.INTERNAL_API_URL ?? 'http://api:3001',
-                secret: config.REVALIDATE_SECRET,
+                secret: config.INTERNAL_API_SECRET,
                 log: (message, meta) => {
                   // eslint-disable-next-line no-console
                   console.log(message, meta ?? {});

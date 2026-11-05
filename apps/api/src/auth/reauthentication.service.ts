@@ -10,7 +10,8 @@ import {
 
 import { DatabaseService } from '../infra/database.service';
 import { RateLimiter } from '../infra/rate-limiter';
-import { DATABASE_PROBE } from '../infra/tokens';
+import { RedisService } from '../infra/redis.service';
+import { DATABASE_PROBE, REDIS_PROBE } from '../infra/tokens';
 import { OtpService, type OtpRequestResult } from '../otp/otp.service';
 import type { AuthenticatedUser } from './access';
 import { writeIdentityAudit } from './audit';
@@ -75,10 +76,28 @@ export const DEFAULT_REAUTH_MESSAGES: ReauthenticationMessages = {
 export const REAUTH_REFUSED_MESSAGE =
   'Confirm it is you before this change: enter your password, or ask for a code sent to your mobile number.';
 
+/**
+ * A sensitive route may accept a recent proof instead of asking for it again. Ten minutes is
+ * long enough for a form the person has just opened, and short enough that a session left
+ * unattended does not stay powerful.
+ */
+export const REAUTH_FRESH_MS = 10 * 60 * 1000;
+
+/** The code the web form reads to know it must ask for a password or a code. */
+export const REAUTH_REQUIRED_CODE = 'reauth_required';
+
+export const REAUTH_REQUIRED_MESSAGE =
+  'Confirm it is you again before this change: this proof is more than ten minutes old.';
+
+export function reauthFreshKey(userId: string): string {
+  return `reauth:fresh:${userId}`;
+}
+
 @Injectable()
 export class ReauthenticationService {
   constructor(
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
+    @Inject(REDIS_PROBE) private readonly redisService: RedisService,
     @Inject(OtpService) private readonly otp: OtpService,
     @Inject(RateLimiter) private readonly limiter: RateLimiter,
   ) {}
@@ -146,6 +165,7 @@ export class ReauthenticationService {
         throw new BadRequestException(messages.wrongPasswordMessage);
       }
       await this.limiter.reset(reauthFailureKey(user.id));
+      await this.markFresh(user.id);
       return;
     }
 
@@ -167,6 +187,7 @@ export class ReauthenticationService {
         throw error;
       }
       await this.limiter.reset(reauthFailureKey(user.id));
+      await this.markFresh(user.id);
       return;
     }
 
@@ -189,6 +210,26 @@ export class ReauthenticationService {
 
     if (session === null || Date.now() - session.issuedAt.getTime() > REAUTH_WINDOW_MS) {
       throw new ForbiddenException(REAUTH_REFUSED_MESSAGE);
+    }
+  }
+
+  /**
+   * Refuses unless this account proved itself in the last ten minutes. A coin write uses
+   * this: a stolen session that merely *is* a session does not move coins.
+   */
+  async assertFresh(user: AuthenticatedUser): Promise<void> {
+    const fresh = await this.redisService.redis.get(reauthFreshKey(user.id));
+
+    if (fresh === null) {
+      throw new ForbiddenException({ code: REAUTH_REQUIRED_CODE, message: REAUTH_REQUIRED_MESSAGE });
+    }
+  }
+
+  private async markFresh(userId: string): Promise<void> {
+    try {
+      await this.redisService.redis.set(reauthFreshKey(userId), '1', 'PX', REAUTH_FRESH_MS);
+    } catch {
+      // A proof that verified is still a proof; the next write asks again if Redis is down.
     }
   }
 

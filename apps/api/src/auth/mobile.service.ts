@@ -199,6 +199,7 @@ export class MobileIdentityService {
       ip: meta.ip ?? null,
     });
 
+    await this.grantCoinsQuietly(userId);
     await this.rewardLoginQuietly(userId);
 
     return toLoginResult(issued, userId, email, roleCode);

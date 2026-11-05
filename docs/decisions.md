@@ -1450,3 +1450,33 @@ is spelled`), plus `coin-safety.test.ts` for the rule that a coin failure never 
 flow that called it: a 0 setting means disabled, a missing setting row is counted and
 audited as `COIN_REWARD_ERROR` with a kind and an error class only, and a sign-in or
 verification still succeeds.
+
+
+
+## 0063 — The bulk drain is a poller over database state, not a queue of its own
+
+**Decided in phase 5, item 3b.**
+
+**Why not BullMQ.** The obvious shape for a bulk assignment is one BullMQ job per person.
+That would make the queue the record of who has been paid, and BullMQ is at-least-once: a
+worker that dies after writing a ledger row but before acknowledging would be handed the
+same job again. It would also put the decision of *how far the job has got* in Redis, where
+the status screen cannot read it and a flushed Redis loses it. The job row and its
+per-person rows are already in Postgres, already carry the counts, and already survive a
+restart.
+
+**What runs instead.** `coin_bulk_jobs` and `coin_bulk_job_rows` are the queue. The worker's
+repeatable drain finds `QUEUED` and `RUNNING` jobs and asks the API to run one batch of each,
+because the ledger has exactly one writer and it lives in the API. Each batch takes the next
+`PENDING` rows and writes one ledger row per person keyed `<job_id>:<user_id>`; the wallet's
+unique `(user_id, idempotency_key)` plus the fingerprint turns a retry into a replay, not a
+second credit. A job killed halfway resumes from the first row still `PENDING`, and two
+drains running the same job at once credit each person exactly once — proven in
+`apps/api/test/coins-admin.test.ts`.
+
+**The cost that comes with it.** A poller spends a query every thirty seconds whether there
+is work or not, and a broken job would be retried forever unless something gives up. So the
+drain bounds each API call at fifteen seconds, logs when it hits its round cap rather than
+pretending the job is finished, counts consecutive failed drains per job, marks the job
+`FAILED` after five, and raises a Redis alert counter for the operator
+(`apps/worker/src/jobs/coin-bulk.spec.ts`).

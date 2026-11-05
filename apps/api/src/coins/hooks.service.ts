@@ -15,7 +15,15 @@ import { CoinService } from './coin.service';
  * counts it, and records an audit row — with the kind and the error class only. An address,
  * a number or an id would turn a diagnostic counter into personal data, and it is not what
  * an operator needs to see a trend.
+ *
+ * The reward is also bounded: sign-in is somebody waiting, so the reward may finish in the
+ * background after two seconds rather than hold the response open (item 3b).
  */
+export const REWARD_TIMEOUT_MS = 2000;
+
+/** A counter nobody reads for a month is still worth keeping for a month, and not longer. */
+export const ERROR_COUNTER_TTL_SECONDS = 30 * 24 * 60 * 60;
+
 @Injectable()
 export class CoinsHooksService {
   private readonly logger = new Logger(CoinsHooksService.name);
@@ -34,11 +42,26 @@ export class CoinsHooksService {
     }
   }
 
-  async rewardSafely(userId: string): Promise<void> {
+  async rewardSafely(userId: string, timeoutMs = REWARD_TIMEOUT_MS): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
     try {
-      await this.coins.payDailyReward(userId);
+      await Promise.race([
+        this.coins.payDailyReward(userId),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('CoinRewardTimeout')), timeoutMs);
+          // The timer must not hold the process open if this was the only thing left.
+          if (typeof timer === 'object' && 'unref' in timer) {
+            timer.unref();
+          }
+        }),
+      ]);
     } catch (error) {
       await this.record('reward', error);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 
@@ -46,7 +69,8 @@ export class CoinsHooksService {
     const reason = error instanceof Error ? error.name : 'UnknownError';
 
     try {
-      await this.redisService.redis.incr(`coins:${kind}_errors:${businessDate(new Date())}`);
+      const key = `coins:${kind}_errors:${businessDate(new Date())}`;
+      await this.redisService.redis.multi().incr(key).expire(key, ERROR_COUNTER_TTL_SECONDS).exec();
     } catch (counterError) {
       this.logger.warn(`The coin ${kind} error counter could not be written: ${String(counterError)}`);
     }

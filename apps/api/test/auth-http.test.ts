@@ -292,6 +292,8 @@ describe('auth over HTTP', () => {
       SMTP_URL: 'smtp://smtp.example.com:587',
       WEB_URL: 'https://abhyas.example.com',
       REVALIDATE_SECRET: 'r'.repeat(32),
+      INTERNAL_API_SECRET: 'i'.repeat(48),
+      INTERNAL_ALLOWED_ADDRESSES: '127.0.0.1/32',
       S3_ENDPOINT: 'https://storage.example.com',
       S3_BUCKET: 'abhyas-media',
       S3_ACCESS_KEY_ID: 'live-access-key',

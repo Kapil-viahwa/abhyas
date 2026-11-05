@@ -18,6 +18,8 @@ const production = {
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
   REVALIDATE_SECRET: 'r'.repeat(32),
+  INTERNAL_API_SECRET: 'i'.repeat(48),
+  INTERNAL_ALLOWED_ADDRESSES: '172.31.0.20/32',
   S3_ENDPOINT: 'https://storage.example.com',
   S3_BUCKET: 'abhyas-media',
   S3_ACCESS_KEY_ID: 'live-access-key',
@@ -120,10 +122,41 @@ describe('validateEnv', () => {
     );
   });
 
-  it('requires the three secrets to be different values in production', () => {
+  it('requires the four secrets to be different values in production', () => {
     expect(() => validateEnv({ ...production, AUTH_SECRET: production.REVALIDATE_SECRET })).toThrow(
-      /AUTH_SECRET: must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production/,
+      /AUTH_SECRET: must differ from OTP_HMAC_SECRET, REVALIDATE_SECRET and INTERNAL_API_SECRET in production/,
     );
+    expect(() => validateEnv({ ...production, REVALIDATE_SECRET: production.INTERNAL_API_SECRET })).toThrow(
+      /AUTH_SECRET: must differ from OTP_HMAC_SECRET, REVALIDATE_SECRET and INTERNAL_API_SECRET in production/,
+    );
+  });
+
+  it('requires the internal secret to be its own strong value in production', () => {
+    expect(() => validateEnv({ ...production, INTERNAL_API_SECRET: '' })).toThrow(
+      /INTERNAL_API_SECRET: is required in production/,
+    );
+    expect(() => validateEnv({ ...production, INTERNAL_API_SECRET: 'too-short' })).toThrow(
+      /INTERNAL_API_SECRET: must be at least 32 characters/,
+    );
+    expect(() => validateEnv({ ...production, INTERNAL_API_SECRET: 'dev-only-internal-api-secret-please-change' })).toThrow(
+      /INTERNAL_API_SECRET: must not be a well-known default value/,
+    );
+    expect(() => validateEnv({ ...production, INTERNAL_API_SECRET: `dev-${'x'.repeat(40)}` })).toThrow(
+      /INTERNAL_API_SECRET: must not be a well-known default value/,
+    );
+  });
+
+  it('refuses an internal address list wider than a /24', () => {
+    for (const value of ['0.0.0.0/0', '10.0.0.0/8', '172.31.0.0/16', '::/0', 'not-an-address']) {
+      expect(() => validateEnv({ ...production, INTERNAL_ALLOWED_ADDRESSES: value })).toThrow(
+        /INTERNAL_ALLOWED_ADDRESSES: must list exact addresses or blocks no wider than \/24/,
+      );
+    }
+
+    expect(validateEnv({ ...production, INTERNAL_ALLOWED_ADDRESSES: '172.31.0.20/32, 10.1.2.0/24' }).INTERNAL_ALLOWED_ADDRESSES).toEqual([
+      '172.31.0.20/32',
+      '10.1.2.0/24',
+    ]);
   });
 
   it('requires a gateway secret only when the http gateway is used', () => {

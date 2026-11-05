@@ -333,6 +333,9 @@ export class AuthService {
       user.role.code,
     );
 
+    // A grant that failed at verification heals on the next sign-in, before the reward needs
+    // a wallet to pay into.
+    await this.grantCoinsQuietly(user.id);
     await this.rewardLoginQuietly(user.id);
 
     return {

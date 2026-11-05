@@ -14,6 +14,8 @@ const productionEnv = {
   SMS_PROVIDER: 'msg91',
   EMAIL_PROVIDER: 'smtp',
   REVALIDATE_SECRET: 'c'.repeat(32),
+  INTERNAL_API_SECRET: 'i'.repeat(48),
+  INTERNAL_ALLOWED_ADDRESSES: '127.0.0.1/32',
   S3_ENDPOINT: 'https://storage.example.com',
   S3_BUCKET: 'abhyas-media',
   S3_ACCESS_KEY_ID: 'live-access-key',

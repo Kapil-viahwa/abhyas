@@ -31,6 +31,8 @@ function config(overrides: Partial<AppEnv> = {}): AppEnv {
     TRUST_CLIENT_IP_HEADER: 'x-real-ip',
     TRUST_FORWARDED_IP_FOR_TESTS: false,
     REVALIDATE_SECRET: 'dev-only-revalidate-secret',
+    INTERNAL_API_SECRET: 'dev-only-internal-api-secret-please-change',
+    INTERNAL_ALLOWED_ADDRESSES: ['127.0.0.1/32'],
     S3_ENDPOINT: '',
     S3_REGION: 'us-east-1',
     S3_BUCKET: '',

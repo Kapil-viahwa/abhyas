@@ -76,6 +76,7 @@ model User {
   coinRewards        CoinDailyReward[] @relation("CoinRewardOwner")
   coinBulkJobs       CoinBulkJob[]    @relation("CoinBulkJobCreator")
   coinBulkRows       CoinBulkJobRow[] @relation("CoinBulkRowUser")
+  coinAdminRequests  CoinAdminRequest[] @relation("CoinAdminRequestActor")
 
   @@map("users")
 }
@@ -593,4 +594,23 @@ model CoinBulkJobRow {
 
   @@unique([jobId, userId], map: "coin_bulk_job_rows_job_user_key")
   @@map("coin_bulk_job_rows")
+}
+
+
+/// Phase 5: one Administrator coin write, remembered by the key its form sent. A replay with
+/// the same fingerprint returns the stored answer without writing again; a different request
+/// under the same key is refused and audited.
+model CoinAdminRequest {
+  actorId            String   @map("actor_id") @db.Uuid
+  key                String   @db.Uuid
+  route              String
+  requestFingerprint String   @map("request_fingerprint")
+  response           Json
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User @relation("CoinAdminRequestActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@id([actorId, key], map: "coin_admin_requests_pkey")
+  @@index([createdAt], map: "coin_admin_requests_created_at_idx")
+  @@map("coin_admin_requests")
 }

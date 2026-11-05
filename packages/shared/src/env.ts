@@ -54,6 +54,83 @@ export const MIN_REVALIDATE_SECRET_LENGTH = 16;
 
 export const DEFAULT_REVALIDATE_SECRET = 'dev-only-revalidate-secret';
 
+/** The secret the worker presents to the API's internal routes (phase 5). */
+export const MIN_INTERNAL_API_SECRET_LENGTH = 32;
+export const DEFAULT_INTERNAL_API_SECRET = 'dev-only-internal-api-secret-please-change';
+
+/** The addresses, or blocks no wider than /24, allowed to call the internal routes. */
+export const DEFAULT_INTERNAL_ALLOWED_ADDRESSES = '127.0.0.1/32';
+
+export interface AllowedAddress {
+  readonly address: string;
+  readonly prefix: number;
+}
+
+/**
+ * One entry of `INTERNAL_ALLOWED_ADDRESSES`.
+ *
+ * The internal routes can move coins, so the list they accept must not be the internet: an
+ * IPv4 block wider than /24, or an IPv6 block wider than /64, is refused for the same reason
+ * `TRUST_PROXY` refuses one (decision 0052).
+ */
+export function parseAllowedAddress(value: string): AllowedAddress | null {
+  const entry = value.trim();
+
+  if (entry === '') {
+    return null;
+  }
+
+  const slash = entry.indexOf('/');
+  const address = slash === -1 ? entry : entry.slice(0, slash);
+  const rawPrefix = slash === -1 ? undefined : entry.slice(slash + 1);
+  const family = isIpAddress(address);
+
+  if (family === 0 || (rawPrefix !== undefined && !/^\d{1,3}$/.test(rawPrefix))) {
+    return null;
+  }
+
+  const width = family === 4 ? 32 : 128;
+  const floor = family === 4 ? 24 : 64;
+  const prefix = rawPrefix === undefined ? width : Number(rawPrefix);
+
+  if (!Number.isInteger(prefix) || prefix < floor || prefix > width) {
+    return null;
+  }
+
+  return { address, prefix };
+}
+
+function isIpAddress(value: string): 0 | 4 | 6 {
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+
+  if (v4 !== null) {
+    return v4.slice(1).every((part) => Number(part) <= 255) ? 4 : 0;
+  }
+
+  if (!value.includes(':') || !/^[0-9a-fA-F:]+$/.test(value)) {
+    return 0;
+  }
+
+  const halves = value.split('::');
+  if (halves.length > 2) {
+    return 0;
+  }
+
+  const head = halves[0] === '' ? [] : halves[0].split(':');
+  const tail = halves.length === 2 && halves[1] !== '' ? halves[1].split(':') : [];
+  const groups = [...head, ...tail];
+
+  if (!groups.every((group) => /^[0-9a-fA-F]{1,4}$/.test(group))) {
+    return 0;
+  }
+
+  if (halves.length === 1) {
+    return head.length === 8 ? 6 : 0;
+  }
+
+  return head.length + tail.length <= 7 ? 6 : 0;
+}
+
 /**
  * The one request header a tier reads for the client address (decision 0055).
  *
@@ -162,6 +239,13 @@ export interface AppEnv {
   readonly TRUST_FORWARDED_IP_FOR_TESTS: boolean;
   /** Shared with the web tier, which accepts it on its cache-revalidation route. */
   readonly REVALIDATE_SECRET: string;
+  /**
+   * The secret the worker presents on the API's internal routes. Never the revalidation
+   * secret: one leaked value must not open both doors (phase 5, item 3b).
+   */
+  readonly INTERNAL_API_SECRET: string;
+  /** Exact addresses, or blocks no wider than /24, allowed to call the internal routes. */
+  readonly INTERNAL_ALLOWED_ADDRESSES: readonly string[];
   /** S3-compatible object storage: empty in development means media is disabled. */
   readonly S3_ENDPOINT: string;
   readonly S3_REGION: string;
@@ -622,19 +706,58 @@ export function validateEnv(raw: RawEnv): AppEnv {
     issues.push({ variable: 'TRUST_FORWARDED_IP_FOR_TESTS', message: 'is refused in production' });
   }
 
-  // One leaked secret must not open every door. In production the three secrets the platform
-  // signs with are separate values, and each is refused if it is a development placeholder.
+  // The worker's door into the API. It can move coins for a queued bulk assignment, so it has
+  // its own secret and its own address list, and never reuses the cache-revalidation one.
+  const internalSecretRaw = read(raw, 'INTERNAL_API_SECRET');
+  const internalAddressesRaw = read(raw, 'INTERNAL_ALLOWED_ADDRESSES');
+  let internalAddresses: string[] = [DEFAULT_INTERNAL_ALLOWED_ADDRESSES];
+
+  if (internalAddressesRaw !== '') {
+    const entries = internalAddressesRaw
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry !== '');
+    const invalid = entries.filter((entry) => parseAllowedAddress(entry) === null);
+
+    if (entries.length === 0 || invalid.length > 0) {
+      issues.push({
+        variable: 'INTERNAL_ALLOWED_ADDRESSES',
+        message:
+          'must list exact addresses or blocks no wider than /24 (/64 for IPv6); refused: ' +
+          `${invalid.length > 0 ? invalid.join(', ') : internalAddressesRaw}`,
+      });
+    } else {
+      internalAddresses = entries;
+    }
+  }
+
+  if (isProduction) {
+    if (internalSecretRaw === '') {
+      issues.push({ variable: 'INTERNAL_API_SECRET', message: 'is required in production' });
+    } else if (internalSecretRaw.length < MIN_INTERNAL_API_SECRET_LENGTH) {
+      issues.push({
+        variable: 'INTERNAL_API_SECRET',
+        message: `must be at least ${MIN_INTERNAL_API_SECRET_LENGTH} characters`,
+      });
+    } else if (internalSecretRaw === DEFAULT_INTERNAL_API_SECRET || isDevelopmentSecret(internalSecretRaw)) {
+      issues.push({ variable: 'INTERNAL_API_SECRET', message: 'must not be a well-known default value' });
+    }
+  }
+
+  // One leaked secret must not open every door. In production the secrets the platform signs
+  // with are separate values, and each is refused if it is a development placeholder.
   if (isProduction) {
     const named = [
       { variable: 'AUTH_SECRET', value: authSecret },
       { variable: 'OTP_HMAC_SECRET', value: otpHmacSecret },
       { variable: 'REVALIDATE_SECRET', value: revalidateRaw },
+      { variable: 'INTERNAL_API_SECRET', value: internalSecretRaw },
     ].filter((item) => item.value !== '');
 
     if (new Set(named.map((item) => item.value)).size !== named.length) {
       issues.push({
         variable: 'AUTH_SECRET',
-        message: 'must differ from OTP_HMAC_SECRET and REVALIDATE_SECRET in production',
+        message: 'must differ from OTP_HMAC_SECRET, REVALIDATE_SECRET and INTERNAL_API_SECRET in production',
       });
     }
   }
@@ -657,6 +780,8 @@ export function validateEnv(raw: RawEnv): AppEnv {
     TRUST_CLIENT_IP_HEADER: trustClientIpHeader,
     TRUST_FORWARDED_IP_FOR_TESTS: trustForwardedForTests,
     REVALIDATE_SECRET: revalidateRaw === '' ? DEFAULT_REVALIDATE_SECRET : revalidateRaw,
+    INTERNAL_API_SECRET: internalSecretRaw === '' ? DEFAULT_INTERNAL_API_SECRET : internalSecretRaw,
+    INTERNAL_ALLOWED_ADDRESSES: internalAddresses,
     S3_ENDPOINT: s3Endpoint,
     S3_REGION: s3Region,
     S3_BUCKET: s3Bucket,

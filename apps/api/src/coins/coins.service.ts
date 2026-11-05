@@ -1,4 +1,6 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { createHash } from 'node:crypto';
+
+import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../auth/access';
@@ -8,6 +10,7 @@ import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
 import { CoinService, type CoinEntryResult, type CoinHistoryResult } from './coin.service';
 import { csvLine } from './csv';
+import { COIN_REMARK_MAX_LENGTH, COIN_REMARK_MIN_LENGTH } from './validation';
 
 /**
  * The Administrator's coin tools.
@@ -135,11 +138,13 @@ export class CoinsService {
     meta: { readonly ip?: string | undefined } = {},
   ): Promise<{ id: string; totalUsers: number; totalCoins: number }> {
     const remark = input.remark.trim();
-    if (remark.length === 0) {
+    if (remark.length < COIN_REMARK_MIN_LENGTH) {
       throw new BadRequestException('A bulk assignment needs a remark');
     }
-    if (remark.length > 500) {
-      throw new BadRequestException('A bulk assignment remark is at most 500 characters');
+    if (remark.length > COIN_REMARK_MAX_LENGTH) {
+      throw new BadRequestException(
+        `A bulk assignment remark is at most ${String(COIN_REMARK_MAX_LENGTH)} characters`,
+      );
     }
 
     const amount = Math.trunc(input.amount);
@@ -243,6 +248,111 @@ export class CoinsService {
     return this.coins.adjust(actor, input);
   }
 
+  /**
+   * An adjustment that answers a double-submitted form with the first answer.
+   *
+   * The key comes from the form and is the same for both submissions; the fingerprint covers
+   * the request, so the same key with a different body is a bug and is refused rather than
+   * silently answered.
+   */
+  async adjustIdempotent(
+    actor: AuthenticatedUser,
+    key: string,
+    input: { readonly userId: string; readonly amount: number; readonly remark: string },
+    meta: { readonly ip?: string | undefined } = {},
+  ): Promise<CoinEntryResult> {
+    return this.withAdminRequest(
+      actor,
+      'adjust',
+      key,
+      { userId: input.userId, amount: input.amount, remark: input.remark },
+      () => this.adjust(actor, input),
+      meta,
+    );
+  }
+
+  async startBulkIdempotent(
+    actor: AuthenticatedUser,
+    key: string,
+    input: { readonly userIds: readonly string[]; readonly amount: number; readonly remark: string },
+    meta: { readonly ip?: string | undefined } = {},
+  ): Promise<{ id: string; totalUsers: number; totalCoins: number }> {
+    return this.withAdminRequest(
+      actor,
+      'bulk',
+      key,
+      { userIds: [...input.userIds].sort(), amount: input.amount, remark: input.remark },
+      () => this.startBulk(actor, input, meta),
+      meta,
+    );
+  }
+
+  private async withAdminRequest<T>(
+    actor: AuthenticatedUser,
+    route: 'adjust' | 'bulk',
+    key: string,
+    body: Prisma.InputJsonObject,
+    run: () => Promise<T>,
+    meta: { readonly ip?: string | undefined },
+  ): Promise<T> {
+    const fingerprint = createHash('sha256').update(JSON.stringify({ route, body })).digest('hex');
+    const where = { actorId_key: { actorId: actor.id, key } };
+    const existing = await this.prisma.coinAdminRequest.findUnique({ where });
+
+    if (existing !== null) {
+      return this.replay(actor, route, key, fingerprint, existing, meta);
+    }
+
+    const result = await run();
+
+    try {
+      await this.prisma.coinAdminRequest.create({
+        data: {
+          actorId: actor.id,
+          key,
+          route,
+          requestFingerprint: fingerprint,
+          response: result as unknown as Prisma.InputJsonValue,
+        },
+      });
+    } catch (error) {
+      // Two submissions racing: the loser reads the winner's answer rather than writing twice.
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+
+      const stored = await this.prisma.coinAdminRequest.findUniqueOrThrow({ where });
+      return this.replay(actor, route, key, fingerprint, stored, meta);
+    }
+
+    return result;
+  }
+
+  private async replay<T>(
+    actor: AuthenticatedUser,
+    route: 'adjust' | 'bulk',
+    key: string,
+    fingerprint: string,
+    stored: { readonly requestFingerprint: string; readonly response: Prisma.JsonValue },
+    meta: { readonly ip?: string | undefined },
+  ): Promise<T> {
+    if (stored.requestFingerprint !== fingerprint) {
+      await writeIdentityAudit(this.prisma, {
+        action: 'COIN_ADMIN_KEY_REUSED',
+        actorUserId: actor.id,
+        actorRole: actor.roleCode,
+        entityType: 'coin_admin_request',
+        entityId: key,
+        metadata: { route },
+        ip: meta.ip ?? null,
+      });
+
+      throw new ConflictException('That Idempotency-Key was already used for a different request');
+    }
+
+    return stored.response as unknown as T;
+  }
+
   history(userId: string, query: { readonly type?: string; readonly page: number; readonly pageSize: number }): Promise<CoinHistoryResult> {
     return this.coins.history(userId, query);
   }
@@ -304,4 +414,9 @@ export class CoinsService {
 
     return { users: byKey.get('coin_max_bulk_users') ?? 0, coins: byKey.get('coin_max_bulk_coins') ?? 0 };
   }
+}
+
+/** Prisma's code for a unique constraint. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 }

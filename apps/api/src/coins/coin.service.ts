@@ -402,7 +402,7 @@ export class CoinService {
 
     const isCredit = input.amount > 0;
 
-    return this.post(
+    const result = await this.post(
       {
         userId,
         amount,
@@ -414,6 +414,18 @@ export class CoinService {
       },
       isCredit ? 'credit' : 'debit',
     );
+
+    // The decision, not just the movement: who, which account, how much and which way.
+    await writeIdentityAudit(this.prisma, {
+      action: 'COIN_ADJUSTED',
+      actorUserId: actor.id,
+      actorRole: actor.roleCode,
+      entityType: 'coin_transaction',
+      entityId: result.id,
+      metadata: { userId, amount: isCredit ? amount : -amount, direction: isCredit ? 'credit' : 'debit' },
+    });
+
+    return result;
   }
 
   /** One page of an account's history, with what the wallet has earned and spent overall. */
@@ -495,7 +507,10 @@ export class CoinService {
           where: { id: row.id },
           data: { status: 'CREDITED', coinTransactionId: entry.id },
         });
-        credited += 1;
+        // A replay means another drain already paid this person; the counter must not say two.
+        if (!entry.replayed) {
+          credited += 1;
+        }
       } catch (error) {
         await this.prisma.coinBulkJobRow.update({
           where: { id: row.id },
@@ -517,6 +532,22 @@ export class CoinService {
         finishedAt: remaining === 0 ? new Date() : null,
       },
     });
+
+    if (remaining === 0) {
+      await writeIdentityAudit(this.prisma, {
+        action: 'COIN_BULK_FINISHED',
+        actorUserId: job.createdBy,
+        entityType: 'coin_bulk_job',
+        entityId: job.id,
+        metadata: {
+          users: job.totalUsers,
+          credited: credited,
+          failed: failed,
+          amount: job.amount,
+          totalCoins: credited * job.amount,
+        },
+      });
+    }
 
     return { processed: credited + failed, remaining, status };
   }
