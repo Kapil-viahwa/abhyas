@@ -136,7 +136,9 @@ describe('the bulk coin drain', () => {
       await drainCoinBulkJobs({
         host: {
           findDrainable: async () => ['job-6'],
-          markFailed: async (jobId, reason) => failed.push(`${jobId}:${reason}`),
+          markFailed: async (jobId, reason) => {
+            failed.push(`${jobId}:${reason}`);
+          },
         },
         failures: counter.failures,
         apiUrl: 'http://api:3001',

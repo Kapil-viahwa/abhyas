@@ -115,8 +115,9 @@ function v6Bytes(value: string): number[] | null {
     return null;
   }
 
-  const head = halves[0] === '' ? [] : halves[0].split(':');
-  const tail = halves.length === 2 && halves[1] !== '' ? halves[1].split(':') : [];
+  const [first = '', second = ''] = halves;
+  const head = first === '' ? [] : first.split(':');
+  const tail = halves.length === 2 && second !== '' ? second.split(':') : [];
   const filled = halves.length === 2 ? 8 - head.length - tail.length : 0;
 
   if (filled < 0 || (halves.length === 1 && head.length !== 8)) {

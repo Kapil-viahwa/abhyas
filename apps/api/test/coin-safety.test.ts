@@ -106,7 +106,10 @@ describe('coins never break the flow that calls them', () => {
     const result = await context.get(AuthService).login({ email: email.email, password: PASSWORD });
 
     expect(result.accessToken).not.toBe('');
-    expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(0);
+
+    // Sign-in now also heals a missing signup grant, so the ledger may hold one here. What
+    // this test is about is the disabled daily reward: it writes no reward row at all.
+    expect(await db.client.coinTransaction.count({ where: { userId, type: 'DAILY_REWARD' } })).toBe(0);
 
     await setSetting('daily_reward_coins', 10);
   });

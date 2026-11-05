@@ -534,17 +534,21 @@ export class CoinService {
     });
 
     if (remaining === 0) {
+      // The job's own totals, not this batch's: a job drained in three rounds finishes once,
+      // and its audit row must describe all of it.
+      const completed = await this.prisma.coinBulkJob.findUniqueOrThrow({ where: { id: jobId } });
+
       await writeIdentityAudit(this.prisma, {
         action: 'COIN_BULK_FINISHED',
         actorUserId: job.createdBy,
         entityType: 'coin_bulk_job',
         entityId: job.id,
         metadata: {
-          users: job.totalUsers,
-          credited: credited,
-          failed: failed,
-          amount: job.amount,
-          totalCoins: credited * job.amount,
+          users: completed.totalUsers,
+          credited: completed.creditedUsers,
+          failed: completed.failedUsers,
+          amount: completed.amount,
+          totalCoins: completed.creditedUsers * completed.amount,
         },
       });
     }

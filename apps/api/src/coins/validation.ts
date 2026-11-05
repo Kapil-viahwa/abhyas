@@ -126,9 +126,9 @@ export function parseIdentifierArray(value: unknown, max: number): string[] {
 }
 
 export function parseUserIdArray(value: unknown, max: number): string[] {
-  const ids = parseStringArray(value, { label: 'userIds', max, maxLength: 36 });
+  const ids = parseStringArray(value, { label: 'userIds', max, maxLength: 36 }).map((id) => id.toLowerCase());
 
-  return ids.map((id) => parseUuid(id, 'userId'));
+  return [...new Set(ids)].map((id) => parseUuid(id, 'userId'));
 }
 
 export function parseHistoryType(value: unknown): string | undefined {
