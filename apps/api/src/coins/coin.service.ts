@@ -139,11 +139,15 @@ export class CoinService {
   async openWallet(userId: string): Promise<number> {
     const id = accountId(userId);
 
-    await this.prisma.$executeRaw`
-      INSERT INTO "coin_wallets" ("user_id")
-      VALUES (${id}::uuid)
-      ON CONFLICT ("user_id") DO NOTHING
-    `;
+    try {
+      await this.prisma.$executeRaw`
+        INSERT INTO "coin_wallets" ("user_id")
+        VALUES (${id}::uuid)
+        ON CONFLICT ("user_id") DO NOTHING
+      `;
+    } catch (error) {
+      this.rethrowMissingAccount(error);
+    }
 
     return this.balanceOf(id);
   }
@@ -200,14 +204,47 @@ export class CoinService {
 
     const amount = await this.settingInt(SIGNUP_COINS_SETTING);
 
-    return this.credit({
-      userId: id,
-      amount,
-      type: 'SIGNUP_GRANT',
-      idempotencyKey: `signup:${id}`,
-      reference: { type: 'signup', id },
-      description: 'Signup coins',
-    });
+    try {
+      return await this.credit({
+        userId: id,
+        amount,
+        type: 'SIGNUP_GRANT',
+        idempotencyKey: `signup:${id}`,
+        reference: { type: 'signup', id },
+        description: 'Signup coins',
+      });
+    } catch (error) {
+      // One grant per account is a database invariant (20260801000000). A caller that
+      // reaches it with a different key has asked for a second grant, which is not an
+      // error to report but a fact to read back: the first grant is the answer.
+      if (isOneGrantPerUser(error)) {
+        return this.existingSignupGrant(id);
+      }
+      throw error;
+    }
+  }
+
+  /** The grant this account already holds, if it holds one. */
+  private async existingSignupGrant(userId: string): Promise<CoinEntryResult | null> {
+    const rows = await this.prisma.$queryRaw<LedgerRow[]>`
+      SELECT "id", "user_id", "type", "amount", "previous_balance", "new_balance",
+             "idempotency_key", "request_fingerprint", "created_at"
+      FROM "coin_transactions"
+      WHERE "user_id" = ${userId}::uuid AND "type" = 'SIGNUP_GRANT'
+      LIMIT 1
+    `;
+
+    const row = rows[0];
+    return row === undefined ? null : toResult(row, true);
+  }
+
+  /** A wallet insert for an account that does not exist is a 404, not a server error. */
+  private rethrowMissingAccount(error: unknown): never {
+    if (isMissingAccount(error)) {
+      throw new NotFoundException('No account exists with that id');
+    }
+
+    throw error;
   }
 
   /**
@@ -326,11 +363,15 @@ export class CoinService {
    * the same reason: only one transaction at a time can decide what the next balance is.
    */
   private async applyEntry(tx: Prisma.TransactionClient, request: EntryRequest): Promise<EntryOutcome> {
-    await tx.$executeRaw`
-      INSERT INTO "coin_wallets" ("user_id")
-      VALUES (${request.userId}::uuid)
-      ON CONFLICT ("user_id") DO NOTHING
-    `;
+    try {
+      await tx.$executeRaw`
+        INSERT INTO "coin_wallets" ("user_id")
+        VALUES (${request.userId}::uuid)
+        ON CONFLICT ("user_id") DO NOTHING
+      `;
+    } catch (error) {
+      this.rethrowMissingAccount(error);
+    }
 
     const wallets = await tx.$queryRaw<Array<{ balance: number }>>`
       SELECT "balance"
@@ -460,6 +501,14 @@ function key(value: string): string {
   }
 
   return trimmed;
+}
+
+function isMissingAccount(error: unknown): boolean {
+  return error instanceof Error && /23503/.test(error.message) && /coin_wallets/.test(error.message);
+}
+
+function isOneGrantPerUser(error: unknown): boolean {
+  return error instanceof Error && /coin_transactions_one_signup_grant_per_user/.test(error.message);
 }
 
 function toResult(row: LedgerRow, replayed: boolean): CoinEntryResult {

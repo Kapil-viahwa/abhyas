@@ -222,4 +222,28 @@ describe('signup and daily rewards', () => {
 
     await setInteger('daily_reward_coins', 10);
   });
+
+  it('reads a grant another path already wrote as already granted, not as an error', async () => {
+    await setText('signup_grant_requirement', 'email');
+    const userId = await insertUser({ emailVerified: true });
+
+    // A grant written with its own key (a backfill, an import): the one-grant-per-user index
+    // is what stops grantSignupCoins writing a second one, and it must answer with this row.
+    await db.client.coinWallet.create({ data: { userId } });
+    await db.client.$executeRawUnsafe(
+      'INSERT INTO "coin_transactions" ("user_id", "type", "amount", "previous_balance", "new_balance", "idempotency_key", "request_fingerprint") VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)',
+      userId,
+      'SIGNUP_GRANT',
+      700,
+      0,
+      700,
+      `backfill:${userId}`,
+      'f'.repeat(64),
+    );
+
+    const granted = await coins.grantSignupCoins(userId);
+    expect(granted?.amount).toBe(700);
+    expect(granted?.replayed).toBe(true);
+    expect(await db.client.coinTransaction.count({ where: { userId, type: 'SIGNUP_GRANT' } })).toBe(1);
+  });
 });

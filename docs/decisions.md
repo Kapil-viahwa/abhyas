@@ -1378,3 +1378,45 @@ trigger, the application role's privileges (and that it cannot move a wallet bal
 directly), a `previous_balance` mismatch, a replayed key, a reused key with a different
 amount, and fifty parallel spends against a balance that affords ten: exactly ten are
 charged, forty are refused, and the balance never goes below zero.
+
+
+## 0061 — A wallet starts at zero, and the stopgap the ledger still needs
+
+**Decided in phase 5, item 1b (review findings).**
+
+**An insert is a write too.** The ledger already refused to let the application role move a
+wallet's balance. It did not stop the same role *opening* a wallet with one, which is the same
+hole one statement earlier. `coin_wallets_start_at_zero` refuses a non-zero `balance` on
+`INSERT` for any role except the table's owner, and `coins-ledger.test.ts` proves it with
+`SET ROLE abhyas_app`.
+
+**The guard is a stopgap, and here is what replaces it.** Both wallet guards tell the honest
+writer from a direct one by `pg_trigger_depth()` and by comparing `current_user` with the
+table's owner. That works, but it is a heuristic about *how* a statement arrived rather than a
+privilege the role does not hold: any future trigger that writes the wallet would inherit the
+same permission, and a role renamed in a deployment would quietly change who is refused. The
+preferred design is the one the audit log already uses in spirit: move the wallet write into a
+`SECURITY DEFINER` function owned by the migration role, grant `abhyas_app` `SELECT` and
+`INSERT` on `coin_wallets` only, and take away `UPDATE` altogether. Then the application
+cannot move a balance by any path because it has no privilege to, no trigger-depth check is
+needed, and the guarantee survives a rename or a new trigger. It is recorded here as the next
+piece of ledger work rather than done now, because it changes the shape of `CoinService`'s
+transaction and belongs with the admin tools that will exercise it.
+
+**One of a thing, not one of a request.** The idempotency key stops the same request being
+written twice; it never stopped two different requests asking for the same thing. Two partial
+unique indexes now say what the ledger means: one `SIGNUP_GRANT` per `user_id`, and one
+`ENROLLMENT` per `(reference_type, reference_id)`. `CoinService.grantSignupCoins` treats the
+first as *already granted* and returns the row that exists, because a caller reaching it with a
+different key has asked a question whose answer is the grant already there.
+
+**History is not rewritten, not even by a delete.** `coin_transactions.created_by` is
+`ON DELETE RESTRICT` like every other reference from the ledger: an append-only row that forgot
+who caused it would be a rewrite by another name. A single entry is also bounded
+(`abs(amount) <= 1000000`), so a malformed admin request or a bad bulk job cannot move a
+surreal number in one statement; bulk work composes several bounded entries instead.
+
+**Proof.** `apps/api/test/coins-ledger.test.ts` (the insert guard, both partial indexes, the
+restrict foreign key, the amount bound, 404 for an unknown account, and twenty parallel credits
+on one key) and `apps/api/test/coin-grants.test.ts` (a grant another path wrote is read back,
+not refused).

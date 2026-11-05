@@ -329,8 +329,6 @@ describe('the coin wallet and its ledger', () => {
     const userId = await insertUser();
     await coins.credit({ userId, amount: 1_000, type: 'SIGNUP_GRANT', idempotencyKey: `grant:${userId}` });
 
-    const reference = { type: 'test', id: randomUUID() };
-
     const attempts = Array.from({ length: 50 }, async (_, index) => {
       try {
         await coins.spend({
@@ -338,7 +336,9 @@ describe('the coin wallet and its ledger', () => {
           amount: 100,
           type: 'ENROLLMENT',
           idempotencyKey: `spend:${userId}:${String(index)}`,
-          reference,
+          // Each attempt is a different attempt, so each charge is a different reference:
+          // one enrollment per reference is a database invariant (20260801000000).
+          reference: { type: 'attempt', id: randomUUID() },
         });
         return { charged: true as const, error: null };
       } catch (error) {
@@ -375,5 +375,163 @@ describe('the coin wallet and its ledger', () => {
     }
     expect(running).toBe(0);
     expect(rows).toHaveLength(11);
+  });
+
+  it('refuses a wallet that is not opened empty, for the application role', async () => {
+    const userId = await insertUser();
+
+    await expect(
+      db.client.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe('SET ROLE "abhyas_app"');
+        await tx.$executeRawUnsafe(
+          'INSERT INTO "coin_wallets" ("user_id", "balance") VALUES ($1::uuid, $2)',
+          userId,
+          500,
+        );
+      }),
+    ).rejects.toThrow(/starts at zero/);
+
+    expect(await db.client.coinWallet.count({ where: { userId } })).toBe(0);
+  });
+
+  it('allows one signup grant per account, whatever the idempotency key', async () => {
+    const userId = await insertUser();
+
+    await coins.credit({
+      userId,
+      amount: 1_000,
+      type: 'SIGNUP_GRANT',
+      idempotencyKey: `signup:${userId}`,
+      reference: { type: 'signup', id: userId },
+    });
+
+    await expect(
+      coins.credit({
+        userId,
+        amount: 1_000,
+        type: 'SIGNUP_GRANT',
+        idempotencyKey: `signup:${userId}:again`,
+        reference: { type: 'signup', id: userId },
+      }),
+    ).rejects.toThrow(/one_signup_grant_per_user/);
+
+    expect(await db.client.coinTransaction.count({ where: { userId, type: 'SIGNUP_GRANT' } })).toBe(1);
+    expect(await coins.balanceOf(userId)).toBe(1_000);
+  });
+
+  it('charges one enrollment per reference', async () => {
+    const userId = await insertUser();
+    await coins.credit({
+      userId,
+      amount: 1_000,
+      type: 'SIGNUP_GRANT',
+      idempotencyKey: `signup:${userId}`,
+      reference: { type: 'signup', id: userId },
+    });
+    const reference = { type: 'attempt', id: randomUUID() };
+
+    await coins.spend({ userId, amount: 100, type: 'ENROLLMENT', idempotencyKey: `spend:${userId}:a`, reference });
+
+    await expect(
+      coins.spend({ userId, amount: 100, type: 'ENROLLMENT', idempotencyKey: `spend:${userId}:b`, reference }),
+    ).rejects.toThrow(/one_enrollment_per_reference/);
+
+    expect(await db.client.coinTransaction.count({ where: { userId, type: 'ENROLLMENT' } })).toBe(1);
+    expect(await coins.balanceOf(userId)).toBe(900);
+  });
+
+  it('refuses to delete the account that caused a ledger entry', async () => {
+    const userId = await insertUser();
+    const adminId = await insertUser();
+
+    await coins.credit({
+      userId,
+      amount: 250,
+      type: 'ADMIN_CREDIT',
+      idempotencyKey: `admin:${userId}`,
+      createdBy: adminId,
+    });
+
+    await expect(db.client.$executeRawUnsafe('DELETE FROM "users" WHERE "id" = $1::uuid', adminId)).rejects.toThrow(
+      /coin_transactions_created_by_fkey/,
+    );
+  });
+
+  it('refuses a single entry larger than one million coins', async () => {
+    const userId = await insertUser();
+    await db.client.coinWallet.create({ data: { userId } });
+
+    await expect(
+      rawLedgerInsert({ userId, type: 'ADMIN_CREDIT', amount: 1_000_001, newBalance: 1_000_001 }),
+    ).rejects.toThrow(/coin_transactions_amount_within_range/);
+
+    expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(0);
+  });
+
+  it('answers 404, not 500, for an account that does not exist', async () => {
+    await expect(
+      coins.credit({
+        userId: randomUUID(),
+        amount: 100,
+        type: 'ADMIN_CREDIT',
+        idempotencyKey: `missing:${randomUUID()}`,
+      }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('writes one row for twenty parallel credits that share a key', async () => {
+    const userId = await insertUser();
+    const key = `parallel:${userId}`;
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, async () => coins.credit({ userId, amount: 400, type: 'ADMIN_CREDIT', idempotencyKey: key })),
+    );
+
+    expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+    expect(results.filter((result) => result.replayed)).toHaveLength(19);
+    expect(new Set(results.map((result) => result.id)).size).toBe(1);
+    expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(1);
+    expect(await coins.balanceOf(userId)).toBe(400);
+  });
+
+  it('lets one of ten conflicting intents with one key win, and refuses the other nine', async () => {
+    const userId = await insertUser();
+    const key = `contested:${userId}`;
+    const amounts = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1_000];
+
+    const results = await Promise.all(
+      amounts.map(async (amount) => {
+        try {
+          return { ok: true as const, result: await coins.credit({ userId, amount, type: 'ADMIN_CREDIT', idempotencyKey: key }) };
+        } catch (error) {
+          return { ok: false as const, error };
+        }
+      }),
+    );
+
+    const won = results.filter((result) => result.ok);
+    const lost = results.filter((result) => !result.ok);
+
+    expect(won).toHaveLength(1);
+    expect(lost).toHaveLength(9);
+    for (const result of lost) {
+      expect(String((result as { error: unknown }).error)).toMatch(/already used for a different coin entry/);
+    }
+
+    expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(1);
+    const wallet = await db.client.coinWallet.findUniqueOrThrow({ where: { userId } });
+    const winner = won[0];
+    if (winner?.ok !== true) {
+      throw new Error('No intent won the contested key');
+    }
+    expect(wallet.balance).toBe(winner.result.amount);
+  });
+
+  it('opens one wallet for twenty parallel opens', async () => {
+    const userId = await insertUser();
+
+    await Promise.all(Array.from({ length: 20 }, async () => coins.openWallet(userId)));
+
+    expect(await db.client.coinWallet.count({ where: { userId } })).toBe(1);
   });
 });

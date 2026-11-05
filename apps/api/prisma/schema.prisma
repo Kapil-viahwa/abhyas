@@ -521,7 +521,7 @@ model CoinTransaction {
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   user    User  @relation("CoinLedgerOwner", fields: [userId], references: [id], onDelete: Restrict)
-  creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   dailyReward CoinDailyReward? @relation("CoinRewardEntry")
 
   @@unique([userId, idempotencyKey], map: "coin_transactions_user_idempotency_key")
