@@ -70,6 +70,9 @@ model User {
   questions          Question[]     @relation("QuestionCreator")
   questionVersions   QuestionVersion[] @relation("QuestionVersionAuthor")
   importJobs         ImportJob[]    @relation("ImportJobCreator")
+  coinWallet         CoinWallet?    @relation("CoinWalletOwner")
+  coinTransactions   CoinTransaction[] @relation("CoinLedgerOwner")
+  coinEntriesCreated CoinTransaction[] @relation("CoinLedgerCreator")
 
   @@map("users")
 }
@@ -481,4 +484,47 @@ model SmsCostLedger {
 
   @@index([createdAt], map: "sms_cost_ledger_created_at_idx")
   @@map("sms_cost_ledger")
+}
+
+
+/// Phase 5: one wallet per person. The balance is a cache of the ledger — the ledger's
+/// trigger moves it, and a second trigger refuses any other writer.
+model CoinWallet {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique(map: "coin_wallets_user_id_key") @map("user_id") @db.Uuid
+  balance   Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user         User              @relation("CoinWalletOwner", fields: [userId], references: [id], onDelete: Restrict)
+  transactions CoinTransaction[]
+
+  @@map("coin_wallets")
+}
+
+/// Phase 5: the append-only record of what moved and why. One row per intent, keyed by an
+/// idempotency key, so replaying a request returns the row instead of writing a second one.
+model CoinTransaction {
+  id                 String   @id @default(uuid()) @db.Uuid
+  userId             String   @map("user_id") @db.Uuid
+  type               String
+  /// Signed: negative for a charge, positive for a grant or an admin credit.
+  amount             Int
+  previousBalance    Int      @map("previous_balance")
+  newBalance         Int      @map("new_balance")
+  referenceType      String?  @map("reference_type")
+  referenceId        String?  @map("reference_id")
+  description        String?
+  createdBy          String?  @map("created_by") @db.Uuid
+  idempotencyKey     String   @map("idempotency_key")
+  requestFingerprint String   @map("request_fingerprint")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user    User  @relation("CoinLedgerOwner", fields: [userId], references: [id], onDelete: Restrict)
+  creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@unique([userId, idempotencyKey], map: "coin_transactions_user_idempotency_key")
+  @@index([userId, createdAt], map: "coin_transactions_user_created_at_idx")
+  @@index([type, createdAt], map: "coin_transactions_type_created_at_idx")
+  @@map("coin_transactions")
 }

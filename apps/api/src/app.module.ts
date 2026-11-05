@@ -20,6 +20,7 @@ import { CatalogController } from './catalog/catalog.controller';
 import { CatalogService } from './catalog/catalog.service';
 import { PublicCatalogController } from './catalog/public.controller';
 import { CatalogRevalidationService } from './catalog/revalidation.service';
+import { CoinService } from './coins/coin.service';
 import { loadConfig } from './config/config';
 import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
@@ -82,6 +83,7 @@ import { QuestionsService } from './questions/questions.service';
     SettingsService,
     AuditService,
     DashboardService,
+    CoinService,
     CatalogRevalidationService,
     CatalogService,
     {

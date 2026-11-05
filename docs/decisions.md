@@ -1341,3 +1341,40 @@ with the password carried in `REDIS_URL`, and postgres and redis pinned by manif
 digest. `scripts/validate-compose-prod.mjs` fails the `docker` job when any of that drifts.
 Containers still run as root and the images still copy the whole workspace: both stay in
 `PROGRESS.md`'s Known gaps.
+
+
+## 0060 — The coin wallet is a cache of an append-only ledger
+
+**Decided in phase 5, item 1. Date: phase 5.**
+
+**One writer.** `CoinService` (`apps/api/src/coins/coin.service.ts`) is the only code that
+writes `coin_transactions`, and it only writes movements: a type, a signed amount, an
+optional reference, an idempotency key and who caused it. It never takes a balance from a
+caller, and `new_balance` is computed from the wallet row it locked with `SELECT ... FOR
+UPDATE`.
+
+**The database keeps the wallet honest.** A `BEFORE INSERT` trigger on the ledger locks the
+wallet, refuses a row whose `previous_balance` is not that wallet's current balance, and
+moves the wallet to `new_balance` inside the same statement; CHECK constraints then require
+`new_balance = previous_balance + amount`, `amount <> 0` and both balances non-negative. A
+second trigger refuses a wallet balance change that did not come from the ledger for the
+application role (`pg_trigger_depth()` tells the two apart), so the API can post entries but
+cannot move a balance. The table's owner can still repair a wallet deliberately, and the
+nightly reconciliation (item 4) reports any wallet that no longer matches its ledger rather
+than hiding it.
+
+**Append-only, twice over.** `UPDATE` and `DELETE` on the ledger raise
+`insufficient_privilege`, and `abhyas_app` holds only `SELECT` and `INSERT` on it — the same
+pair of rules the audit log has carried since phase 1.
+
+**One key, one intent.** `UNIQUE (user_id, idempotency_key)` plus a `request_fingerprint`
+(SHA-256 of type, amount and reference). Replaying a key with the same fingerprint returns
+the original row and writes nothing; replaying it with a different amount, type or reference
+is answered `409` and audited as `COIN_IDEMPOTENCY_MISMATCH`, because two intents wearing one
+key is a bug, not a retry.
+
+**Proof.** `apps/api/test/coins-ledger.test.ts` proves the CHECK constraints, the append-only
+trigger, the application role's privileges (and that it cannot move a wallet balance
+directly), a `previous_balance` mismatch, a replayed key, a reused key with a different
+amount, and fifty parallel spends against a balance that affords ten: exactly ten are
+charged, forty are refused, and the balance never goes below zero.
