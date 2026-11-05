@@ -118,7 +118,7 @@ describe('the wallet reconciliation', () => {
 
   it('reports no mismatch when every wallet matches its ledger', async () => {
     await makeWallet(2000);
-    await makeWallet(0);
+    await makeWallet(null);
     await makeWallet(null);
 
     const result = await reconciliation().reconcile();
