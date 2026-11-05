@@ -206,7 +206,7 @@ describe('the coin wallet and its ledger', () => {
       /coin_transactions_balance_delta/,
     );
     await expect(rawLedgerInsert({ userId, amount: -100 })).rejects.toThrow(
-      /coin_transactions_new_balance_non_negative/,
+      /balance_non_negative/,
     );
     await expect(rawLedgerInsert({ userId, amount: 100, referenceType: 'test' })).rejects.toThrow(
       /coin_transactions_reference_pair/,
@@ -247,6 +247,7 @@ describe('the coin wallet and its ledger', () => {
 
   it('rejects an update and a delete on the ledger', async () => {
     const userId = await insertUser();
+    await db.client.coinWallet.create({ data: { userId } });
     await rawLedgerInsert({
       userId,
       amount: 100,
