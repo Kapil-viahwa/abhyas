@@ -71,7 +71,7 @@ describe('signup and daily rewards', () => {
       'Grant Holder',
       userRoleId,
       options.status ?? 'ACTIVE',
-      options.emailVerified === true || hasEmail ? new Date('2026-01-01T00:00:00Z') : null,
+      options.emailVerified === true ? new Date('2026-01-01T00:00:00Z') : null,
     );
 
     return id;

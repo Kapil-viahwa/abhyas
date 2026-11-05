@@ -508,7 +508,16 @@ function isMissingAccount(error: unknown): boolean {
 }
 
 function isOneGrantPerUser(error: unknown): boolean {
-  return error instanceof Error && /coin_transactions_one_signup_grant_per_user/.test(error.message);
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  // A partial unique index reports the key it collided on, not its own name, so the claim
+  // is matched by the key: only one index holds a single column of coin_transactions.
+  return (
+    /coin_transactions_one_signup_grant_per_user/.test(error.message) ||
+    /Key \(user_id\)=\([^)]*\) already exists/.test(error.message)
+  );
 }
 
 function toResult(row: LedgerRow, replayed: boolean): CoinEntryResult {

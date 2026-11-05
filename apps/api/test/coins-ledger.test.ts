@@ -413,7 +413,7 @@ describe('the coin wallet and its ledger', () => {
         idempotencyKey: `signup:${userId}:again`,
         reference: { type: 'signup', id: userId },
       }),
-    ).rejects.toThrow(/one_signup_grant_per_user/);
+    ).rejects.toThrow(/Key \(user_id\)=\([^)]*\) already exists/);
 
     expect(await db.client.coinTransaction.count({ where: { userId, type: 'SIGNUP_GRANT' } })).toBe(1);
     expect(await coins.balanceOf(userId)).toBe(1_000);
@@ -434,7 +434,7 @@ describe('the coin wallet and its ledger', () => {
 
     await expect(
       coins.spend({ userId, amount: 100, type: 'ENROLLMENT', idempotencyKey: `spend:${userId}:b`, reference }),
-    ).rejects.toThrow(/one_enrollment_per_reference/);
+    ).rejects.toThrow(/Key \(reference_type, reference_id\)=\([^)]*\) already exists/);
 
     expect(await db.client.coinTransaction.count({ where: { userId, type: 'ENROLLMENT' } })).toBe(1);
     expect(await coins.balanceOf(userId)).toBe(900);
