@@ -73,6 +73,7 @@ model User {
   coinWallet         CoinWallet?    @relation("CoinWalletOwner")
   coinTransactions   CoinTransaction[] @relation("CoinLedgerOwner")
   coinEntriesCreated CoinTransaction[] @relation("CoinLedgerCreator")
+  coinRewards        CoinDailyReward[] @relation("CoinRewardOwner")
 
   @@map("users")
 }
@@ -521,9 +522,29 @@ model CoinTransaction {
 
   user    User  @relation("CoinLedgerOwner", fields: [userId], references: [id], onDelete: Restrict)
   creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  dailyReward CoinDailyReward? @relation("CoinRewardEntry")
 
   @@unique([userId, idempotencyKey], map: "coin_transactions_user_idempotency_key")
   @@index([userId, createdAt], map: "coin_transactions_user_created_at_idx")
   @@index([type, createdAt], map: "coin_transactions_type_created_at_idx")
   @@map("coin_transactions")
+}
+
+
+/// Phase 5: the daily reward record, one row per person per Asia/Kolkata day. The ledger
+/// row that pays it and this row are written in one transaction, so parallel sign-ins pay
+/// once: `UNIQUE (user_id, reward_date)` is the decision, and the ledger row is the proof.
+model CoinDailyReward {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  rewardDate        DateTime @map("reward_date") @db.Date
+  amount            Int
+  coinTransactionId String?  @unique(map: "daily_rewards_coin_transaction_id_key") @map("coin_transaction_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user            User             @relation("CoinRewardOwner", fields: [userId], references: [id], onDelete: Restrict)
+  coinTransaction CoinTransaction? @relation("CoinRewardEntry", fields: [coinTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, rewardDate], map: "daily_rewards_user_date_key")
+  @@map("daily_rewards")
 }

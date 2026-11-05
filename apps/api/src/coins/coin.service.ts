@@ -1,24 +1,27 @@
 import { createHash } from 'node:crypto';
 
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 
+import { businessDate } from '../otp/otp-code';
 import { writeIdentityAudit } from '../auth/audit';
 import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
 
 /**
- * The coin ledger.
+ * The coin ledger, and the only code that writes it.
  *
- * One service writes `coin_transactions`, and nothing else does: the database refuses an
- * update or a delete, the application role has no privilege to attempt one, and a
- * wallet's balance is moved by the ledger's own trigger inside the statement that inserts
- * the row. A caller therefore cannot post a balance — it can only ask for a movement, and
- * the ledger decides what the wallet becomes.
+ * The database refuses an update or a delete on `coin_transactions`, the application role
+ * has no privilege to attempt one, and a wallet's balance is moved by the ledger's own
+ * trigger inside the statement that inserts the row. A caller therefore cannot post a
+ * balance — it can only ask for a movement, and the ledger decides what the wallet becomes.
  *
- * Every movement carries an idempotency key. Replaying a key with the same fingerprint
- * returns the row that was written the first time and changes nothing; replaying it with
- * a different amount, type or reference is refused and audited, because that is two
- * different intents wearing one key.
+ * Two rules sit on top of that. Every movement carries an idempotency key with a fingerprint
+ * of type, amount and reference: a replay writes nothing and returns the original row, and a
+ * key reused for a different intent is refused and audited. And a movement is always part of
+ * a larger fact: the signup grant happens when an identifier is verified, and the daily
+ * reward is one row in `daily_rewards` plus its ledger row, in one transaction, so parallel
+ * sign-ins from many devices pay exactly once.
  */
 
 export const COIN_CREDIT_TYPES = ['SIGNUP_GRANT', 'DAILY_REWARD', 'ADMIN_CREDIT'] as const;
@@ -30,6 +33,10 @@ export type CoinTransactionType = CoinCreditType | CoinDebitType;
 
 /** The largest balance a Postgres `INTEGER` column can hold. */
 export const MAX_COIN_BALANCE = 2_147_483_647;
+
+export const SIGNUP_GRANT_REQUIREMENT_SETTING = 'signup_grant_requirement';
+export const SIGNUP_COINS_SETTING = 'signup_coins';
+export const DAILY_REWARD_COINS_SETTING = 'daily_reward_coins';
 
 export interface CoinReference {
   readonly type: string;
@@ -68,6 +75,14 @@ export interface CoinEntryResult {
   readonly createdAt: string;
 }
 
+export interface DailyRewardResult {
+  /** True only for the sign-in that wrote the reward. Repeated sign-ins get false. */
+  readonly paid: boolean;
+  readonly rewardDate: string;
+  readonly amount: number;
+  readonly newBalance: number;
+}
+
 interface LedgerRow {
   readonly id: string;
   readonly user_id: string;
@@ -79,6 +94,23 @@ interface LedgerRow {
   readonly request_fingerprint: string;
   readonly created_at: Date;
 }
+
+interface EntryRequest {
+  readonly userId: string;
+  readonly type: CoinTransactionType;
+  readonly signedAmount: number;
+  readonly idempotencyKey: string;
+  readonly referenceType: string | null;
+  readonly referenceId: string | null;
+  readonly description: string | null;
+  readonly createdBy: string | null;
+  readonly fingerprint: string;
+}
+
+type EntryOutcome =
+  | { readonly kind: 'conflict' }
+  | { readonly kind: 'replay'; readonly row: LedgerRow }
+  | { readonly kind: 'posted'; readonly row: LedgerRow };
 
 export interface CoinFingerprintInput {
   readonly type: string;
@@ -141,6 +173,107 @@ export class CoinService {
     return this.post(command, 'debit');
   }
 
+  /**
+   * The signup grant, paid once the identifier the setting names has been verified.
+   *
+   * Idempotent by construction: the key is the account, so the second call (a replayed
+   * verification, a backfill that runs after the grant already happened, two verifications
+   * racing) returns the original row and writes nothing. It returns null when the account
+   * is not active or has not verified the required identifier yet.
+   */
+  async grantSignupCoins(userId: string): Promise<CoinEntryResult | null> {
+    const id = accountId(userId);
+
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { status: true, emailVerifiedAt: true, firstVerifiedMobile: true },
+    });
+    if (user === null || user.status !== 'ACTIVE') {
+      return null;
+    }
+
+    const requirement = await this.settingText(SIGNUP_GRANT_REQUIREMENT_SETTING);
+    const verified = requirement === 'mobile' ? user.firstVerifiedMobile !== null : user.emailVerifiedAt !== null;
+    if (!verified) {
+      return null;
+    }
+
+    const amount = await this.settingInt(SIGNUP_COINS_SETTING);
+
+    return this.credit({
+      userId: id,
+      amount,
+      type: 'SIGNUP_GRANT',
+      idempotencyKey: `signup:${id}`,
+      reference: { type: 'signup', id },
+      description: 'Signup coins',
+    });
+  }
+
+  /**
+   * The daily reward: one `daily_rewards` row and its ledger row, in one transaction, on the
+   * first successful sign-in of each Asia/Kolkata day.
+   *
+   * The unique (user_id, reward_date) pair and the ledger's own idempotency key both key on
+   * the date, so ten parallel sign-ins serialise on the wallet row and only the first writes;
+   * the rest find the ledger row and report `paid: false`.
+   */
+  async payDailyReward(userId: string, options: { readonly now?: Date } = {}): Promise<DailyRewardResult> {
+    const id = accountId(userId);
+    const rewardDate = businessDate(options.now ?? new Date());
+    const amount = await this.settingInt(DAILY_REWARD_COINS_SETTING);
+
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { status: true, emailVerifiedAt: true, firstVerifiedMobile: true },
+    });
+
+    if (user === null || user.status !== 'ACTIVE') {
+      return { paid: false, rewardDate, amount, newBalance: await this.balanceOf(id) };
+    }
+    if (user.emailVerifiedAt === null && user.firstVerifiedMobile === null) {
+      return { paid: false, rewardDate, amount, newBalance: await this.balanceOf(id) };
+    }
+
+    const reference: CoinReference = { type: 'daily_reward', id: rewardDate };
+    const fingerprint = requestFingerprint({ type: 'DAILY_REWARD', amount, reference });
+
+    const outcome = await this.prisma.$transaction(
+      async (tx) => {
+        const entry = await this.applyEntry(tx, {
+          userId: id,
+          type: 'DAILY_REWARD',
+          signedAmount: amount,
+          idempotencyKey: `daily:${rewardDate}`,
+          referenceType: reference.type,
+          referenceId: rewardDate,
+          description: 'Daily reward',
+          createdBy: null,
+          fingerprint,
+        });
+
+        if (entry.kind !== 'posted') {
+          return entry;
+        }
+
+        await tx.$executeRaw`
+          INSERT INTO "daily_rewards" ("user_id", "reward_date", "amount", "coin_transaction_id")
+          VALUES (${id}::uuid, ${rewardDate}::date, ${amount}, ${entry.row.id}::uuid)
+        `;
+
+        return entry;
+      },
+      { timeout: 10_000, maxWait: 10_000 },
+    );
+
+    if (outcome.kind === 'conflict') {
+      await this.recordMismatch({ userId: id, idempotencyKey: `daily:${rewardDate}`, type: 'DAILY_REWARD', signedAmount: amount, createdBy: null, fingerprint });
+      throw new ConflictException('That idempotency key was already used for a different coin entry');
+    }
+
+    return { paid: outcome.kind === 'posted', rewardDate, amount, newBalance: outcome.row.new_balance };
+  }
+
   private async post(
     command: CoinCreditCommand | CoinSpendCommand,
     direction: 'credit' | 'debit',
@@ -163,99 +296,142 @@ export class CoinService {
       reference: command.reference ?? null,
     });
 
-    const outcome = await this.prisma.$transaction(
-      async (tx) => {
-        await tx.$executeRaw`
-          INSERT INTO "coin_wallets" ("user_id")
-          VALUES (${userId}::uuid)
-          ON CONFLICT ("user_id") DO NOTHING
-        `;
-
-        // The lock is what makes the balance below the one every other writer agrees on:
-        // a second transaction waits here until this one commits.
-        const wallets = await tx.$queryRaw<Array<{ balance: number }>>`
-          SELECT "balance"
-          FROM "coin_wallets"
-          WHERE "user_id" = ${userId}::uuid
-          FOR UPDATE
-        `;
-
-        const wallet = wallets[0];
-        if (wallet === undefined) {
-          throw new NotFoundException('No coin wallet exists for that account');
-        }
-
-        const existing = await tx.$queryRaw<LedgerRow[]>`
-          SELECT "id", "user_id", "type", "amount", "previous_balance", "new_balance",
-                 "idempotency_key", "request_fingerprint", "created_at"
-          FROM "coin_transactions"
-          WHERE "user_id" = ${userId}::uuid AND "idempotency_key" = ${idempotencyKey}
-        `;
-
-        const replayed = existing[0];
-        if (replayed !== undefined) {
-          if (replayed.request_fingerprint !== fingerprint) {
-            return { kind: 'conflict' as const };
-          }
-
-          return { kind: 'replay' as const, row: replayed };
-        }
-
-        const newBalance = wallet.balance + signedAmount;
-        if (newBalance < 0) {
-          throw new BadRequestException('Not enough coins for this charge');
-        }
-        if (newBalance > MAX_COIN_BALANCE) {
-          throw new BadRequestException('That would take the wallet past its highest possible balance');
-        }
-
-        const inserted = await tx.$queryRaw<LedgerRow[]>`
-          INSERT INTO "coin_transactions" (
-            "user_id", "type", "amount", "previous_balance", "new_balance",
-            "reference_type", "reference_id", "description", "created_by",
-            "idempotency_key", "request_fingerprint"
-          ) VALUES (
-            ${userId}::uuid, ${command.type}, ${signedAmount}, ${wallet.balance}, ${newBalance},
-            ${referenceType}, ${referenceId}, ${command.description ?? null}, ${createdBy}::uuid,
-            ${idempotencyKey}, ${fingerprint}
-          )
-          RETURNING "id", "user_id", "type", "amount", "previous_balance", "new_balance",
-                    "idempotency_key", "request_fingerprint", "created_at"
-        `;
-
-        const row = inserted[0];
-        if (row === undefined) {
-          throw new Error('The ledger accepted a row and did not return it');
-        }
-
-        return { kind: 'posted' as const, row };
-      },
-      // Fifty callers can queue on one wallet. Lock acquisition is the only wait, so a
-      // generous ceiling costs nothing and keeps a slow CI runner from timing out.
-      { timeout: 10_000, maxWait: 10_000 },
+    const outcome = await this.prisma.$transaction((tx) =>
+      this.applyEntry(tx, {
+        userId,
+        type: command.type,
+        signedAmount,
+        idempotencyKey,
+        referenceType,
+        referenceId,
+        description: command.description ?? null,
+        createdBy,
+        fingerprint,
+      }),
     );
 
     if (outcome.kind === 'conflict') {
-      await this.prisma.$transaction(async (tx) => {
-        await writeIdentityAudit(tx, {
-          action: 'COIN_IDEMPOTENCY_MISMATCH',
-          actorUserId: createdBy,
-          entityType: 'coin_transaction',
-          entityId: null,
-          metadata: {
-            userId,
-            idempotencyKey,
-            requestedType: command.type,
-            requestedAmount: signedAmount,
-            requestedFingerprint: fingerprint,
-          },
-        });
-      });
-
+      await this.recordMismatch({ userId, idempotencyKey, type: command.type, signedAmount, createdBy, fingerprint });
       throw new ConflictException('That idempotency key was already used for a different coin entry');
     }
 
     return toResult(outcome.row, outcome.kind === 'replay');
+  }
+
+  /**
+   * One movement, inside a transaction the caller already opened.
+   *
+   * The wallet row is locked first, so a second writer of the same ledger waits here and
+   * then reads the balance this one committed. The replay lookup happens after the lock for
+   * the same reason: only one transaction at a time can decide what the next balance is.
+   */
+  private async applyEntry(tx: Prisma.TransactionClient, request: EntryRequest): Promise<EntryOutcome> {
+    await tx.$executeRaw`
+      INSERT INTO "coin_wallets" ("user_id")
+      VALUES (${request.userId}::uuid)
+      ON CONFLICT ("user_id") DO NOTHING
+    `;
+
+    const wallets = await tx.$queryRaw<Array<{ balance: number }>>`
+      SELECT "balance"
+      FROM "coin_wallets"
+      WHERE "user_id" = ${request.userId}::uuid
+      FOR UPDATE
+    `;
+
+    const wallet = wallets[0];
+    if (wallet === undefined) {
+      throw new NotFoundException('No coin wallet exists for that account');
+    }
+
+    const existing = await tx.$queryRaw<LedgerRow[]>`
+      SELECT "id", "user_id", "type", "amount", "previous_balance", "new_balance",
+             "idempotency_key", "request_fingerprint", "created_at"
+      FROM "coin_transactions"
+      WHERE "user_id" = ${request.userId}::uuid AND "idempotency_key" = ${request.idempotencyKey}
+    `;
+
+    const replayed = existing[0];
+    if (replayed !== undefined) {
+      if (replayed.request_fingerprint !== request.fingerprint) {
+        return { kind: 'conflict' };
+      }
+
+      return { kind: 'replay', row: replayed };
+    }
+
+    const newBalance = wallet.balance + request.signedAmount;
+    if (newBalance < 0) {
+      throw new BadRequestException('Not enough coins for this charge');
+    }
+    if (newBalance > MAX_COIN_BALANCE) {
+      throw new BadRequestException('That would take the wallet past its highest possible balance');
+    }
+
+    const inserted = await tx.$queryRaw<LedgerRow[]>`
+      INSERT INTO "coin_transactions" (
+        "user_id", "type", "amount", "previous_balance", "new_balance",
+        "reference_type", "reference_id", "description", "created_by",
+        "idempotency_key", "request_fingerprint"
+      ) VALUES (
+        ${request.userId}::uuid, ${request.type}, ${request.signedAmount}, ${wallet.balance}, ${newBalance},
+        ${request.referenceType}, ${request.referenceId}, ${request.description}, ${request.createdBy}::uuid,
+        ${request.idempotencyKey}, ${request.fingerprint}
+      )
+      RETURNING "id", "user_id", "type", "amount", "previous_balance", "new_balance",
+                "idempotency_key", "request_fingerprint", "created_at"
+    `;
+
+    const row = inserted[0];
+    if (row === undefined) {
+      throw new Error('The ledger accepted a row and did not return it');
+    }
+
+    return { kind: 'posted', row };
+  }
+
+  /** A key that was reused for a different intent is a bug worth a record, not a retry. */
+  private async recordMismatch(intent: {
+    readonly userId: string;
+    readonly idempotencyKey: string;
+    readonly type: string;
+    readonly signedAmount: number;
+    readonly createdBy: string | null;
+    readonly fingerprint: string;
+  }): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      await writeIdentityAudit(tx, {
+        action: 'COIN_IDEMPOTENCY_MISMATCH',
+        actorUserId: intent.createdBy,
+        entityType: 'coin_transaction',
+        entityId: null,
+        metadata: {
+          userId: intent.userId,
+          idempotencyKey: intent.idempotencyKey,
+          requestedType: intent.type,
+          requestedAmount: intent.signedAmount,
+          requestedFingerprint: intent.fingerprint,
+        },
+      });
+    });
+  }
+
+  private async settingInt(name: string): Promise<number> {
+    const row = await this.prisma.setting.findUnique({ where: { key: name }, select: { valueInt: true } });
+    if (row === null || row.valueInt === null) {
+      throw new Error(`The ${name} setting is missing`);
+    }
+
+    return row.valueInt;
+  }
+
+  private async settingText(name: string): Promise<string> {
+    const row = await this.prisma.setting.findUnique({ where: { key: name }, select: { valueText: true } });
+    if (row === null || row.valueText === null) {
+      throw new Error(`The ${name} setting is missing`);
+    }
+
+    return row.valueText;
   }
 }
 
