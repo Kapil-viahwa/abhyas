@@ -21,6 +21,8 @@ import { CatalogService } from './catalog/catalog.service';
 import { PublicCatalogController } from './catalog/public.controller';
 import { CatalogRevalidationService } from './catalog/revalidation.service';
 import { CoinService } from './coins/coin.service';
+import { CoinsController, CoinsInternalController } from './coins/coins.controller';
+import { CoinsService } from './coins/coins.service';
 import { CoinsHooksService } from './coins/hooks.service';
 import { loadConfig } from './config/config';
 import { HealthController } from './health/health.controller';
@@ -51,6 +53,8 @@ import { QuestionsService } from './questions/questions.service';
     PublicCatalogController,
     MediaController,
     QuestionsController,
+    CoinsController,
+    CoinsInternalController,
   ],
   providers: [
     { provide: DATABASE_PROBE, useClass: DatabaseService },
@@ -86,6 +90,7 @@ import { QuestionsService } from './questions/questions.service';
     DashboardService,
     CoinService,
     CoinsHooksService,
+    CoinsService,
     CatalogRevalidationService,
     CatalogService,
     {
