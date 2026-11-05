@@ -2,13 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { INestApplicationContext } from '@nestjs/common';
+import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { AuthService } from '../src/auth/auth.service';
 import { hashPassword } from '../src/auth/password';
 import { CoinsHooksService } from '../src/coins/hooks.service';
-import { RedisService } from '../src/infra/redis.service';
 import { businessDate } from '../src/otp/otp-code';
 
 import { createMigratedTestDatabase, type TestDatabase } from './support/database';
@@ -29,6 +30,8 @@ const savedEnv: NodeJS.ProcessEnv = { ...process.env };
 describe('coins never break the flow that calls them', () => {
   let db!: TestDatabase;
   let app!: NestFastifyApplication;
+  let context!: INestApplicationContext;
+  let redis!: Redis;
   let userRoleId!: string;
 
   beforeAll(async () => {
@@ -38,10 +41,16 @@ describe('coins never break the flow that calls them', () => {
     process.env.NODE_ENV = 'test';
     process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
 
+    redis = new Redis(process.env.REDIS_URL);
+    await redis.flushdb();
+
     app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
       logger: ['error'],
     });
     await app.init();
+    // `app.get` on a Fastify application is Fastify's route registrar; the container is
+    // reached through select().
+    context = app.select(AppModule);
 
     const roles = await db.client.$queryRawUnsafe<Array<{ id: string; code: string }>>(
       'SELECT "id", "code" FROM "roles"',
@@ -61,6 +70,7 @@ describe('coins never break the flow that calls them', () => {
 
   afterAll(async () => {
     await app?.close();
+    await redis?.quit();
     await db?.dispose();
 
     for (const name of Object.keys(process.env)) {
@@ -93,7 +103,7 @@ describe('coins never break the flow that calls them', () => {
     await setSetting('daily_reward_coins', 0);
 
     const email = await db.client.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
-    const result = await app.get(AuthService).login({ email: email.email, password: PASSWORD });
+    const result = await context.get(AuthService).login({ email: email.email, password: PASSWORD });
 
     expect(result.accessToken).not.toBe('');
     expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(0);
@@ -107,10 +117,10 @@ describe('coins never break the flow that calls them', () => {
     await db.client.setting.delete({ where: { key: 'daily_reward_coins' } });
 
     const email = await db.client.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
-    const result = await app.get(AuthService).login({ email: email.email, password: PASSWORD });
+    const result = await context.get(AuthService).login({ email: email.email, password: PASSWORD });
     expect(result.accessToken).not.toBe('');
 
-    const counted = await app.get(RedisService).redis.get(`coins:reward_errors:${businessDate(new Date())}`);
+    const counted = await redis.get(`coins:reward_errors:${businessDate(new Date())}`);
     expect(Number(counted ?? '0')).toBeGreaterThanOrEqual(1);
 
     const audit = await db.client.auditLog.findFirst({ where: { action: 'COIN_REWARD_ERROR' } });
@@ -125,7 +135,7 @@ describe('coins never break the flow that calls them', () => {
     const userId = await insertVerifiedUser();
     await setSetting('signup_coins', 0);
 
-    await expect(app.get(CoinsHooksService).grantSafely(userId)).resolves.toBeUndefined();
+    await expect(context.get(CoinsHooksService).grantSafely(userId)).resolves.toBeUndefined();
     expect(await db.client.coinTransaction.count({ where: { userId } })).toBe(0);
 
     await setSetting('signup_coins', 1_000);
@@ -136,7 +146,7 @@ describe('coins never break the flow that calls them', () => {
     const setting = await db.client.setting.findUniqueOrThrow({ where: { key: 'signup_coins' } });
     await db.client.setting.delete({ where: { key: 'signup_coins' } });
 
-    await expect(app.get(CoinsHooksService).grantSafely(userId)).resolves.toBeUndefined();
+    await expect(context.get(CoinsHooksService).grantSafely(userId)).resolves.toBeUndefined();
 
     const audit = await db.client.auditLog.findFirst({
       where: { action: 'COIN_REWARD_ERROR' },
