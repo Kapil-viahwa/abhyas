@@ -1,5 +1,5 @@
 import { OTP_RETENTION_MINUTES } from '../jobs/otp-purge';
-import { OTP_PURGE_JOB } from './maintenance';
+import { COIN_BULK_DRAIN_JOB, OTP_PURGE_JOB } from './maintenance';
 
 /**
  * The repeatable jobs the worker registers on boot.
@@ -8,6 +8,8 @@ import { OTP_PURGE_JOB } from './maintenance';
  * restarted or duplicated worker does not add a second copy of the same work.
  */
 export const OTP_PURGE_INTERVAL_MS = 15 * 60 * 1000;
+/** A queued bulk assignment should start within half a minute of the Administrator's click. */
+export const COIN_BULK_DRAIN_INTERVAL_MS = 30 * 1000;
 
 export interface RepeatableJob {
   readonly name: string;
@@ -29,6 +31,11 @@ export const REPEATABLE_JOBS: readonly RepeatableJob[] = [
     name: OTP_PURGE_JOB,
     every: OTP_PURGE_INTERVAL_MS,
     data: { retentionMinutes: OTP_RETENTION_MINUTES },
+  },
+  {
+    name: COIN_BULK_DRAIN_JOB,
+    every: COIN_BULK_DRAIN_INTERVAL_MS,
+    data: {},
   },
 ];
 

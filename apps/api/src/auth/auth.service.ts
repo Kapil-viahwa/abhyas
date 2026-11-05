@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
+import { CoinsHooksService } from '../coins/hooks.service';
 import { loadConfig } from '../config/config';
 import { webUrlFor } from '../config/links';
 import { DatabaseService } from '../infra/database.service';
@@ -120,6 +121,7 @@ export class AuthService {
     @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
     // Injected by token, so the container never has to infer it from metadata.
     @Inject(RateLimiter) private readonly rateLimiter: RateLimiter,
+    @Inject(CoinsHooksService) private readonly coins: CoinsHooksService,
   ) {
     const config = loadConfig(process.env);
     this.webUrl = webUrlFor(config.NODE_ENV, process.env.WEB_URL);
@@ -221,6 +223,11 @@ export class AuthService {
         },
       });
     });
+
+    // The identifier the setting names has just been verified, so this is the moment the
+    // signup grant is due. It is idempotent (the key is the account), so a replay, a second
+    // verification and a backfill that runs afterwards all change nothing.
+    await this.grantCoinsQuietly(row.userId);
 
     return { status: 'VERIFIED' };
   }
@@ -326,6 +333,11 @@ export class AuthService {
       user.role.code,
     );
 
+    // A grant that failed at verification heals on the next sign-in, before the reward needs
+    // a wallet to pay into.
+    await this.grantCoinsQuietly(user.id);
+    await this.rewardLoginQuietly(user.id);
+
     return {
       accessToken: issued.accessToken,
       accessExpiresAt: issued.accessExpiresAt.toISOString(),
@@ -333,6 +345,18 @@ export class AuthService {
       refreshExpiresAt: issued.refreshExpiresAt.toISOString(),
       user: { id: user.id, email: user.email, roleCode: user.role.code },
     };
+  }
+
+  /**
+   * Coins must never be the reason a verification or a sign-in fails: the hook counts and
+   * audits a failure and the person carries on.
+   */
+  private async grantCoinsQuietly(userId: string): Promise<void> {
+    await this.coins.grantSafely(userId);
+  }
+
+  private async rewardLoginQuietly(userId: string): Promise<void> {
+    await this.coins.rewardSafely(userId);
   }
 
   async logout(user: AuthenticatedUser, meta: RequestMetadata = {}): Promise<LogoutResult> {

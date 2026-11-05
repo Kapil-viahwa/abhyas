@@ -102,6 +102,9 @@ services:
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?S3_ACCESS_KEY_ID is required}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?S3_SECRET_ACCESS_KEY is required}
       S3_FORCE_PATH_STYLE: 'false'
+      # The worker's door into this API: its own secret, and exactly one source address.
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+      INTERNAL_ALLOWED_ADDRESSES: '172.31.0.20/32'
       # The only proxy allowed to state a client address: the web container, by its exact
       # address on this compose network. Never a subnet and never the internet (decision
       # 0052): anything wider would let an address the attacker chooses pick its own bucket.
@@ -222,6 +225,9 @@ services:
       # The worker boots through the same validator as the API, which requires this in
       # production even though the worker never asks for a cache drop itself.
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
+      # Its own secret for the API's internal routes, and never the revalidation one.
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
+      INTERNAL_ALLOWED_ADDRESSES: '172.31.0.20/32'
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
@@ -233,6 +239,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # A fixed address, so the API can name exactly this container as the one allowed to
+    # present the internal secret.
+    networks:
+      default:
+        ipv4_address: 172.31.0.20
     security_opt:
       - no-new-privileges:true
     cap_drop:

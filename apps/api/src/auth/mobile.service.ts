@@ -1,6 +1,7 @@
-import { ConflictException, ForbiddenException, Inject, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
 
+import { CoinsHooksService } from '../coins/hooks.service';
 import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
 import { nationalDigits } from '../otp/otp-code';
@@ -37,10 +38,13 @@ export const MOBILE_LOGIN_UNKNOWN_MESSAGE = 'That number is not registered. Crea
 
 @Injectable()
 export class MobileIdentityService {
+  private readonly logger = new Logger(MobileIdentityService.name);
+
   constructor(
     @Inject(DATABASE_PROBE) private readonly database: DatabaseService,
     @Inject(SESSIONS_SERVICE) private readonly sessions: SessionsService,
     @Inject(OtpService) private readonly otp: OtpService,
+    @Inject(CoinsHooksService) private readonly coins: CoinsHooksService,
   ) {}
 
   private get prisma() {
@@ -127,6 +131,9 @@ export class MobileIdentityService {
       throw new ConflictException(MOBILE_ALREADY_REGISTERED_MESSAGE);
     }
 
+    // A verified mobile is the first verified identifier this account has.
+    await this.grantCoinsQuietly(userId);
+
     return this.signIn(userId, null, 'USER', meta);
   }
 
@@ -192,7 +199,19 @@ export class MobileIdentityService {
       ip: meta.ip ?? null,
     });
 
+    await this.grantCoinsQuietly(userId);
+    await this.rewardLoginQuietly(userId);
+
     return toLoginResult(issued, userId, email, roleCode);
+  }
+
+  /** Coins must never be the reason a sign-up or a sign-in fails; the hook counts them. */
+  private async grantCoinsQuietly(userId: string): Promise<void> {
+    await this.coins.grantSafely(userId);
+  }
+
+  private async rewardLoginQuietly(userId: string): Promise<void> {
+    await this.coins.rewardSafely(userId);
   }
 }
 

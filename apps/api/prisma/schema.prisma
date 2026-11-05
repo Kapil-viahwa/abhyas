@@ -70,6 +70,13 @@ model User {
   questions          Question[]     @relation("QuestionCreator")
   questionVersions   QuestionVersion[] @relation("QuestionVersionAuthor")
   importJobs         ImportJob[]    @relation("ImportJobCreator")
+  coinWallet         CoinWallet?    @relation("CoinWalletOwner")
+  coinTransactions   CoinTransaction[] @relation("CoinLedgerOwner")
+  coinEntriesCreated CoinTransaction[] @relation("CoinLedgerCreator")
+  coinRewards        CoinDailyReward[] @relation("CoinRewardOwner")
+  coinBulkJobs       CoinBulkJob[]    @relation("CoinBulkJobCreator")
+  coinBulkRows       CoinBulkJobRow[] @relation("CoinBulkRowUser")
+  coinAdminRequests  CoinAdminRequest[] @relation("CoinAdminRequestActor")
 
   @@map("users")
 }
@@ -481,4 +488,129 @@ model SmsCostLedger {
 
   @@index([createdAt], map: "sms_cost_ledger_created_at_idx")
   @@map("sms_cost_ledger")
+}
+
+
+/// Phase 5: one wallet per person. The balance is a cache of the ledger — the ledger's
+/// trigger moves it, and a second trigger refuses any other writer.
+model CoinWallet {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique(map: "coin_wallets_user_id_key") @map("user_id") @db.Uuid
+  balance   Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user   User @relation("CoinWalletOwner", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("coin_wallets")
+}
+
+/// Phase 5: the append-only record of what moved and why. One row per intent, keyed by an
+/// idempotency key, so replaying a request returns the row instead of writing a second one.
+model CoinTransaction {
+  id                 String   @id @default(uuid()) @db.Uuid
+  userId             String   @map("user_id") @db.Uuid
+  type               String
+  /// Signed: negative for a charge, positive for a grant or an admin credit.
+  amount             Int
+  previousBalance    Int      @map("previous_balance")
+  newBalance         Int      @map("new_balance")
+  referenceType      String?  @map("reference_type")
+  referenceId        String?  @map("reference_id")
+  description        String?
+  createdBy          String?  @map("created_by") @db.Uuid
+  idempotencyKey     String   @map("idempotency_key")
+  requestFingerprint String   @map("request_fingerprint")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user    User  @relation("CoinLedgerOwner", fields: [userId], references: [id], onDelete: Restrict)
+  creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  dailyReward CoinDailyReward? @relation("CoinRewardEntry")
+  bulkRow     CoinBulkJobRow?  @relation("CoinBulkRowEntry")
+
+  @@unique([userId, idempotencyKey], map: "coin_transactions_user_idempotency_key")
+  @@index([userId, createdAt], map: "coin_transactions_user_created_at_idx")
+  @@index([type, createdAt], map: "coin_transactions_type_created_at_idx")
+  @@map("coin_transactions")
+}
+
+
+/// Phase 5: the daily reward record, one row per person per Asia/Kolkata day. The ledger
+/// row that pays it and this row are written in one transaction, so parallel sign-ins pay
+/// once: `UNIQUE (user_id, reward_date)` is the decision, and the ledger row is the proof.
+model CoinDailyReward {
+  id                String   @id @default(uuid()) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  rewardDate        DateTime @map("reward_date") @db.Date
+  amount            Int
+  coinTransactionId String?  @unique(map: "daily_rewards_coin_transaction_id_key") @map("coin_transaction_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user            User             @relation("CoinRewardOwner", fields: [userId], references: [id], onDelete: Restrict)
+  coinTransaction CoinTransaction? @relation("CoinRewardEntry", fields: [coinTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, rewardDate], map: "daily_rewards_user_date_key")
+  @@map("daily_rewards")
+}
+
+
+/// Phase 5: one Administrator bulk coin assignment. The job row is the record; the worker
+/// drains `QUEUED` jobs and writes one ledger row per person, keyed `<job_id>:<user_id>`, so
+/// a job killed halfway and resumed credits everybody exactly once.
+model CoinBulkJob {
+  id            String    @id @default(uuid()) @db.Uuid
+  createdBy     String    @map("created_by") @db.Uuid
+  amount        Int
+  remark        String
+  status        String    @default("QUEUED")
+  totalUsers    Int       @default(0) @map("total_users")
+  creditedUsers Int       @default(0) @map("credited_users")
+  failedUsers   Int       @default(0) @map("failed_users")
+  errorMessage  String?   @map("error_message")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt     DateTime? @map("started_at") @db.Timestamptz(6)
+  finishedAt    DateTime? @map("finished_at") @db.Timestamptz(6)
+
+  creator User             @relation("CoinBulkJobCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  rows    CoinBulkJobRow[]
+
+  @@index([status, createdAt], map: "coin_bulk_jobs_status_created_at_idx")
+  @@map("coin_bulk_jobs")
+}
+
+/// Phase 5: one person in one bulk assignment, and what happened to them.
+model CoinBulkJobRow {
+  id                String   @id @default(uuid()) @db.Uuid
+  jobId             String   @map("job_id") @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  status            String   @default("PENDING")
+  coinTransactionId String?  @unique(map: "coin_bulk_job_rows_coin_transaction_id_key") @map("coin_transaction_id") @db.Uuid
+  errorMessage      String?  @map("error_message")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job             CoinBulkJob      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user            User             @relation("CoinBulkRowUser", fields: [userId], references: [id], onDelete: Restrict)
+  coinTransaction CoinTransaction? @relation("CoinBulkRowEntry", fields: [coinTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, userId], map: "coin_bulk_job_rows_job_user_key")
+  @@map("coin_bulk_job_rows")
+}
+
+
+/// Phase 5: one Administrator coin write, remembered by the key its form sent. A replay with
+/// the same fingerprint returns the stored answer without writing again; a different request
+/// under the same key is refused and audited.
+model CoinAdminRequest {
+  actorId            String   @map("actor_id") @db.Uuid
+  key                String   @db.Uuid
+  route              String
+  requestFingerprint String   @map("request_fingerprint")
+  response           Json
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  actor User @relation("CoinAdminRequestActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@id([actorId, key], map: "coin_admin_requests_pkey")
+  @@index([createdAt], map: "coin_admin_requests_created_at_idx")
+  @@map("coin_admin_requests")
 }

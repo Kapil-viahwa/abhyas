@@ -29,6 +29,7 @@ code that checks it.
 | `settings.write` | Change platform settings |
 | `coins.read` | Read any user's coin history |
 | `coins.adjust` | Add or deduct coins outside the automatic rules |
+| `coins.write` | Use the Administrator coin tools: adjust, bulk assign, read and export |
 | `audit.read` | Read the audit log |
 | `content.read` | Read content, including unpublished |
 | `content.write` | Create and edit exams, subjects, topics, questions and options |
@@ -53,6 +54,7 @@ code that checks it.
 | `settings.write` | Y | — | — |
 | `coins.read` | Y | — | own only |
 | `coins.adjust` | Y | — | — |
+| `coins.write` | Y | — | — |
 | `audit.read` | Y | — | — |
 | `content.read` | Y | Y | published only |
 | `content.write` | Y | by flag | — |
@@ -114,6 +116,8 @@ capability it was issued under.
 | Audit viewer: filter by actor, action and date range, page, and export; read-only by construction and the export is audited | 3 | Done |
 | Admin dashboard with real counts of what exists today | 3 | Done |
 | Object-level rules for questions, tests and attempts | with the resource (phases 4–5) | Not yet |
+| `coins.write` on every Administrator coin route: search, adjust, bulk preview/start/status/report, ledger and export; an editor and a student are refused on all of them | 5 | Done, by migration (`20261101000000`) and the sweep in `coins-admin.test.ts` |
+| The worker's bulk drain is `@Public()` with a shared-secret check that answers 404, so it carries no session and no permission | 5 | Done |
 
 
 

@@ -85,6 +85,10 @@ services:
       EMAIL_PROVIDER: console
       # Shared with the web tier: the API asks it to drop cached catalog pages.
       REVALIDATE_SECRET: dev-only-revalidate-secret
+      # The worker's own secret for the internal routes, and the only address allowed to
+      # present it. It is not the revalidation secret (phase 5, item 3b).
+      INTERNAL_API_SECRET: dev-only-internal-api-secret-please-change
+      INTERNAL_ALLOWED_ADDRESSES: 127.0.0.1/32
       # The web container's own address, so revalidation works from inside the network.
       REVALIDATE_URL: http://web:3000/api/revalidate
       # Public base URL of the web app, used for links in email.
@@ -180,6 +184,9 @@ services:
       SMS_PROVIDER: fake
       EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
+      # The worker's own secret for the API's internal routes, never the revalidation one.
+      INTERNAL_API_SECRET: dev-only-internal-api-secret-please-change
+      INTERNAL_ALLOWED_ADDRESSES: 127.0.0.1/32
       # The import job stores images through the same private bucket as the API.
       S3_ENDPOINT: http://s3mock:9090
       S3_REGION: us-east-1

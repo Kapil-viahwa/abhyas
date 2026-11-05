@@ -33,6 +33,8 @@ const DUMMIES: Record<string, string> = {
   AUTH_SECRET: 'compose-check-auth-secret-0123456789abcdef',
   OTP_HMAC_SECRET: 'compose-check-otp-secret-0123456789abcdef',
   REVALIDATE_SECRET: 'compose-check-revalidate-secret',
+  INTERNAL_API_SECRET: 'compose-check-internal-api-secret-0123456789',
+  INTERNAL_ALLOWED_ADDRESSES: '172.31.0.20/32',
   TURNSTILE_SECRET_KEY: 'compose-check-turnstile-secret',
   TURNSTILE_SITE_KEY: 'compose-check-turnstile-site-key',
   WEB_URL: 'https://abhyas.example.com',

@@ -1341,3 +1341,142 @@ with the password carried in `REDIS_URL`, and postgres and redis pinned by manif
 digest. `scripts/validate-compose-prod.mjs` fails the `docker` job when any of that drifts.
 Containers still run as root and the images still copy the whole workspace: both stay in
 `PROGRESS.md`'s Known gaps.
+
+
+## 0060 — The coin wallet is a cache of an append-only ledger
+
+**Decided in phase 5, item 1. Date: phase 5.**
+
+**One writer.** `CoinService` (`apps/api/src/coins/coin.service.ts`) is the only code that
+writes `coin_transactions`, and it only writes movements: a type, a signed amount, an
+optional reference, an idempotency key and who caused it. It never takes a balance from a
+caller, and `new_balance` is computed from the wallet row it locked with `SELECT ... FOR
+UPDATE`.
+
+**The database keeps the wallet honest.** A `BEFORE INSERT` trigger on the ledger locks the
+wallet, refuses a row whose `previous_balance` is not that wallet's current balance, and
+moves the wallet to `new_balance` inside the same statement; CHECK constraints then require
+`new_balance = previous_balance + amount`, `amount <> 0` and both balances non-negative. A
+second trigger refuses a wallet balance change that did not come from the ledger for the
+application role (`pg_trigger_depth()` tells the two apart), so the API can post entries but
+cannot move a balance. The table's owner can still repair a wallet deliberately, and the
+nightly reconciliation (item 4) reports any wallet that no longer matches its ledger rather
+than hiding it.
+
+**Append-only, twice over.** `UPDATE` and `DELETE` on the ledger raise
+`insufficient_privilege`, and `abhyas_app` holds only `SELECT` and `INSERT` on it — the same
+pair of rules the audit log has carried since phase 1.
+
+**One key, one intent.** `UNIQUE (user_id, idempotency_key)` plus a `request_fingerprint`
+(SHA-256 of type, amount and reference). Replaying a key with the same fingerprint returns
+the original row and writes nothing; replaying it with a different amount, type or reference
+is answered `409` and audited as `COIN_IDEMPOTENCY_MISMATCH`, because two intents wearing one
+key is a bug, not a retry.
+
+**Proof.** `apps/api/test/coins-ledger.test.ts` proves the CHECK constraints, the append-only
+trigger, the application role's privileges (and that it cannot move a wallet balance
+directly), a `previous_balance` mismatch, a replayed key, a reused key with a different
+amount, and fifty parallel spends against a balance that affords ten: exactly ten are
+charged, forty are refused, and the balance never goes below zero.
+
+
+## 0061 — A wallet starts at zero, and the stopgap the ledger still needs
+
+**Decided in phase 5, item 1b (review findings).**
+
+**An insert is a write too.** The ledger already refused to let the application role move a
+wallet's balance. It did not stop the same role *opening* a wallet with one, which is the same
+hole one statement earlier. `coin_wallets_start_at_zero` refuses a non-zero `balance` on
+`INSERT` for any role except the table's owner, and `coins-ledger.test.ts` proves it with
+`SET ROLE abhyas_app`.
+
+**The guard is a stopgap, and here is what replaces it.** Both wallet guards tell the honest
+writer from a direct one by `pg_trigger_depth()` and by comparing `current_user` with the
+table's owner. That works, but it is a heuristic about *how* a statement arrived rather than a
+privilege the role does not hold: any future trigger that writes the wallet would inherit the
+same permission, and a role renamed in a deployment would quietly change who is refused. The
+preferred design is the one the audit log already uses in spirit: move the wallet write into a
+`SECURITY DEFINER` function owned by the migration role, grant `abhyas_app` `SELECT` and
+`INSERT` on `coin_wallets` only, and take away `UPDATE` altogether. Then the application
+cannot move a balance by any path because it has no privilege to, no trigger-depth check is
+needed, and the guarantee survives a rename or a new trigger. It is recorded here as the next
+piece of ledger work rather than done now, because it changes the shape of `CoinService`'s
+transaction and belongs with the admin tools that will exercise it.
+
+**One of a thing, not one of a request.** The idempotency key stops the same request being
+written twice; it never stopped two different requests asking for the same thing. Two partial
+unique indexes now say what the ledger means: one `SIGNUP_GRANT` per `user_id`, and one
+`ENROLLMENT` per `(reference_type, reference_id)`. `CoinService.grantSignupCoins` treats the
+first as *already granted* and returns the row that exists, because a caller reaching it with a
+different key has asked a question whose answer is the grant already there.
+
+**History is not rewritten, not even by a delete.** `coin_transactions.created_by` is
+`ON DELETE RESTRICT` like every other reference from the ledger: an append-only row that forgot
+who caused it would be a rewrite by another name. A single entry is also bounded
+(`abs(amount) <= 1000000`), so a malformed admin request or a bad bulk job cannot move a
+surreal number in one statement; bulk work composes several bounded entries instead.
+
+**Proof.** `apps/api/test/coins-ledger.test.ts` (the insert guard, both partial indexes, the
+restrict foreign key, the amount bound, 404 for an unknown account, and twenty parallel credits
+on one key) and `apps/api/test/coin-grants.test.ts` (a grant another path wrote is read back,
+not refused).
+
+
+## 0062 — One mailbox, one grant — and the farming risk that remains
+
+**Decided in phase 5, item 2b (review findings).**
+
+**The identity a grant is paid against is not always the address typed.** Gmail ignores dots
+in the local part and everything from a plus onwards, and googlemail.com is gmail.com, so
+`a+1@gmail.com` and `a.b@gmail.com` are one inbox. `coin_grant_identities` records the
+normalised identity a grant paid out against, keyed `(kind, value)` and written inside the
+same transaction as the ledger row: a second account spelling the same mailbox differently
+finds the key taken and earns nothing, without an error and without a second grant. The
+address a person signs in with is untouched — this value is for grant eligibility only.
+
+**The email-only grant is a farming risk until OTP is on.** With `signup_grant_requirement`
+at `email`, one person can register a second account with a mailbox they control at another
+domain (or a domain whose dots are significant) and earn the 1,000 coins again. The index
+above closes the Gmail spelling, not the business model: a disposable-address domain defeats
+it. Before launch, either `signup_coins` should be lowered for accounts that have verified
+only an email (the mobile requirement paying the full amount), or the requirement should be
+`mobile` once SMS is live. Recorded here rather than solved, because the fix is a product
+decision about the launch economics, and `signup_coins` is a setting an Administrator can
+already change without a deployment.
+
+**Proof.** `apps/api/src/coins/email-identity.spec.ts` (unit) and
+`apps/api/test/coin-grants.test.ts` (`lets one Gmail mailbox earn the grant once, however it
+is spelled`), plus `coin-safety.test.ts` for the rule that a coin failure never breaks the
+flow that called it: a 0 setting means disabled, a missing setting row is counted and
+audited as `COIN_REWARD_ERROR` with a kind and an error class only, and a sign-in or
+verification still succeeds.
+
+
+
+## 0063 — The bulk drain is a poller over database state, not a queue of its own
+
+**Decided in phase 5, item 3b.**
+
+**Why not BullMQ.** The obvious shape for a bulk assignment is one BullMQ job per person.
+That would make the queue the record of who has been paid, and BullMQ is at-least-once: a
+worker that dies after writing a ledger row but before acknowledging would be handed the
+same job again. It would also put the decision of *how far the job has got* in Redis, where
+the status screen cannot read it and a flushed Redis loses it. The job row and its
+per-person rows are already in Postgres, already carry the counts, and already survive a
+restart.
+
+**What runs instead.** `coin_bulk_jobs` and `coin_bulk_job_rows` are the queue. The worker's
+repeatable drain finds `QUEUED` and `RUNNING` jobs and asks the API to run one batch of each,
+because the ledger has exactly one writer and it lives in the API. Each batch takes the next
+`PENDING` rows and writes one ledger row per person keyed `<job_id>:<user_id>`; the wallet's
+unique `(user_id, idempotency_key)` plus the fingerprint turns a retry into a replay, not a
+second credit. A job killed halfway resumes from the first row still `PENDING`, and two
+drains running the same job at once credit each person exactly once — proven in
+`apps/api/test/coins-admin.test.ts`.
+
+**The cost that comes with it.** A poller spends a query every thirty seconds whether there
+is work or not, and a broken job would be retried forever unless something gives up. So the
+drain bounds each API call at fifteen seconds, logs when it hits its round cap rather than
+pretending the job is finished, counts consecutive failed drains per job, marks the job
+`FAILED` after five, and raises a Redis alert counter for the operator
+(`apps/worker/src/jobs/coin-bulk.spec.ts`).
