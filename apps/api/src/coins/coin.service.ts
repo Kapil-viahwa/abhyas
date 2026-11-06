@@ -377,12 +377,15 @@ export class CoinService {
    * An Administrator's single add or deduct.
    *
    * The remark is mandatory because a ledger row that says nothing is not an explanation,
-   * the amount is capped by a setting, and the entry names its author. The key is fresh per
-   * action: two clicks are two decisions, and the audit trail should show both.
+   * the amount is capped by a setting, and the entry names its author. The ledger key is the
+   * Administrator's own submission key when the caller has one (`admin:<actor>:<key>`), so a
+   * form submitted twice — even twice at once — is one decision and one ledger row; without
+   * one, the key is fresh per action.
    */
   async adjust(
     actor: { readonly id: string; readonly roleCode: string },
     input: { readonly userId: string; readonly amount: number; readonly remark: string },
+    options: { readonly idempotencyKey?: string } = {},
   ): Promise<CoinEntryResult> {
     const userId = accountId(input.userId);
     const amount = magnitude(Math.abs(input.amount));
@@ -407,7 +410,7 @@ export class CoinService {
         userId,
         amount,
         type: isCredit ? 'ADMIN_CREDIT' : 'ADMIN_DEBIT',
-        idempotencyKey: `admin:${randomUUID()}`,
+        idempotencyKey: options.idempotencyKey ?? `admin:${randomUUID()}`,
         reference: { type: 'admin_adjustment', id: actor.id },
         description: remark,
         createdBy: actor.id,
@@ -415,15 +418,18 @@ export class CoinService {
       isCredit ? 'credit' : 'debit',
     );
 
-    // The decision, not just the movement: who, which account, how much and which way.
-    await writeIdentityAudit(this.prisma, {
-      action: 'COIN_ADJUSTED',
-      actorUserId: actor.id,
-      actorRole: actor.roleCode,
-      entityType: 'coin_transaction',
-      entityId: result.id,
-      metadata: { userId, amount: isCredit ? amount : -amount, direction: isCredit ? 'credit' : 'debit' },
-    });
+    // The decision, not just the movement: who, which account, how much and which way. A
+    // replay is the first submission's decision already recorded, so it is not written again.
+    if (!result.replayed) {
+      await writeIdentityAudit(this.prisma, {
+        action: 'COIN_ADJUSTED',
+        actorUserId: actor.id,
+        actorRole: actor.roleCode,
+        entityType: 'coin_transaction',
+        entityId: result.id,
+        metadata: { userId, amount: isCredit ? amount : -amount, direction: isCredit ? 'credit' : 'debit' },
+      });
+    }
 
     return result;
   }

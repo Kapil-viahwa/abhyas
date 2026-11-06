@@ -63,6 +63,7 @@ export default async function AuditPage({ searchParams }: PageProps): Promise<Re
   return (
     <AdminPage
       csrf={csrf}
+      permissions={session.profile.permissions}
       current="/admin/audit"
       title="Audit trail"
       subtitle="Append-only. Nothing here can be edited or deleted, and exporting a copy is itself recorded."

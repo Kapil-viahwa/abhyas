@@ -157,6 +157,22 @@ export async function loadRoleSession(nextPath: string, roles: readonly string[]
   return session;
 }
 
+/**
+ * A page that needs one capability, checked here before anything is rendered.
+ *
+ * The API refuses every route this gates anyway; this is what stops a page rendering an
+ * empty shell — or a form that cannot work — to somebody who may not use it.
+ */
+export async function loadPermissionSession(nextPath: string, permission: string): Promise<LoadedSession> {
+  const session = await loadSession(nextPath);
+
+  if (!session.profile.permissions.includes(permission)) {
+    redirect('/account?denied=1');
+  }
+
+  return session;
+}
+
 export async function loadSessions(accessToken: string): Promise<readonly SessionRow[]> {
   const result = await apiCall<{ sessions: SessionRow[] }>('/v1/auth/sessions', { method: 'GET', accessToken });
   return result.status === 200 && result.body !== null ? result.body.sessions : [];

@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 
 import { expect, test, type Page } from '@playwright/test';
 
+import { setCoinSetting } from './coin-settings';
+
 /**
  * The student wallet page (phase 5, item 4b): the grant, the daily reward and the history a
  * student actually sees. The daily reward is switched off for the registration step so the
@@ -55,35 +57,7 @@ async function signIn(page: Page, email: string): Promise<void> {
   await page.waitForURL(/\/account/);
 }
 
-/** The two settings the wallet page's numbers come from. */
-type CoinSetting = 'signup_coins' | 'daily_reward_coins';
-
-/**
- * A fixture, like the role switch in the auth spec: one statement against the stack's
- * database. It upserts and reads the value back, so a fixture that did not land fails here
- * with its own message instead of surfacing as a wrong balance two screens later.
- */
-function setCoinSetting(key: CoinSetting, value: number): void {
-  const sql = [
-    'DO $$',
-    'DECLARE landed integer;',
-    'BEGIN',
-    '  INSERT INTO settings (key, value_type, value_int)',
-    `  VALUES ('${key}', 'integer', ${String(value)})`,
-    '  ON CONFLICT (key) DO UPDATE SET value_int = EXCLUDED.value_int',
-    '  RETURNING value_int INTO landed;',
-    `  IF landed IS DISTINCT FROM ${String(value)} THEN`,
-    `    RAISE EXCEPTION '${key} did not land at ${String(value)} (it is %)', landed;`,
-    '  END IF;',
-    'END $$;',
-  ].join('\n');
-
-  execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'abhyas', '-d', 'abhyas', '-v', 'ON_ERROR_STOP=1', '-c', sql],
-    { cwd: process.cwd(), encoding: 'utf8' },
-  );
-}
+/** The two settings the wallet page's numbers come from, pinned by `./coin-settings`. */
 
 test.describe.serial('the student wallet', () => {
   const email = `wallet-e2e-${randomUUID().slice(0, 8)}@example.com`;

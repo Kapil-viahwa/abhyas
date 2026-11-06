@@ -21,7 +21,7 @@ const FLAG_FIELDS = [
 ] as const;
 
 export default async function NewEditorPage({ searchParams }: PageProps): Promise<ReactElement> {
-  await loadRoleSession('/admin/users/new', ['ADMIN']);
+  const session = await loadRoleSession('/admin/users/new', ['ADMIN']);
   const csrf = await csrfFromCookies();
   const params = await searchParams;
   const error = typeof params.error === 'string' ? params.error : undefined;
@@ -29,6 +29,7 @@ export default async function NewEditorPage({ searchParams }: PageProps): Promis
   return (
     <AdminPage
       csrf={csrf}
+      permissions={session.profile.permissions}
       current="/admin/users/new"
       title="Create an editor"
       subtitle="Capabilities are explicit: a box that is not ticked is not granted."

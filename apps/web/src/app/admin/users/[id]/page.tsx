@@ -40,6 +40,7 @@ export default async function AdminUserDetailPage({ params, searchParams }: Page
   return (
     <AdminPage
       csrf={csrf}
+      permissions={session.profile.permissions}
       current="/admin/users"
       title={user.email ?? user.fullName}
       subtitle={`${user.fullName} · ${user.roleCode}`}

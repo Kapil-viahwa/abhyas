@@ -6,11 +6,23 @@ import { secondaryButtonClass } from './auth-shell';
 /**
  * The chrome every administration screen shares. It is deliberately small and wraps on
  * a narrow screen: the admin screens are tables and forms first, navigation second.
+ *
+ * The coin tools appear only for an account that holds `coins.write`: the pages check the
+ * same permission on the server, and the API checks it on every route they call.
  */
-export function AdminNav({ csrf, current }: { readonly csrf: string; readonly current: string }): ReactElement {
+export function AdminNav({
+  csrf,
+  current,
+  permissions,
+}: {
+  readonly csrf: string;
+  readonly current: string;
+  readonly permissions?: readonly string[] | undefined;
+}): ReactElement {
   const links = [
     { href: '/admin', label: 'Overview' },
     { href: '/admin/users', label: 'Users' },
+    ...(permissions?.includes('coins.write') === true ? [{ href: '/admin/coins', label: 'Coins' }] : []),
     { href: '/admin/catalog', label: 'Catalog' },
     { href: '/editor/questions', label: 'Question bank' },
     { href: '/admin/settings', label: 'Settings' },
@@ -52,19 +64,21 @@ export function AdminNav({ csrf, current }: { readonly csrf: string; readonly cu
 export function AdminPage({
   csrf,
   current,
+  permissions,
   title,
   subtitle,
   children,
 }: {
   readonly csrf: string;
   readonly current: string;
+  readonly permissions?: readonly string[] | undefined;
   readonly title: string;
   readonly subtitle: string;
   readonly children: ReactNode;
 }): ReactElement {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-12">
-      <AdminNav csrf={csrf} current={current} />
+      <AdminNav csrf={csrf} current={current} permissions={permissions} />
 
       <header className="space-y-1">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Administration</p>

@@ -14,6 +14,11 @@ export interface ApiCallOptions {
   /** The end user's address, forwarded so the API's per-IP limits follow the person. */
   readonly clientIp?: string | undefined;
   /**
+   * Extra request headers, such as a form's `Idempotency-Key`. `accept`, `authorization`,
+   * `content-type` and the client-address header are always this tier's own and win.
+   */
+  readonly headers?: Readonly<Record<string, string>> | undefined;
+  /**
    * Cache the response under these Next cache tags instead of treating it as uncached.
    * Public catalog pages use this so /api/revalidate can drop them after a write.
    */
@@ -83,7 +88,7 @@ async function readCapped(response: Response): Promise<string | null> {
 }
 
 export async function apiCall<T>(path: string, options: ApiCallOptions): Promise<ApiResult<T>> {
-  const headers: Record<string, string> = { accept: 'application/json' };
+  const headers: Record<string, string> = { ...options.headers, accept: 'application/json' };
   const cached = options.tags !== undefined && options.tags.length > 0;
   const authenticated = options.accessToken !== undefined && options.accessToken !== '';
 
