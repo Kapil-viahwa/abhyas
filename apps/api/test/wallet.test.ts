@@ -46,6 +46,7 @@ describe('the student wallet', () => {
 
     // The shared bootstrap, so the test runs against the adapter options the process uses.
     ({ app } = await createApiApplication({ logger: ['error'] }));
+    await app.init();
     context = app.select(AppModule);
   }, 180_000);
 

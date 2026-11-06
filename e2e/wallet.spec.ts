@@ -53,6 +53,7 @@ function setDailyReward(value: number): void {
   execFileSync(
     'docker',
     [
+      'compose',
       'exec',
       '-T',
       'postgres',
