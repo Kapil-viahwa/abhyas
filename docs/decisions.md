@@ -1609,7 +1609,11 @@ own `timeout-minutes: 8`, close to the healthy cost and far below the job cap, w
 on failure: a stalled CDN now fails in minutes with "the Chromium download failed once; retrying
 once" and the step's own timeout, not at the job cap with nothing to read.
 
-**What is still unproven.** The first run of any branch is a cache miss by definition; the hit
-only shows on a later run of the same branch, and this decision is written before that run
-exists. If the hit does not materialise, the cache is removed and the install keeps only its
-timeout and retry. The claim table entry in `PROGRESS.md` names the runs once they exist.
+**What the two runs showed.** The first run of `ci/playwright-browser-cache` (`59fd58f`, run
+42200948401, attempt 1) was a miss: the restore step took 0s, the install 21s, and the post step
+saved `playwright-Linux-1.64.1` at 293 MB. The re-run of the same `e2e` job (attempt 2, no code
+change) restored that cache in **4s** and ran `install-deps` in **11s**; both runs were green,
+9/9. A hit is not automatically faster on a good day — the miss downloaded in 21s — but a hit
+does not touch the browser CDN at all, which is where the 9m22s and 11m16s went. If a later hit
+ever fails to launch the restored browser, the cache is removed and the install keeps only its
+timeout and retry.
