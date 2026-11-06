@@ -50,15 +50,15 @@ services:
       timeout: 5s
       retries: 20
 
-  # One-shot migrations, as the owner role. Kept out of `up` by a profile so the
-  # stack still starts with one command; run it explicitly once Postgres is up:
-  #   docker compose run --rm migrate
+  # One-shot migrations, as the owner role. It runs as part of `up`, and the API and the
+  # worker wait for it to finish before they start, so neither can meet a schema older than
+  # its code; the worker used to boot first and log a table that did not exist yet.
+  #   docker compose run --rm migrate     # also works on its own, once Postgres is up
   # The API itself never migrates and connects as the application role.
   migrate:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    profiles: ['tools']
     command:
       ['sh', '-c', 'cd /repo/apps/api && node node_modules/prisma/build/index.js migrate deploy']
     environment:
@@ -112,6 +112,9 @@ services:
     ports:
       - '3001:3001'
     depends_on:
+      # Migrations first: the schema is never older than the code that reads it.
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -195,6 +198,8 @@ services:
       S3_SECRET_ACCESS_KEY: abhyas-dev-secret
       S3_FORCE_PATH_STYLE: 'true'
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       s3mock:
