@@ -22,6 +22,7 @@ import { createMigratedTestDatabase, type TestDatabase } from './support/databas
 interface Fixture {
   readonly examId: string;
   readonly adminId: string;
+  readonly admin2Id: string;
   readonly editorId: string;
   readonly studentId: string;
 }
@@ -53,6 +54,8 @@ describe('phase 6 test model and enrollment', () => {
     };
 
     const adminId = await person('ADMIN', 'admin');
+    // A second administrator, because the database refuses a self-granted permission.
+    const admin2Id = await person('ADMIN', 'admin2');
     const editorId = await person('EDITOR', 'editor');
     const studentId = await person('USER', 'student');
 
@@ -71,7 +74,7 @@ describe('phase 6 test model and enrollment', () => {
       select: { id: true },
     });
 
-    fixture = { examId: exam.id, adminId, editorId, studentId };
+    fixture = { examId: exam.id, adminId, admin2Id, editorId, studentId };
   }, 120_000);
 
   afterAll(async () => {
@@ -159,7 +162,7 @@ describe('phase 6 test model and enrollment', () => {
         referenceType: 'enrollment',
         referenceId: randomUUID(),
         idempotencyKey: `enroll:${randomUUID()}`,
-        requestFingerprint: randomUUID(),
+        requestFingerprint: randomUUID().replace(/-/g, '').repeat(2),
       },
       select: { id: true },
     });
@@ -183,7 +186,7 @@ describe('phase 6 test model and enrollment', () => {
         previousBalance: wallet.balance,
         newBalance: wallet.balance + 10,
         idempotencyKey: `admin:${randomUUID()}`,
-        requestFingerprint: randomUUID(),
+        requestFingerprint: randomUUID().replace(/-/g, '').repeat(2),
       },
       select: { id: true },
     });
@@ -435,11 +438,12 @@ describe('phase 6 test model and enrollment', () => {
         }),
       ).rejects.toThrow(/Editor capability may only be granted to an EDITOR account/);
 
-      // An administrator may hold it: the rule is about the role, not the code.
+      // An administrator may hold it: the rule is about the role, not the code. The grant is
+      // made by the other administrator, because a self-grant is refused outright.
       await expect(
         db.client.userPermission.create({
           data: {
-            userId: fixture.adminId,
+            userId: fixture.admin2Id,
             permissionId: await permissionId('tests.publish'),
             grantedBy: fixture.adminId,
           },
