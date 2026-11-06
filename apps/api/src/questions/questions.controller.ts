@@ -19,8 +19,10 @@ import { parseQuestionBody, parseQuestionQuery } from './validation';
  * Question authoring for editors who hold the right flags, and for administrators.
  *
  * Reading needs `content.read` (the editor role carries it); writing needs
- * `content.write` (the manage-questions flag); publishing needs `tests.publish` (the
- * publish-tests flag). Ownership is checked in the service.
+ * `content.write` (the manage-questions flag); publishing needs `content.publish`, which the
+ * EDITOR role carries — publishing a question is a content action. Publishing a *test* is
+ * `tests.publish`, an Administrator's alone (decision 0069). Ownership is checked in the
+ * service.
  */
 @ApiTags('questions')
 @Controller('v1/questions')
@@ -90,7 +92,7 @@ export class QuestionsController {
     return this.questions.saveDraft(actor, parseUuid(id, 'question id'), parseQuestionBody(body), requestMeta(request));
   }
 
-  @RequirePermissions('tests.publish')
+  @RequirePermissions('content.publish')
   @Post(':id/publish')
   @HttpCode(200)
   @ApiOperation({ summary: 'Publish the current draft, freezing that version' })

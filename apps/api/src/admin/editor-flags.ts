@@ -1,27 +1,26 @@
 /**
- * The three capabilities an Administrator can give an editor, and the permission
- * codes they map to.
+ * The two capabilities an Administrator can give an editor, and the permission codes they
+ * map to.
  *
- * A flag is not a stored column: it is a row in `user_permissions`. An editor with
- * no row for a flag does not hold that capability at all, which is why an omitted
- * flag is a denial rather than a default. The database enforces both halves of that
- * rule (see migration 20250601000000_user_management).
+ * A flag is not a stored column: it is a row in `user_permissions`. An editor with no row for
+ * a flag does not hold that capability at all, which is why an omitted flag is a denial
+ * rather than a default. The database enforces both halves of that rule (see migration
+ * 20250601000000_user_management, tightened by 20270101000000_tests_and_enrollments).
+ *
+ * Publishing a test is not a flag: `tests.publish` belongs to an Administrator alone
+ * (decision 0069). Publishing a question is a content action and travels with the role, as
+ * `content.publish`.
  */
 export const EDITOR_FLAG_PERMISSIONS = {
   manage_questions: 'content.write',
   manage_tests: 'tests.write',
-  publish_tests: 'tests.publish',
 } as const;
 
 export type EditorFlag = keyof typeof EDITOR_FLAG_PERMISSIONS;
 
 export type EditorFlags = Record<EditorFlag, boolean>;
 
-export const EDITOR_FLAGS: readonly EditorFlag[] = [
-  'manage_questions',
-  'manage_tests',
-  'publish_tests',
-];
+export const EDITOR_FLAGS: readonly EditorFlag[] = ['manage_questions', 'manage_tests'];
 
 /** The permission codes editor flags are allowed to touch, in one place. */
 export const EDITOR_FLAG_CODES: readonly string[] = Object.values(EDITOR_FLAG_PERMISSIONS);
@@ -29,7 +28,6 @@ export const EDITOR_FLAG_CODES: readonly string[] = Object.values(EDITOR_FLAG_PE
 export const EMPTY_EDITOR_FLAGS: EditorFlags = {
   manage_questions: false,
   manage_tests: false,
-  publish_tests: false,
 };
 
 /** Which flags a set of granted permission codes represents. */

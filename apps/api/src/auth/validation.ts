@@ -410,7 +410,6 @@ export function parseEditorFlags(record: Record<string, unknown>): EditorFlags {
   return {
     manage_questions: record.manage_questions === true,
     manage_tests: record.manage_tests === true,
-    publish_tests: record.publish_tests === true,
   };
 }
 

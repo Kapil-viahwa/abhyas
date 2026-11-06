@@ -238,7 +238,7 @@ describe('user administration over HTTP', () => {
       expect(body.activeSessions).toBe(1);
       expect(body.editorFlags.manage_questions).toBe(true);
       // An omitted flag is a denial, and the read side says so.
-      expect(body.editorFlags.publish_tests).toBe(false);
+      expect(body.editorFlags.manage_tests).toBe(false);
     });
   });
 
@@ -252,7 +252,7 @@ describe('user administration over HTTP', () => {
         fullName: 'New Editor',
         password: PASSWORD,
         manage_questions: true,
-        publish_tests: true,
+        manage_tests: true,
       });
 
       expect(response.statusCode).toBe(201);
@@ -265,9 +265,9 @@ describe('user administration over HTTP', () => {
       expect(body.roleCode).toBe('EDITOR');
       expect(body.editorFlags.manage_questions).toBe(true);
       expect(body.editorFlags.manage_tests).toBe(false);
-      expect(body.editorFlags.publish_tests).toBe(true);
+      expect(body.editorFlags.manage_tests).toBe(true);
 
-      expect(new Set(await codesOf(body.id))).toEqual(new Set(['content.write', 'tests.publish']));
+      expect(new Set(await codesOf(body.id))).toEqual(new Set(['content.write', 'tests.write']));
 
       const audit = await db.client.auditLog.findFirst({
         where: { action: 'IDENTITY_EDITOR_CREATED', entityId: body.id },

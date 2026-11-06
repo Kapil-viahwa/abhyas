@@ -163,11 +163,11 @@ describe('user administration input validation', () => {
   it('treats a missing editor flag as an explicit denial', () => {
     const flags = parseEditorFlagsBody({ manage_questions: true });
 
-    expect(flags).toEqual({ manage_questions: true, manage_tests: false, publish_tests: false });
+    expect(flags).toEqual({ manage_questions: true, manage_tests: false });
+    // Phase 6 retired `publish_tests`; a body that still sends it grants nothing.
     expect(parseEditorFlagsBody({ manage_questions: 'true', publish_tests: 'on' })).toEqual({
       manage_questions: false,
       manage_tests: false,
-      publish_tests: false,
     });
   });
 

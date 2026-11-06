@@ -10,7 +10,6 @@ import { apiCall } from './upstream';
 export interface EditorFlags {
   readonly manage_questions: boolean;
   readonly manage_tests: boolean;
-  readonly publish_tests: boolean;
 }
 
 export interface UserSummary {
@@ -98,7 +97,6 @@ export function createEditor(accessToken: string, clientIp: string | undefined, 
       password: input.password,
       manage_questions: input.flags.manage_questions,
       manage_tests: input.flags.manage_tests,
-      publish_tests: input.flags.publish_tests,
     },
   });
 }
@@ -116,7 +114,6 @@ export function updateEditorFlags(
     body: {
       manage_questions: flags.manage_questions,
       manage_tests: flags.manage_tests,
-      publish_tests: flags.publish_tests,
     },
   });
 }
@@ -150,9 +147,6 @@ export function flagLabels(flags: EditorFlags): readonly string[] {
   }
   if (flags.manage_tests) {
     labels.push('Tests');
-  }
-  if (flags.publish_tests) {
-    labels.push('Publish');
   }
   return labels;
 }
