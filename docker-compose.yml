@@ -86,9 +86,11 @@ services:
       # Shared with the web tier: the API asks it to drop cached catalog pages.
       REVALIDATE_SECRET: dev-only-revalidate-secret
       # The worker's own secret for the internal routes, and the only address allowed to
-      # present it. It is not the revalidation secret (phase 5, item 3b).
+      # present it. It is not the revalidation secret (phase 5, item 3b). The block is the
+      # compose network pinned below: a container cannot reach the API from 127.0.0.1, and a
+      # block wider than /24 is refused by the shared validator.
       INTERNAL_API_SECRET: dev-only-internal-api-secret-please-change
-      INTERNAL_ALLOWED_ADDRESSES: 127.0.0.1/32
+      INTERNAL_ALLOWED_ADDRESSES: 10.213.0.0/24
       # The web container's own address, so revalidation works from inside the network.
       REVALIDATE_URL: http://web:3000/api/revalidate
       # Public base URL of the web app, used for links in email.
@@ -188,8 +190,10 @@ services:
       EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
       # The worker's own secret for the API's internal routes, never the revalidation one.
+      # The allowed block is the compose network pinned below, not loopback: the worker is
+      # another container, and a /24 is as wide as the validator accepts.
       INTERNAL_API_SECRET: dev-only-internal-api-secret-please-change
-      INTERNAL_ALLOWED_ADDRESSES: 127.0.0.1/32
+      INTERNAL_ALLOWED_ADDRESSES: 10.213.0.0/24
       # The import job stores images through the same private bucket as the API.
       S3_ENDPOINT: http://s3mock:9090
       S3_REGION: us-east-1
@@ -204,6 +208,15 @@ services:
         condition: service_healthy
       s3mock:
         condition: service_healthy
+
+networks:
+  # A fixed /24, because the worker calls the API's internal routes from inside the network
+  # and `INTERNAL_ALLOWED_ADDRESSES` refuses a block wider than /24. Without it Compose
+  # picks a /16, no container address can be listed, and every drain answers 404.
+  default:
+    ipam:
+      config:
+        - subnet: 10.213.0.0/24
 
 volumes:
   pgdata:

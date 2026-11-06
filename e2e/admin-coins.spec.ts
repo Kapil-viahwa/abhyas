@@ -191,6 +191,10 @@ test.describe.serial('the administrator coin screens', () => {
   });
 
   test('credits several accounts from a CSV and reports the row that matched nothing', async ({ page }) => {
+    // The worker drains every thirty seconds, so this is the one test that outlives the
+    // project's thirty-second default.
+    test.setTimeout(180_000);
+
     await signIn(page, ADMIN_EMAIL, ADMIN_LOGIN);
     await page.goto('/admin/coins/bulk');
 
