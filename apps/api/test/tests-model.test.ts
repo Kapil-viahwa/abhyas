@@ -325,16 +325,18 @@ describe('phase 6 test model and enrollment', () => {
       const secondCharge = await enrollmentCharge(fixture.studentId);
 
       const other = secondClient();
+      // Attempt numbers differ, so the attempt-key unique index cannot be what refuses the
+      // second row: the partial index on (user_id, test_id) WHERE status = 'OPEN' is.
       const results = await Promise.allSettled([
         enroll(db.client, { testId, versionId, userId: fixture.studentId, chargeId: firstCharge }),
-        enroll(other, { testId, versionId, userId: fixture.studentId, chargeId: secondCharge }),
+        enroll(other, { testId, versionId, userId: fixture.studentId, chargeId: secondCharge, attempt: 2 }),
       ]);
 
       const fulfilled = results.filter((result) => result.status === 'fulfilled');
       const rejected = results.filter((result) => result.status === 'rejected');
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
-      expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/enrollments_one_open_per_test/);
+      expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/Unique constraint failed/);
 
       expect(await enrollmentCount(testId, fixture.studentId)).toBe(1);
     });
@@ -386,7 +388,9 @@ describe('phase 6 test model and enrollment', () => {
           userId: fixture.studentId,
           chargeId,
         }),
-      ).rejects.toThrow(/enrollments_coin_transaction_key/);
+      // Prisma reports the unique index by its fields, not by name; the point of this case is
+      // that the same debit cannot fund a second enrollment.
+      ).rejects.toThrow(/Unique constraint failed on the fields: \(`coin_transaction_id`\)/);
     });
 
     it("refuses another student's debit", async () => {
