@@ -1536,3 +1536,36 @@ submissions of the open form write one row; a CSV with one unmatched row preview
 matched two and reports the job; an editor and a student are refused by the pages and by a
 direct post to the write route), and `apps/api/test/coins-admin.test.ts` for the ledger,
 fingerprint and audit behaviour underneath it.
+
+
+
+## 0066 — The internal coin route's address list: a pinned /24 in development and CI, the operator's own in production
+
+**Decided in phase 5, Q4 (the first browser proof of a bulk job).**
+
+**What the browser found.** The worker does not write coins: it calls `POST /v1/internal/coins/bulk/drain`
+with `INTERNAL_API_SECRET`, and that route answers **404** unless the caller's address is one of
+`INTERNAL_ALLOWED_ADDRESSES`. Development and CI listed `127.0.0.1/32`, which no container can
+present — the worker arrives from its own address on the Compose network — so every job stayed
+`QUEUED` while the worker logged `could not be drained: the API answered 404`. The reconciliation
+job knocked on the same door every 24 hours and was refused the same way, silently.
+
+**Why the obvious fix is refused.** Compose gives a new project a /16, and
+`parseAllowedAddress` refuses any block wider than /24 (decision 0057: a coin-moving route must
+not accept the internet). Listing a /16 is therefore not allowed, and a container address cannot
+be known before the network exists.
+
+**The fix: pin the development network.** `docker-compose.yml` now declares the default network
+as `10.213.0.0/24` and both the API and the worker allow exactly that block. It is a development
+and CI topology, written down where the network is created, and the worker's address is inside it
+by construction.
+
+**Production is untouched.** `docker-compose.prod.yml` still requires `INTERNAL_ALLOWED_ADDRESSES`
+from the environment, and the shared validator still refuses a block wider than /24. The operator
+sets it to the worker's (and any operator host's) exact address or its /24; nothing in CI proves
+the production list, which is why it is a deploy note rather than a test.
+
+**Proof.** The e2e job's stack now drains: `e2e/admin-coins.spec.ts` shows a bulk job reaching
+`COMPLETED` with `2 / 2` credited and its report downloadable, in both runs of `ea400ea`. The
+refusal itself stays proven by `coins-admin.test.ts` (404 without the secret) and
+`internal-access.spec.ts` (the address rule).
