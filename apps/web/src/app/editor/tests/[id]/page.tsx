@@ -214,7 +214,10 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
   const canPublish = session.profile.permissions.includes('tests.publish');
   const editableStatus = test.status === 'DRAFT' || test.status === 'PUBLISHED';
   const versionIsDraft = test.version.publishedAt === null;
-  const canEdit = canWrite && editableStatus && versionIsDraft;
+  // A published paper is still editable: the first save is what opens the next draft version,
+  // and the API copies the live one rather than rewriting it (decision 0070). Only the submit
+  // and publish controls need a draft to act on.
+  const canEdit = canWrite && editableStatus;
   const canSubmit = canWrite && editableStatus && versionIsDraft && test.questions.length > 0;
   const canArchive = canPublish && test.status === 'PUBLISHED';
 
