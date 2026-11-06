@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../../components/admin-shell';
 import { inputClass, labelClass, Notice } from '../../../../components/auth-shell';
-import { questionPreview } from '../../../lib/question-preview';
+import { questionPreview } from '../../../../lib/question-preview';
 import { listQuestions } from '../../../../lib/questions-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../../lib/session';
 import {

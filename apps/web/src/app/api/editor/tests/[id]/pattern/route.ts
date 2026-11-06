@@ -43,14 +43,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const title = stringField(guard.form, 'title').trim();
   const durationText = stringField(guard.form, 'durationMinutes').trim();
   const marksText = stringField(guard.form, 'marksPerQuestion').trim();
-  const negativeText = stringField(guard.form, 'negativeMarksPerQuestion').trim();
+  const negativeMarksText = stringField(guard.form, 'negativeMarksPerQuestion').trim();
   const maxAttemptsText = stringField(guard.form, 'maxAttempts').trim();
 
   const body: TestPatternInput = {
     ...(title === '' ? {} : { title }),
     ...(durationText === '' ? {} : { durationMinutes: Number.parseInt(durationText, 10) }),
     ...(marksText === '' ? {} : { marksPerQuestion: marksText }),
-    ...(negativeText === '' ? {} : { negativeMarksPerQuestion: negativeText }),
+    ...(negativeMarksText === '' ? {} : { negativeMarksPerQuestion: negativeMarksText }),
     ...(maxAttemptsText === '' ? { maxAttempts: null } : { maxAttempts: Number.parseInt(maxAttemptsText, 10) }),
   };
 
