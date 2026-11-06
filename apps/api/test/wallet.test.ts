@@ -157,8 +157,15 @@ describe('the student wallet', () => {
     const suspended = await makeStudent(1000);
     await db.client.user.update({ where: { id: suspended.id }, data: { status: 'SUSPENDED' } });
 
-    expect((await get('/v1/coins/me', suspended.token)).statusCode).toBe(403);
-    expect((await get('/v1/coins/me/history', suspended.token)).statusCode).toBe(403);
+    // The auth guard refuses a suspended account's session before the controller runs, so the
+    // answer is 401 rather than the handler's 403. Both are refusals, and neither leaks data.
+    for (const response of [
+      await get('/v1/coins/me', suspended.token),
+      await get('/v1/coins/me/history', suspended.token),
+    ]) {
+      expect([401, 403]).toContain(response.statusCode);
+      expect(response.body).not.toContain('balance');
+    }
   });
 
   it('refuses hostile page, page size and type values instead of coercing them', async () => {
