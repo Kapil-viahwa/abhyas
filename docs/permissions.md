@@ -35,7 +35,8 @@ code that checks it.
 | `content.write` | Create and edit exams, subjects, topics, questions and options |
 | `tests.read` | Read tests, including drafts |
 | `tests.write` | Create and edit tests, sections and question placement |
-| `tests.publish` | Publish or archive a test |
+| `tests.publish` | Publish or archive a test — an Administrator's alone (decision 0069) |
+| `content.publish` | Publish a question version |
 | `attempts.take` | Start and submit an attempt |
 | `attempts.read.all` | Read any user's attempts and results |
 | `analytics.read` | Read platform analytics |
@@ -60,7 +61,8 @@ code that checks it.
 | `content.write` | Y | by flag | — |
 | `tests.read` | Y | Y | published only |
 | `tests.write` | Y | by flag | — |
-| `tests.publish` | Y | by flag | — |
+| `tests.publish` | Y | — | — |
+| `content.publish` | Y | Y | — |
 | `attempts.take` | Y | — | Y |
 | `attempts.read.all` | Y | — | — |
 | `analytics.read` | Y | — | — |
@@ -70,20 +72,25 @@ reading `/me/coins` passes a `users.read.self` style check enforced by the handl
 published filter is applied in the query. `USER_PERMISSIONS` adds individual codes to a user
 without changing their role; those are always granted by an `ADMIN` and are audited.
 
-"By flag" is the phase 3 model, and it is the reason the `EDITOR` row carries only the read side:
-an editor's write capability is an explicit grant, one row in `user_permissions` per ticked flag,
-and a flag that was not ticked grants nothing. The three flags are:
+"By flag" is the phase 3 model, tightened in phase 6: an editor's write capability is an
+explicit grant, one row in `user_permissions` per ticked flag, and a flag that was not ticked
+grants nothing. There are **two** flags now, because only an Administrator publishes a test
+(decision 0069):
 
 | Flag | Permission code | What it allows |
 | --- | --- | --- |
 | `manage_questions` | `content.write` | Create and edit exams, subjects, topics, questions and options |
-| `manage_tests` | `tests.write` | Create and edit tests, sections and question placement |
-| `publish_tests` | `tests.publish` | Publish or archive a test |
+| `manage_tests` | `tests.write` | Create, edit and submit tests; the Administrator publishes |
 
-Two database triggers keep that model honest: one refuses to grant any of those three codes to an
-account that is not an `EDITOR`, and one clears them when an editor is demoted. Changing an
-editor's flags ends that editor's sessions in the same transaction, so no token outlives the
-capability it was issued under.
+The retired `publish_tests` flag no longer exists: migration `20270101000000` removed its
+existing grants, and the trigger refuses any new `tests.publish` grant to a
+non-Administrator. Publishing a **question** is `content.publish`, which the `EDITOR` role
+itself carries, because publishing content is a content action.
+
+Two database triggers keep that model honest: one refuses the editor write codes on an account
+that is not an `EDITOR` (and `tests.publish` on an account that is not an `ADMIN`), and one
+clears them when an editor is demoted. Changing an editor's flags ends that editor's sessions
+in the same transaction, so no token outlives the capability it was issued under.
 
 ## Rules that are enforced, not documented
 

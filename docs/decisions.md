@@ -1638,3 +1638,41 @@ enrollment and the retirement of the editor publish grant; P2 and P3 enforce the
 in the API and the pages; P4 makes the debit and the enrollment one transaction with the wallet
 row locked. The specification and the audit of what already exists are in `docs/PHASE-6.md`, and
 the queue is in `docs/NEXT-TASKS.md`.
+
+
+
+## 0069 — Phase 6, P1: the published paper is frozen by trigger, and publishing a test is an Administrator's permission
+
+**Status:** accepted · **Phase:** 6
+
+**The freeze is a trigger, not a service rule.** A `test_versions` row with `published_at` set
+cannot be updated or deleted (`test_versions_frozen`), its question list cannot be added to,
+reordered or removed (`test_questions_frozen`), and a published test cannot go back to `DRAFT`
+or `SUBMITTED` nor be deleted (`tests_status_frozen`). This is the rule
+`question_versions_frozen` already uses, applied to the paper: an enrollment points at a
+version, so the version a student paid for must be immutable even if a later code path forgets
+to check. Editing a published test therefore creates a new version (P2), and an open attempt
+keeps the one it bought (P4).
+
+**`tests.publish` is now an Administrator's alone, so question publishing got its own code.**
+The phase 4 question-publish route was guarded by `tests.publish`, which phase 3 also exposed
+to editors through the `publish_tests` flag. Retiring the flag alone would have taken question
+publishing away from editors, which was never the owner's decision. So the migration adds
+`content.publish` ("Publish a question version"), grants it on the `EDITOR` and `ADMIN` roles,
+and repoints the question publish route (`POST /v1/questions/:id/publish`) at it.
+`tests.publish` stays a role permission of `ADMIN`; the migration deletes existing editor grants of it (rather than failing
+the deploy on them) and the replaced `user_permissions_editor_flags_only` trigger refuses a new
+grant to anything but an `ADMIN` account.
+
+**Safety on existing data.** The new migration was written to apply to an empty schema (which
+is how every database test applies it: `prisma migrate deploy` on a fresh schema) and to a
+database with earlier phases' rows: it deletes the editor `tests.publish` grants instead of
+assuming there are none, and it only adds tables and permissions. This session could not run
+Docker, so the migration has not been executed against a real Postgres here; the `database`
+job on the pushed commit is what will prove it, on both an empty schema and the seeded one.
+
+**Consequences.** The three editor flags become two, `manage_questions` and `manage_tests`;
+`docs/permissions.md`, the admin users screens, the web route handlers and the flag tests all
+say so. `apps/api/test/tests-model.test.ts` proves the CHECKs, the freeze, one open enrollment
+per student and test under two concurrent inserts, the enrollment-to-ledger link, and the
+editor grant refusal.
