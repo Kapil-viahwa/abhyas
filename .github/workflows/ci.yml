@@ -319,6 +319,11 @@ jobs:
     # tests were still passing. Twenty leaves room for that variance; Playwright's own global
     # timeout (eight minutes) still fails a hung suite, so a stuck browser cannot hold the job
     # open.
+    #
+    # The job cap is a ceiling, not the first line of defence: the steps that wait on Docker
+    # each carry their own timeout-minutes, shorter than both the job cap and the wait flags
+    # they give compose, so a stack that will not come up fails the step in minutes and still
+    # leaves time for "Collect container logs" below to run.
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -348,6 +353,10 @@ jobs:
       # therefore always starts against a migrated, healthy stack, and the worker never
       # meets a table that does not exist yet.
       - name: Bring the stack up (migrations first) and wait for health
+        # Measured at 1m36s to 1m56s on healthy runners. Six minutes leaves the step room to
+        # finish, and gives `--wait-timeout 300` room to expire and print which container never
+        # became healthy, before the step itself is killed.
+        timeout-minutes: 6
         shell: bash
         run: |
           set -o pipefail
@@ -364,6 +373,10 @@ jobs:
           set -o pipefail
           pnpm exec playwright test --project=chromium 2>&1 | tee "$RUNNER_TEMP/playwright.log"
       - name: Restart the stack with OTP enabled
+        # Measured at 13 to 15 seconds on healthy runners; six minutes is the same headroom the
+        # first boot gets, so the overlay's own `--wait-timeout 300` still expires and says
+        # which container failed before the step is killed.
+        timeout-minutes: 6
         shell: bash
         run: |
           set -o pipefail
@@ -372,13 +385,17 @@ jobs:
       # the new settings. The mobile page must be 200 here: that is the proof the web tier
       # really received OTP_ENABLED=true, not just the API.
       - name: Wait for the enabled stack to answer
+        # Each curl carries --max-time 5, so a socket that accepts but never answers cannot
+        # stall an attempt, and three minutes bounds the whole step: a stack that never comes
+        # back fails here, with the container logs still to come, instead of at the job cap.
+        timeout-minutes: 3
         shell: bash
         run: |
           set -o pipefail
           for attempt in $(seq 1 60); do
-            if curl -fsS http://localhost:3001/health > /dev/null \
-              && curl -fsS http://localhost:3000/ > /dev/null \
-              && curl -fsS http://localhost:3000/register/mobile > /dev/null; then
+            if curl -fsS --max-time 5 http://localhost:3001/health > /dev/null \
+              && curl -fsS --max-time 5 http://localhost:3000/ > /dev/null \
+              && curl -fsS --max-time 5 http://localhost:3000/register/mobile > /dev/null; then
               echo "the enabled stack is answering, with the mobile page at 200"
               exit 0
             fi
@@ -397,13 +414,16 @@ jobs:
       # Every container that can fail at boot is read here, not just the API: a `--wait`
       # failure only says "container X exited (1)", and the reason is in that container's
       # own log. The worker's last lines are also raised as annotations, because a long log
-      # step is truncated exactly where it is read.
+      # step is truncated exactly where it is read. `always()` rather than `failure()`: a job
+      # cancelled at its timeout is not a failure, and the state of the stack at that moment —
+      # ps, plus the tail of postgres, migrate, api and worker — is exactly what is missing
+      # when a run is cancelled.
       - name: Collect container logs
-        if: failure()
+        if: always()
         shell: bash
         run: |
           docker compose ps -a > "$RUNNER_TEMP/compose-ps.log" 2>&1 || true
-          for service in migrate worker api web; do
+          for service in postgres migrate worker api web; do
             docker compose logs --no-color "$service" > "$RUNNER_TEMP/$service-logs.log" 2>&1 || true
             if [ "$service" = "worker" ]; then
               while IFS= read -r line; do
