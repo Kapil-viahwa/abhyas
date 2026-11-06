@@ -14,6 +14,9 @@ import { createMigratedTestDatabase, type TestDatabase } from './support/databas
  * enrollment's link to its own ENROLLMENT ledger row, and the retirement of the
  * `publish_tests` editor flag (`tests.publish` is an Administrator's alone now; publishing a
  * question is `content.publish`, which the EDITOR role carries).
+ *
+ * Raw statements cast every parameter that lands in a uuid column (`$1::uuid`): Prisma's
+ * raw protocol sends parameters untyped, and Postgres will not infer a uuid from text.
  */
 
 interface Fixture {
@@ -36,43 +39,39 @@ describe('phase 6 test model and enrollment', () => {
       (await db.client.role.findUniqueOrThrow({ where: { code }, select: { id: true } })).id;
 
     const person = async (roleCode: string, label: string): Promise<string> => {
-      const rows = await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-        `INSERT INTO "users" ("email", "password_hash", "full_name", "role_id", "email_verified_at")
-         VALUES ($1, $2, $3, $4, now()) RETURNING "id"`,
-        `${label}-${marker}-${randomUUID().slice(0, 8)}@example.com`,
-        'not-a-real-hash',
-        `Phase Six ${label}`,
-        await roleId(roleCode),
-      );
-      return rows[0]?.id ?? '';
+      const user = await db.client.user.create({
+        data: {
+          email: `${label}-${marker}-${randomUUID().slice(0, 8)}@example.com`,
+          passwordHash: 'not-a-real-hash',
+          fullName: `Phase Six ${label}`,
+          roleId: await roleId(roleCode),
+          emailVerifiedAt: new Date(),
+        },
+        select: { id: true },
+      });
+      return user.id;
     };
 
     const adminId = await person('ADMIN', 'admin');
     const editorId = await person('EDITOR', 'editor');
     const studentId = await person('USER', 'student');
 
-    const categoryId = (
-      await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-        `INSERT INTO "exam_categories" ("name", "slug", "created_by")
-         VALUES ($1, $2, $3) RETURNING "id"`,
-        'Phase 6 Category',
-        `phase-6-cat-${marker}`,
-        adminId,
-      )
-    )[0]?.id;
+    const category = await db.client.examCategory.create({
+      data: { name: 'Phase 6 Category', slug: `phase-6-cat-${marker}`, createdBy: adminId },
+      select: { id: true },
+    });
 
-    const examId = (
-      await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-        `INSERT INTO "exams" ("category_id", "name", "slug", "created_by")
-         VALUES ($1, $2, $3, $4) RETURNING "id"`,
-        categoryId,
-        'Phase 6 Exam',
-        `phase-6-exam-${marker}`,
-        adminId,
-      )
-    )[0]?.id;
+    const exam = await db.client.exam.create({
+      data: {
+        categoryId: category.id,
+        name: 'Phase 6 Exam',
+        slug: `phase-6-exam-${marker}`,
+        createdBy: adminId,
+      },
+      select: { id: true },
+    });
 
-    fixture = { examId: examId ?? '', adminId, editorId, studentId };
+    fixture = { examId: exam.id, adminId, editorId, studentId };
   }, 120_000);
 
   afterAll(async () => {
@@ -90,131 +89,125 @@ describe('phase 6 test model and enrollment', () => {
   }
 
   async function newTest(status = 'DRAFT'): Promise<string> {
-    const rows = await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-      `INSERT INTO "tests" ("exam_id", "created_by", "title", "status")
-       VALUES ($1, $2, $3, $4) RETURNING "id"`,
-      fixture.examId,
-      fixture.editorId,
-      `Paper ${randomUUID().slice(0, 8)}`,
-      status,
-    );
-    return rows[0]?.id ?? '';
+    const test = await db.client.test.create({
+      data: {
+        examId: fixture.examId,
+        createdBy: fixture.editorId,
+        title: `Paper ${randomUUID().slice(0, 8)}`,
+        status,
+      },
+      select: { id: true },
+    });
+    return test.id;
   }
 
   async function newVersion(
     testId: string,
     overrides: { durationMinutes?: number; marks?: number; negative?: number; published?: boolean; version?: number } = {},
   ): Promise<string> {
-    const rows = await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-      `INSERT INTO "test_versions"
-         ("test_id", "version", "duration_minutes", "marks_per_question", "negative_marks_per_question", "published_at", "created_by")
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING "id"`,
-      testId,
-      overrides.version ?? 1,
-      overrides.durationMinutes ?? 120,
-      overrides.marks ?? 2,
-      overrides.negative ?? 0.5,
-      overrides.published === true ? new Date() : null,
-      fixture.editorId,
-    );
-    return rows[0]?.id ?? '';
+    const version = await db.client.testVersion.create({
+      data: {
+        testId,
+        version: overrides.version ?? 1,
+        durationMinutes: overrides.durationMinutes ?? 120,
+        marksPerQuestion: overrides.marks ?? 2,
+        negativeMarksPerQuestion: overrides.negative ?? 0.5,
+        publishedAt: overrides.published === true ? new Date() : null,
+        createdBy: fixture.editorId,
+      },
+      select: { id: true },
+    });
+    return version.id;
   }
 
   async function newQuestion(): Promise<string> {
-    const subjectId = (
-      await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-        `INSERT INTO "subjects" ("exam_id", "name", "slug", "created_by")
-         VALUES ($1, $2, $3, $4) RETURNING "id"`,
-        fixture.examId,
-        'Phase 6 Subject',
-        `phase-6-sub-${randomUUID().slice(0, 8)}`,
-        fixture.editorId,
-      )
-    )[0]?.id;
-
-    return (
-      await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-        `INSERT INTO "questions" ("exam_id", "subject_id", "created_by")
-         VALUES ($1, $2, $3) RETURNING "id"`,
-        fixture.examId,
-        subjectId,
-        fixture.editorId,
-      )
-    )[0]?.id ?? '';
-  }
-
-  async function walletBalance(userId: string): Promise<number> {
-    await db.client.$executeRawUnsafe(
-      `INSERT INTO "coin_wallets" ("user_id", "balance") VALUES ($1, 200) ON CONFLICT ("user_id") DO NOTHING`,
-      userId,
-    );
-    const rows = await db.client.$queryRawUnsafe<Array<{ balance: number }>>(
-      `SELECT "balance" FROM "coin_wallets" WHERE "user_id" = $1`,
-      userId,
-    );
-    return rows[0]?.balance ?? 0;
+    const subject = await db.client.subject.create({
+      data: {
+        examId: fixture.examId,
+        name: 'Phase 6 Subject',
+        slug: `phase-6-sub-${randomUUID().slice(0, 8)}`,
+        createdBy: fixture.editorId,
+      },
+      select: { id: true },
+    });
+    const question = await db.client.question.create({
+      data: { examId: fixture.examId, subjectId: subject.id, createdBy: fixture.editorId },
+      select: { id: true },
+    });
+    return question.id;
   }
 
   /**
-   * One ENROLLMENT charge of 100, written the way `CoinService.spend` will write it in P4: the
-   * ledger's own trigger checks `previous_balance` and moves the wallet.
+   * A wallet funded to 200 and one ENROLLMENT charge of 100, written the way `CoinService.spend`
+   * will write them in P4: the ledger's own trigger moves the wallet.
    */
   async function enrollmentCharge(userId: string): Promise<string> {
-    const previous = await walletBalance(userId);
-    const rows = await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-      `INSERT INTO "coin_transactions"
-         ("user_id", "type", "amount", "previous_balance", "new_balance", "reference_type", "reference_id", "idempotency_key", "request_fingerprint")
-       VALUES ($1, 'ENROLLMENT', -100, $2, $3, 'enrollment', $4, $5, $6) RETURNING "id"`,
-      userId,
-      previous,
-      previous - 100,
-      randomUUID(),
-      `enroll:${randomUUID()}`,
-      randomUUID(),
-    );
-    return rows[0]?.id ?? '';
+    const wallet = await db.client.coinWallet.upsert({
+      where: { userId },
+      create: { userId, balance: 200 },
+      update: {},
+      select: { balance: true },
+    });
+
+    const entry = await db.client.coinTransaction.create({
+      data: {
+        userId,
+        type: 'ENROLLMENT',
+        amount: -100,
+        previousBalance: wallet.balance,
+        newBalance: wallet.balance - 100,
+        referenceType: 'enrollment',
+        referenceId: randomUUID(),
+        idempotencyKey: `enroll:${randomUUID()}`,
+        requestFingerprint: randomUUID(),
+      },
+      select: { id: true },
+    });
+    return entry.id;
   }
 
   /** A ledger row of another type, for the "not an ENROLLMENT" case. */
   async function adminCredit(userId: string): Promise<string> {
-    const previous = await walletBalance(userId);
-    const rows = await db.client.$queryRawUnsafe<Array<{ id: string }>>(
-      `INSERT INTO "coin_transactions"
-         ("user_id", "type", "amount", "previous_balance", "new_balance", "idempotency_key", "request_fingerprint")
-       VALUES ($1, 'ADMIN_CREDIT', 10, $2, $3, $4, $5) RETURNING "id"`,
-      userId,
-      previous,
-      previous + 10,
-      `admin:${randomUUID()}`,
-      randomUUID(),
-    );
-    return rows[0]?.id ?? '';
+    const wallet = await db.client.coinWallet.upsert({
+      where: { userId },
+      create: { userId, balance: 200 },
+      update: {},
+      select: { balance: true },
+    });
+
+    const entry = await db.client.coinTransaction.create({
+      data: {
+        userId,
+        type: 'ADMIN_CREDIT',
+        amount: 10,
+        previousBalance: wallet.balance,
+        newBalance: wallet.balance + 10,
+        idempotencyKey: `admin:${randomUUID()}`,
+        requestFingerprint: randomUUID(),
+      },
+      select: { id: true },
+    });
+    return entry.id;
   }
 
   async function enroll(
     client: PrismaClient,
     values: { testId: string; versionId: string; userId: string; chargeId: string; attempt?: number },
   ): Promise<void> {
-    await client.$executeRawUnsafe(
-      `INSERT INTO "enrollments"
-         ("test_id", "test_version_id", "user_id", "attempt_number", "coin_transaction_id", "idempotency_key")
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      values.testId,
-      values.versionId,
-      values.userId,
-      values.attempt ?? 1,
-      values.chargeId,
-      `enroll:${randomUUID()}`,
-    );
+    await client.enrollment.create({
+      data: {
+        testId: values.testId,
+        testVersionId: values.versionId,
+        userId: values.userId,
+        attemptNumber: values.attempt ?? 1,
+        coinTransactionId: values.chargeId,
+        idempotencyKey: `enroll:${randomUUID()}`,
+      },
+    });
   }
 
   async function enrollmentCount(testId: string, userId: string): Promise<number> {
-    const rows = await db.client.$queryRawUnsafe<Array<{ count: number }>>(
-      `SELECT count(*)::int AS count FROM "enrollments" WHERE "test_id" = $1 AND "user_id" = $2`,
-      testId,
-      userId,
-    );
-    return rows[0]?.count ?? 0;
+    return db.client.enrollment.count({ where: { testId, userId } });
   }
 
   describe('CHECK constraints', () => {
@@ -230,13 +223,14 @@ describe('phase 6 test model and enrollment', () => {
 
     it('refuses a non-positive attempt cap and an attempt number below one', async () => {
       await expect(
-        db.client.$executeRawUnsafe(
-          `INSERT INTO "tests" ("exam_id", "created_by", "title", "max_attempts") VALUES ($1, $2, $3, $4)`,
-          fixture.examId,
-          fixture.editorId,
-          'Capped paper',
-          0,
-        ),
+        db.client.test.create({
+          data: {
+            examId: fixture.examId,
+            createdBy: fixture.editorId,
+            title: 'Capped paper',
+            maxAttempts: 0,
+          },
+        }),
       ).rejects.toThrow(/tests_max_attempts_positive/);
 
       const testId = await newTest();
@@ -256,19 +250,17 @@ describe('phase 6 test model and enrollment', () => {
       const questionId = await newQuestion();
 
       await expect(
-        db.client.$executeRawUnsafe(`UPDATE "test_versions" SET "duration_minutes" = 90 WHERE "id" = $1`, versionId),
+        db.client.$executeRawUnsafe(`UPDATE "test_versions" SET "duration_minutes" = 90 WHERE "id" = $1::uuid`, versionId),
       ).rejects.toThrow(/published version cannot be updated/);
 
       await expect(
-        db.client.$executeRawUnsafe(`DELETE FROM "test_versions" WHERE "id" = $1`, versionId),
+        db.client.$executeRawUnsafe(`DELETE FROM "test_versions" WHERE "id" = $1::uuid`, versionId),
       ).rejects.toThrow(/published version cannot be deleted/);
 
       await expect(
-        db.client.$executeRawUnsafe(
-          `INSERT INTO "test_questions" ("test_version_id", "question_id", "position") VALUES ($1, $2, 1)`,
-          versionId,
-          questionId,
-        ),
+        db.client.testQuestion.create({
+          data: { testVersionId: versionId, questionId, position: 1 },
+        }),
       ).rejects.toThrow(/published paper cannot be changed/);
     });
 
@@ -277,22 +269,21 @@ describe('phase 6 test model and enrollment', () => {
       const draftVersion = await newVersion(draftTest);
       const questionId = await newQuestion();
 
-      await db.client.$executeRawUnsafe(
-        `INSERT INTO "test_questions" ("test_version_id", "question_id", "position") VALUES ($1, $2, 1)`,
-        draftVersion,
-        questionId,
-      );
-      await db.client.$executeRawUnsafe(`DELETE FROM "test_questions" WHERE "test_version_id" = $1`, draftVersion);
+      const placed = await db.client.testQuestion.create({
+        data: { testVersionId: draftVersion, questionId, position: 1 },
+        select: { id: true },
+      });
+      await db.client.testQuestion.delete({ where: { id: placed.id } });
 
       const publishedTest = await newTest('PUBLISHED');
-      await db.client.$executeRawUnsafe(`UPDATE "tests" SET "published_at" = now() WHERE "id" = $1`, publishedTest);
+      await db.client.$executeRawUnsafe(`UPDATE "tests" SET "published_at" = now() WHERE "id" = $1::uuid`, publishedTest);
 
       await expect(
-        db.client.$executeRawUnsafe(`UPDATE "tests" SET "status" = 'DRAFT' WHERE "id" = $1`, publishedTest),
+        db.client.$executeRawUnsafe(`UPDATE "tests" SET "status" = 'DRAFT' WHERE "id" = $1::uuid`, publishedTest),
       ).rejects.toThrow(/cannot go back to DRAFT/);
 
       await expect(
-        db.client.$executeRawUnsafe(`DELETE FROM "tests" WHERE "id" = $1`, publishedTest),
+        db.client.$executeRawUnsafe(`DELETE FROM "tests" WHERE "id" = $1::uuid`, publishedTest),
       ).rejects.toThrow(/published test cannot be deleted/);
     });
   });
@@ -330,7 +321,7 @@ describe('phase 6 test model and enrollment', () => {
         chargeId: await enrollmentCharge(fixture.editorId),
       });
       await db.client.$executeRawUnsafe(
-        `UPDATE "enrollments" SET "status" = 'COMPLETED', "completed_at" = now() WHERE "test_id" = $1`,
+        `UPDATE "enrollments" SET "status" = 'COMPLETED', "completed_at" = now() WHERE "test_id" = $1::uuid`,
         testId,
       );
 
@@ -425,32 +416,35 @@ describe('phase 6 test model and enrollment', () => {
         (await db.client.permission.findUniqueOrThrow({ where: { code }, select: { id: true } })).id;
 
       await expect(
-        db.client.$executeRawUnsafe(
-          `INSERT INTO "user_permissions" ("user_id", "permission_id", "granted_by") VALUES ($1, $2, $3)`,
-          fixture.editorId,
-          await permissionId('tests.publish'),
-          fixture.adminId,
-        ),
+        db.client.userPermission.create({
+          data: {
+            userId: fixture.editorId,
+            permissionId: await permissionId('tests.publish'),
+            grantedBy: fixture.adminId,
+          },
+        }),
       ).rejects.toThrow(/tests.publish may only be held by an ADMIN account/);
 
       await expect(
-        db.client.$executeRawUnsafe(
-          `INSERT INTO "user_permissions" ("user_id", "permission_id", "granted_by") VALUES ($1, $2, $3)`,
-          fixture.studentId,
-          await permissionId('content.write'),
-          fixture.adminId,
-        ),
+        db.client.userPermission.create({
+          data: {
+            userId: fixture.studentId,
+            permissionId: await permissionId('content.write'),
+            grantedBy: fixture.adminId,
+          },
+        }),
       ).rejects.toThrow(/Editor capability may only be granted to an EDITOR account/);
 
       // An administrator may hold it: the rule is about the role, not the code.
       await expect(
-        db.client.$executeRawUnsafe(
-          `INSERT INTO "user_permissions" ("user_id", "permission_id", "granted_by") VALUES ($1, $2, $3)`,
-          fixture.adminId,
-          await permissionId('tests.publish'),
-          fixture.adminId,
-        ),
-      ).resolves.toBeGreaterThan(0);
+        db.client.userPermission.create({
+          data: {
+            userId: fixture.adminId,
+            permissionId: await permissionId('tests.publish'),
+            grantedBy: fixture.adminId,
+          },
+        }),
+      ).resolves.toBeTruthy();
     });
   });
 });

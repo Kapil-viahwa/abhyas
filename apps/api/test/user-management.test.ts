@@ -135,7 +135,7 @@ describe('user administration over HTTP', () => {
       );
 
       const codes = rows.map((row) => row.permission_code);
-      expect(new Set(codes)).toEqual(new Set(['content.read', 'tests.read']));
+      expect(new Set(codes)).toEqual(new Set(['content.read', 'tests.read', 'content.publish']));
       for (const writeCode of EDITOR_FLAG_CODES) {
         expect(codes).not.toContain(writeCode);
       }
@@ -264,7 +264,6 @@ describe('user administration over HTTP', () => {
       };
       expect(body.roleCode).toBe('EDITOR');
       expect(body.editorFlags.manage_questions).toBe(true);
-      expect(body.editorFlags.manage_tests).toBe(false);
       expect(body.editorFlags.manage_tests).toBe(true);
 
       expect(new Set(await codesOf(body.id))).toEqual(new Set(['content.write', 'tests.write']));

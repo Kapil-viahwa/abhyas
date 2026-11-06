@@ -39,9 +39,12 @@ describe('auth foundation', () => {
       expect(byRole.get('ADMIN')).toHaveLength(totalPermissions);
 
       // Since phase 3 an editor's write capability is an explicit per-editor grant, so
-      // the role itself carries only what every editor needs: the read side. The write
+      // the role itself carries only what every editor needs: the read side, and since
+      // phase 6 `content.publish` (publishing a question is a content action). The write
       // codes are proven per account in user-management.test.ts.
-      expect(new Set(byRole.get('EDITOR'))).toEqual(new Set(['content.read', 'tests.read']));
+      expect(new Set(byRole.get('EDITOR'))).toEqual(
+        new Set(['content.read', 'tests.read', 'content.publish']),
+      );
       expect(new Set(byRole.get('USER'))).toEqual(new Set(['attempts.take']));
     });
 
