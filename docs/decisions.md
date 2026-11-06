@@ -1500,3 +1500,39 @@ grow, and it is noted here so the cap is a decision rather than a surprise.
 
 **Proof.** `apps/api/test/wallet.test.ts`: a repeated parameter (`type=A&type=B`, `page=1&page=2`)
 is refused, and an absurd `page=100000000` is refused.
+
+
+
+## 0065 — The Administrator's coin forms: the form's key is the ledger's key, and a preview is only a cookie
+
+**Decided in phase 5, item Q4 (admin coin screens).**
+
+**The form's `Idempotency-Key` reaches the ledger unchanged in meaning.** `CoinsService`
+stores the request (its own fingerprint and the response) under `(actor, key)`, and passes the
+same key to `CoinService` as `admin:<actor>:<key>`. The API-level key answers a replayed form
+with the first answer, and the ledger-level key is what makes two submissions that arrive *at
+the same time* one movement: whichever wins the wallet's row lock writes the row, the loser
+replays it. The audit row for the adjustment is written by the winner only, because a replay is
+the first decision already recorded. Proven in `apps/api/test/coins-admin.test.ts`, where both
+submissions are sent with `Promise.all` and exactly one ledger row and one audit row exist.
+
+**A refused proof keeps the whole request.** `POST /v1/admin/coins/adjust` and `/bulk` answer
+403 `reauth_required` until a proof (password or a code to the Administrator's own number)
+verifies, and the proof check runs *before* the request is stored — so nothing has been
+consumed. The web form answers that refusal by redirecting back with the same key, and now
+with the same amount and remark, because the stored fingerprint is bound to the exact body: a
+retry with a different body would be a 409, not a retry. The screen re-renders those fields,
+the Administrator enters the proof, and the second submission is the same request.
+
+**A bulk preview is convenience, not authority.** The matched accounts, the amount and the
+reason live in one httpOnly cookie for fifteen minutes; confirming posts the matched ids back,
+and the API re-reads every account, re-checks `coin_max_bulk_users` and `coin_max_bulk_coins`
+and creates the job itself. A tampered cookie therefore cannot credit an account the preview
+never matched, and an expired one is refused with a message rather than a stale confirmation.
+The job's own idempotency key means a double click on confirm creates one job.
+
+**Proof.** `e2e/admin-coins.spec.ts` (an Administrator credits one account; two simultaneous
+submissions of the open form write one row; a CSV with one unmatched row previews, credits the
+matched two and reports the job; an editor and a student are refused by the pages and by a
+direct post to the write route), and `apps/api/test/coins-admin.test.ts` for the ledger,
+fingerprint and audit behaviour underneath it.
