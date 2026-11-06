@@ -34,6 +34,13 @@ export default async function EditorPage(): Promise<ReactElement> {
             Open the catalog
           </Link>
         </p>
+        {session.profile.permissions.includes('tests.read') ? (
+          <p className="mt-3 text-sm">
+            <Link href="/editor/tests" className="text-sky-400 hover:text-sky-300">
+              Open the tests
+            </Link>
+          </p>
+        ) : null}
         <p className="mt-3 text-xs text-slate-500">Permissions: {session.profile.permissions.join(', ') || 'none'}</p>
       </section>
 

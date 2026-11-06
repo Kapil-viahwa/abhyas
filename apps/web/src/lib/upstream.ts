@@ -8,7 +8,7 @@ import { isIP } from 'node:net';
 import { webConfig } from './config';
 
 export interface ApiCallOptions {
-  readonly method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  readonly method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   readonly body?: unknown;
   readonly accessToken?: string | undefined;
   /** The end user's address, forwarded so the API's per-IP limits follow the person. */
