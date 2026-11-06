@@ -1746,3 +1746,53 @@ question has to see what it asks (the phase 6 rule: editors may read the key). N
 serialiser exists in this unit; a Student gets 403 on every builder route, and the test checks
 that no 403 body carries either field. The catalog and attempt serialisers that will face
 students are P4, P5 and phase 7, and each owns its projection.
+
+
+
+## 0071 — Phase 6, P3: the builder screens, and why they send no Idempotency-Key
+
+**Status:** accepted · **Phase:** 6
+
+**The pages do not enforce anything the API does not.** `/editor/tests`,
+`/editor/tests/<id>` and `/admin/tests` each read `loadPermissionSession` before rendering, so a
+student is sent to `/account?denied=1` and never receives the shell; the Publish and Archive
+controls render only for `tests.publish`. But the write handlers behind them
+(`/api/editor/tests/create`, `/[id]/pattern`, `/[id]/questions`, `/[id]/submit`,
+`/api/admin/tests/[id]/publish` and `.../archive`) hold no permission logic at all: they read the
+session cookie, pass its access token to the API and return the API's answer. An editor who
+posts to the publish handler by hand is refused by the API with 403, and the handler redirects
+back with that message. This is the same split the coin screens use (decision 0065): the page
+is a convenience, the API is the authority, and there is exactly one place to change a rule.
+
+**No Idempotency-Key, because no builder route accepts one.** The queue asked for a key
+"where the API accepts one", and the P2 routes do not: every write is already idempotent in the
+way that matters. `PUT /questions` replaces the whole ordered list, so sending it twice
+converges on the same paper; `submit`, `publish` and `archive` are guarded by the lifecycle —
+the second call sees the state the first committed and is refused with 409 rather than applied
+twice; `PATCH` is a last-write-wins update of pattern fields; `POST /v1/editor/tests` creates a
+row by definition. The coin tools need a key because a double submit there would move coins
+twice; a double-clicked "Save pattern" here rewrites the same fields, and a double-clicked
+"Submit" is refused. Adding a client key nobody checks would suggest a protection that is not
+there, so the forms send none and the page says so here.
+
+**A published paper's builder page says two things at once.** It shows the live version
+(`publishedVersion`: number, duration, total marks) with a sentence that it "stays exactly as it
+is", and beside it the draft version being edited. That is decision 0070's model made visible:
+the API copies version `N` into an unpublished `N+1` on the first edit, and students keep `N`
+until an Administrator publishes the revision. Without the notice, an editor would reasonably
+assume their change is live the moment they save it.
+
+**Ordering is two buttons, not drag and drop.** `Up`/`Down` post one question id and a
+direction; the handler reads the paper's current order from the API, swaps the pair, and sends
+the whole list back through `PUT /questions`. A drag-and-drop library would have been dependency
+weight for an operation whose correctness lives on the server anyway, and the whole-list PUT is
+what keeps the positions gapless (decision 0070).
+
+**The e2e fixture seeds the exam and the bank in SQL, and that is deliberate.** An editor may
+only build a paper for an exam they created and place their own questions — the P2 object rule.
+The admin UI can create an editor and a catalog entry, but it cannot yet hand an existing exam to
+another account, and authoring a question through the TipTap editor is a flow of its own with its
+own coverage. So `e2e/tests-fixture.ts` inserts one category, exam, subject and two published
+questions owned by the editor, through the same `docker compose exec ... psql` route the coin
+settings fixture uses, and the spec then exercises only the builder screens. When the catalog
+grows an "assign owner" control, the fixture should be replaced by it.

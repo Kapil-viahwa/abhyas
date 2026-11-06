@@ -216,3 +216,31 @@ cannot be used to discover which papers exist. A Student is refused on **every**
 and no builder response reaches a student: the answer key (`isCorrect`, the explanation and a
 numerical question's answer) is serialised only in these Editor and Administrator responses,
 never to a student.
+
+
+
+## Phase 6, P3: the test-builder screens
+
+The screens are server-checked forms, not a second gateway: every page reads
+`loadPermissionSession` before it renders, and every write posts to a web route handler that
+passes the session's access token to the API, which decides. The token never reaches the
+browser.
+
+| Screen | Server check before it renders | What it calls |
+| --- | --- | --- |
+| `/editor/tests` | `tests.read` | `GET /v1/editor/tests` — an Editor's own papers, an Administrator's all |
+| `/editor/tests/new` | `tests.write` | `POST /v1/editor/tests` |
+| `/editor/tests/<id>` | `tests.read` | `GET /v1/editor/tests/<id>`, `PATCH .../<id>`, `PUT .../<id>/questions`, `POST .../<id>/submit`, and for an Administrator `POST /v1/admin/tests/<id>/publish` and `.../archive` |
+| `/admin/tests` | `tests.publish` | `GET /v1/editor/tests` as the Administrator's review queue |
+
+The **Publish** and **Archive** controls render only for an account holding `tests.publish`,
+which in practice is an Administrator; an Editor never sees them. That is a convenience, not
+the rule: the API refuses both routes with **403** whatever the page draws, and the web handler
+returns the API's own message. A student is redirected to `/account?denied=1` before any of
+these pages renders, the same way the coin screens refuse them.
+
+The navigation link to `/editor/tests` appears for an account holding `tests.read` (the editor
+role carries it, and an Administrator has every code), following the coin link's rule
+(`apps/web/src/components/admin-shell.tsx`). The answer key — `isCorrect`, the explanation and
+a numerical question's answer — is rendered only on `/editor/tests/<id>`, which is
+`tests.read` behind the session; no student-facing page renders it in this unit.
