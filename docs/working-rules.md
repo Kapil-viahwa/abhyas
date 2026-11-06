@@ -2,6 +2,15 @@
 
 Acknowledged at Phase F0. These bind every phase of this repository.
 
+## Session protocol
+
+A session does **one unit of work**, pushes **once**, and **stops immediately**. It does not
+poll or wait for CI after pushing; it ends by saying "pushed `<sha>`, runs queued". The next
+session starts by reading the finished CI runs for the latest commit of the branch, fixes any
+red job first (quoting the first real error before changing anything), and only then takes the
+next unit. The ordered queue lives in `docs/NEXT-TASKS.md`; the pre-push checklist is below.
+Never read files you do not need, never print large logs, and quote only the first real error.
+
 ## Execution first
 
 1. **Nothing is done until it has run.** We never write "done", "works" or "tests pass" for anything not seen passing, either in a sandbox or in a CI run we have read. If code cannot be run, say so, rely on CI, and list exactly what stayed unverified.
