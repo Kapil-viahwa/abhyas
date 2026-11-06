@@ -1569,3 +1569,51 @@ the production list, which is why it is a deploy note rather than a test.
 `COMPLETED` with `2 / 2` credited and its report downloadable, in both runs of `ea400ea`. The
 refusal itself stays proven by `coins-admin.test.ts` (404 without the secret) and
 `internal-access.spec.ts` (the address rule).
+
+
+
+## 0067 — The e2e browser download: cached per runner OS and Playwright version, and bounded
+
+**Decided after phase 5, on the `e2e` job itself.**
+
+**What the cancellations actually were.** The `e2e` job had been cancelled at its timeout
+twice, and both times the missing minutes were in one place. From the Actions jobs API, step
+by step: on `7790330` the job took 13m0s, of which **9m22s** was `pnpm exec playwright install
+--with-deps chromium`; on the `main` merge `bd37281` the same step ran **11m16s** before the
+job was cancelled. Every other step was as fast as on a healthy run — the stack up 1m56s and
+2m02s, the OTP restart 13s, the health poll 0s — and on the healthy re-run of `7396cd1` the
+install took **16s**. The `migrate` dependency, the pinned `10.213.0.0/24` development network
+and `INTERNAL_ALLOWED_ADDRESSES` (0066) were therefore never the problem: the job was waiting
+on a CDN and an apt mirror.
+
+**The stopgap first.** PR #23 raised the job cap from twelve minutes to **twenty**, because a
+job that is cancelled proves nothing even when every test that ran passed. That is a ceiling,
+not an explanation, and on its own it only moves the wall further away: the 13m0s run on
+`7790330` spent 9m22s in that one step and would still have been cancelled at twelve.
+
+**Fail fast inside the job.** The head of the same work bounds the steps that wait on Docker:
+six minutes for the stack-up, six for the OTP restart, three for the health poll with
+`--max-time 5` on each curl, and `Collect container logs` now runs with `if: always()`, so a
+cancelled run leaves `ps` and the tails of postgres, migrate, api and worker behind instead of
+an empty artifact. The job cap stays at twenty as the ceiling.
+
+**The cache.** The e2e job now caches `~/.cache/ms-playwright` with `actions/cache`, pinned by
+commit SHA like every other action in the workflow, keyed
+`playwright-<runner os>-<installed Playwright version>`. The version is read from the installed
+package (`pnpm exec playwright --version`), so it follows the lockfile rather than a variable a
+human has to remember to bump; a Playwright upgrade changes the key and downloads once. On a
+hit the step runs `playwright install-deps chromium` instead of the download, because the OS
+packages (`libnss3`, fonts, X libraries) are not in that cache and a restored browser without
+them cannot launch. On a miss the normal `--with-deps` install runs, and the step carries its
+own `timeout-minutes: 8`, close to the healthy cost and far below the job cap, with one retry
+on failure: a stalled CDN now fails in minutes with "the Chromium download failed once; retrying
+once" and the step's own timeout, not at the job cap with nothing to read.
+
+**What the two runs showed.** The first run of `ci/playwright-browser-cache` (`59fd58f`, run
+42200948401, attempt 1) was a miss: the restore step took 0s, the install 21s, and the post step
+saved `playwright-Linux-1.64.1` at 293 MB. The re-run of the same `e2e` job (attempt 2, no code
+change) restored that cache in **4s** and ran `install-deps` in **11s**; both runs were green,
+9/9. A hit is not automatically faster on a good day — the miss downloaded in 21s — but a hit
+does not touch the browser CDN at all, which is where the 9m22s and 11m16s went. If a later hit
+ever fails to launch the restored browser, the cache is removed and the install keeps only its
+timeout and retry.
