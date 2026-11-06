@@ -44,6 +44,8 @@ import { OtpService } from './otp/otp.service';
 import { OTP_SMS_PROVIDER, providerFromEnv } from './otp/sms-provider';
 import { QuestionsController } from './questions/questions.controller';
 import { QuestionsService } from './questions/questions.service';
+import { AdminTestsController, EditorTestsController } from './tests/tests.controller';
+import { TestsService } from './tests/tests.service';
 
 @Module({
   controllers: [
@@ -56,6 +58,8 @@ import { QuestionsService } from './questions/questions.service';
     PublicCatalogController,
     MediaController,
     QuestionsController,
+    EditorTestsController,
+    AdminTestsController,
     CoinsController,
     CoinsInternalController,
     WalletController,
@@ -115,6 +119,7 @@ import { QuestionsService } from './questions/questions.service';
     LinkingService,
     MediaService,
     QuestionsService,
+    TestsService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
