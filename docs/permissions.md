@@ -188,3 +188,31 @@ the API and return its refusal; they never hold `coins.write` themselves, so an 
 student who posts to one still receives the API's 403. The ID in the URL is never trusted to
 grant access to somebody else's ledger — it is an Administrator-only route, and the API checks
 the permission before it reads the row.
+
+
+
+## Phase 6, P2: building a test
+
+A test is a paper an editor assembles from the question bank. Building needs `tests.write`
+(the `manage_tests` flag, or an Administrator); reading needs `tests.read`, which the `EDITOR`
+role carries and an Administrator holds with every other code. **Publishing and archiving are
+not an editor's actions**: both routes require `tests.publish`, which only an Administrator
+holds, so an Editor or a Student is refused with **403** by the guard before any handler runs
+(decision 0069).
+
+| Route | Declared access | Who may call it | What it does |
+| --- | --- | --- | --- |
+| `GET /v1/editor/tests` | `tests.read` | an Editor (own papers), an Administrator (all) | the list, newest first, paged, filterable by `status` and `examId` |
+| `GET /v1/editor/tests/:id` | `tests.read` | the paper's creator, or an Administrator | the pattern and the paper's ordered questions, with answer keys |
+| `POST /v1/editor/tests` | `tests.write` | an Editor with `manage_tests`, or an Administrator | creates a draft for an exam the caller may write content for |
+| `PATCH /v1/editor/tests/:id` | `tests.write` | as above | title, description, duration, marks per question, negative marks, `maxAttempts`; editing a published paper opens a new version (decision 0070) |
+| `PUT /v1/editor/tests/:id/questions` | `tests.write` | as above | replaces the paper's whole ordered list; every question must be published, in the paper's exam, and the caller's own unless the caller is an Administrator |
+| `POST /v1/editor/tests/:id/submit` | `tests.write` | as above | hands a complete draft, or a revision, over for review |
+| `POST /v1/admin/tests/:id/publish` | `tests.publish` | **an Administrator only** | publishes the submitted (or revised) version, freezing it |
+| `POST /v1/admin/tests/:id/archive` | `tests.publish` | **an Administrator only** | retires a published test; its enrollments stay |
+
+A foreign paper, or one another editor created, answers **404** rather than 403, so a route
+cannot be used to discover which papers exist. A Student is refused on **every** route above,
+and no builder response reaches a student: the answer key (`isCorrect`, the explanation and a
+numerical question's answer) is serialised only in these Editor and Administrator responses,
+never to a student.

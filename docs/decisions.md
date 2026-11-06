@@ -1676,3 +1676,73 @@ job on the pushed commit is what will prove it, on both an empty schema and the 
 say so. `apps/api/test/tests-model.test.ts` proves the CHECKs, the freeze, one open enrollment
 per student and test under two concurrent inserts, the enrollment-to-ledger link, and the
 editor grant refusal.
+
+
+
+## 0070 — Phase 6, P2: the paper's lifecycle, the revision, and one winner
+
+**Status:** accepted · **Phase:** 6
+
+**The allowed transitions are an explicit table, and everything else is a 409.**
+
+| From | Action | To | Who |
+| --- | --- | --- | --- |
+| `DRAFT` | submit | `SUBMITTED` | the paper's editor (`tests.write`) or an Administrator |
+| `SUBMITTED` | publish | `PUBLISHED` | **an Administrator** (`tests.publish`) |
+| `PUBLISHED` (a revision is open) | publish | `PUBLISHED` | **an Administrator** |
+| `PUBLISHED` | archive | `ARCHIVED` | **an Administrator** |
+| `PUBLISHED` (a revision is open) | submit | `PUBLISHED`, `submitted_at` set | the paper's editor |
+
+Anything else — publishing a draft, archiving a draft or a submitted test, a second submit, a
+second publish, editing a submitted or archived test, submit or edit after archive — answers
+**409** with the reason in the body. The table lives in `TestsService` as those explicit
+checks; it is not inferred from a status ordering.
+
+**A published test does not go back to `DRAFT` or `SUBMITTED`.** The P1 trigger
+(`tests_published_frozen`) refuses that, because a student could have paid for the paper in
+between. So a revision's hand-off is `submitted_at` plus a `TEST_SUBMITTED` audit row with
+`revision: true`, and the Administrator publishes the revision directly. The alternative —
+letting a published row slip back to `SUBMITTED` — would make the freeze depend on a code path
+rather than the database.
+
+**What happens to the live paper while a revision is being edited.** The test row keeps
+`status = PUBLISHED` and its `published_at`; `current_version` moves to the new unpublished
+version, and the paper a student buys is the newest version **with** `published_at` set. Editing
+a published test therefore:
+
+- creates version `N+1` as a **copy** of the live version's pattern *and* its ordered question
+  list, because an Administrator should review a complete paper, not an empty one;
+- leaves version `N` published, frozen by trigger, and referenced by every open enrollment;
+- changes nothing a student holding enrollment sees until an Administrator publishes the
+  revision, at which point new enrollments get `N+1` and existing ones keep `N` (decision
+  0069). The API response carries both: `version` (being edited) and `publishedVersion`
+  (being sold).
+
+**Atomicity is a row lock plus a guarded write.** Every state-changing call opens one
+transaction, takes `SELECT ... FOR UPDATE` on the `tests` row, re-reads the state, and then
+writes with the state in the `WHERE` (`updateMany({ where: { id, status } })`, or
+`updateMany({ where: { id, publishedAt: null } })` for the version stamp), refusing when the
+count is not 1. Two simultaneous submits or publishes therefore serialise on the lock: the
+second reads what the first committed and gets a 409, and exactly one audit row is written.
+The concurrency proof is in `apps/api/test/tests-builder.test.ts`.
+
+**The question list is replaced, not patched.** `PUT /v1/editor/tests/:id/questions` takes the
+whole ordered list, validates every id (exists, is the caller's own unless an Administrator,
+belongs to the paper's exam, is published), then deletes and re-inserts inside the same
+transaction. That is what makes reordering atomic and the positions gapless 1..n — there is no
+window in which two positions collide, and the unique `(test_version_id, position)` index is
+never violated by a partially applied reorder.
+
+**Strict bodies and queries.** An unknown field is a 400 rather than silently ignored, so a
+client that misspells `maxAttempts` learns it did. The limits are bounded at the edge of the
+API as well as in the database: duration 1–600 minutes, marks per question above 0 and at most
+100, negative marks between 0 and the marks, `maxAttempts` null or 1–100, at most 100 questions
+per paper, at most 2,000 characters of description. Repeated query parameters are refused
+rather than read as arrays, and only `status`, `examId` and `page` are filters.
+
+**Answer keys.** The builder's responses are Editor and Administrator only, and they carry
+`isCorrect`, the explanation and a numerical question's answer, because an editor placing a
+question has to see what it asks (the phase 6 rule: editors may read the key). No student-facing
+serialiser exists in this unit; a Student gets 403 on every builder route, and the test checks
+that no 403 body carries either field. The catalog and attempt serialisers that will face
+students are P4, P5 and phase 7, and each owns its projection.
