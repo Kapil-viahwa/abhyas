@@ -25,6 +25,8 @@ import { CoinsController, CoinsInternalController } from './coins/coins.controll
 import { CoinsService } from './coins/coins.service';
 import { CoinsHooksService } from './coins/hooks.service';
 import { CoinReconciliationService } from './coins/reconciliation.service';
+import { WalletController } from './coins/wallet.controller';
+import { WalletService } from './coins/wallet.service';
 import { loadConfig } from './config/config';
 import { HealthController } from './health/health.controller';
 import { HealthService } from './health/health.service';
@@ -56,6 +58,7 @@ import { QuestionsService } from './questions/questions.service';
     QuestionsController,
     CoinsController,
     CoinsInternalController,
+    WalletController,
   ],
   providers: [
     { provide: DATABASE_PROBE, useClass: DatabaseService },
@@ -93,6 +96,7 @@ import { QuestionsService } from './questions/questions.service';
     CoinsHooksService,
     CoinsService,
     CoinReconciliationService,
+    WalletService,
     CatalogRevalidationService,
     CatalogService,
     {

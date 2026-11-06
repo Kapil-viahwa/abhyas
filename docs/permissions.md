@@ -147,3 +147,16 @@ OTP introduces **no new permission codes**, because it introduces no privileged 
   and is audited as `SETTINGS_CHANGED` like every other setting.
 - The alert counter and the daily SMS budget are not exposed as routes; they are read from Redis
   by an operator (see `docs/otp-enable-runbook.md`).
+
+
+
+## Phase 5: a student's own wallet
+
+| Route | Declared access | Who may call it | What it returns |
+| --- | --- | --- | --- |
+| `GET /v1/coins/me` | `@Authenticated` | any signed-in, active account | its own balance, total earned, total spent, today's Asia/Kolkata daily reward state and the next reward date |
+| `GET /v1/coins/me/history` | `@Authenticated` | any signed-in, active account | its own ledger page (newest first, type and date filters, page size at most 100), without ids, idempotency keys or fingerprints |
+
+There is no `userId` parameter on either route: the account is the session's. A suspended
+account is refused on both. The Administrator tools under `/v1/admin/coins` keep the
+`coins.write` permission and are listed above.

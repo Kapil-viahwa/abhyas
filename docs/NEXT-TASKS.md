@@ -16,7 +16,7 @@ Work the first open item, then stop.
 
 ## The queue
 
-[ ] Q1 Confirm CI on the latest phase-5b commit (1b5a659 or newer): all nine jobs green on both runs.
+[x] Q1 Confirm CI on the latest phase-5b commit (1b5a659 or newer): all nine jobs green on both runs. — Done on `2fd741a`: eighteen passing checks (nine jobs in each run), listed on [PR #21's checks](https://github.com/Kapil-viahwa/abhyas/pull/21/checks).
 
 [ ] Q2 Student wallet API (self-only; NO userId parameter anywhere, the account comes from the session): GET /v1/coins/me (balance, total earned, total spent, today's daily reward status in Asia/Kolkata, amount, next reward date) and GET /v1/coins/me/history (paginated, filter by type and date range, newest first, page size capped at 100, strict query validation). @Authenticated, suspended accounts refused, response never exposes created_by, idempotency keys, fingerprints or other users' data (only type, signed amount, balance after, description, reference label, created_at). Database-job tests: a student reads only their own data, another user's id passed as a parameter is ignored or rejected, suspended refused, hostile values rejected, no leaked fields. Update docs/permissions.md.
 
