@@ -1569,3 +1569,72 @@ the production list, which is why it is a deploy note rather than a test.
 `COMPLETED` with `2 / 2` credited and its report downloadable, in both runs of `ea400ea`. The
 refusal itself stays proven by `coins-admin.test.ts` (404 without the secret) and
 `internal-access.spec.ts` (the address rule).
+
+
+
+## 0068 — Phase 6: the test pattern, the publish rule and the enrollment rules
+
+**Decided before phase 6's first unit. Two parts: what the owner has decided, and what this
+session assumes and the owner will confirm.**
+
+### Decided by the owner
+
+**Only an Administrator publishes or archives a test.** An editor builds a draft and submits
+it; the hand-off is the editor's last action. This is a decision, not a default: `tests.publish`
+belongs to `ADMIN`, an editor calling publish or archive is refused with **403** by the API
+before any handler runs, the publish and archive controls do not render on an editor's screen,
+and a Playwright test proves both halves. Phase 6 therefore also **retires the `publish_tests`
+editor flag** that phase 3 introduced (decision 0033): the three-flag model becomes two flags,
+`manage_questions` and `manage_tests`, and a migration refuses `tests.publish` on an editor
+account. Until that migration lands, "an editor cannot publish" is not true of this repository,
+and `docs/PHASE-6.md` says so.
+
+**The pattern is per test and editor-editable.** The editor who assembles a paper sets its
+questions, its duration, its marks per question and its negative marking. Nothing derives the
+pattern from the exam.
+
+**Single-correct questions only, no partial marking.** The question bank's `MCQ` already
+enforces exactly one correct option by a deferred trigger; phase 6 papers use those, and the
+negative marking is one number for the paper rather than a per-option weighting. No
+multiple-correct question type and no partial credit in the attempt engine after it.
+
+**Editors may see answer keys; only an Administrator moves coins.** An editor reads the key and
+explanation of the questions they may edit. No coin is added or removed by anyone but an Admin;
+the single run-time debit is enrollment.
+
+**Enrollment costs 100 coins per attempt, from `default_enrollment_cost`** (already a
+setting, default 100, `apps/api/test/operations.test.ts` asserts it). There is no refund, and a
+retake pays again. A student holds at most one **open** enrollment per test at a time, and a
+test may carry an optional maximum number of attempts. Every phase 6 e2e spec pins the
+settings it reads with the upsert-and-verify fixture in `e2e/coin-settings.ts`.
+
+**Accuracy is correct ÷ attempted.** Defined here, computed in the results phase.
+
+### Assumed, owner to confirm
+
+These do not block work; each is reversible without changing the shape of the data or the
+ledger.
+
+- **Lifecycle:** `DRAFT` → `SUBMITTED` → `PUBLISHED` → `ARCHIVED`. Editors create drafts and
+  submit; only an Administrator publishes or archives. `SUBMITTED` exists because the hand-off
+  is a real state — an editor's work is done and the Administrator has something to review.
+- **Freezing:** publishing freezes a test version's questions, ordering, duration, marks and
+  negative marking. Editing a published test opens a **new version**; an open enrollment keeps
+  the version it was sold, so a retake cannot change the paper under a student already sitting
+  it. This is the same rule the question bank already uses (`question_versions_frozen`).
+- **The debit:** enrollment writes one `ENROLLMENT` ledger row through `CoinService.spend` in
+  the same transaction as the enrollment row, with the request's `Idempotency-Key`. A double
+  click or a retry writes one debit. The row's `reference_type` is `'enrollment'` and its
+  `reference_id` is the enrollment's id, so the existing partial unique index
+  `coin_transactions_one_enrollment_per_reference`
+  (`(reference_type, reference_id)` where `type = 'ENROLLMENT'`, migration `20260801000000`)
+  keeps its meaning and each enrollment — including a retake — is its own charge.
+- **The student catalog** lists published tests only, with title, exam, duration, question
+  count, total marks, cost and the student's own enrollment state. It never shows an answer
+  key, an explanation, a draft or an archived test.
+
+**Consequence for the queue:** P1 adds the schema, the partial unique index for one open
+enrollment and the retirement of the editor publish grant; P2 and P3 enforce the publish rule
+in the API and the pages; P4 makes the debit and the enrollment one transaction with the wallet
+row locked. The specification and the audit of what already exists are in `docs/PHASE-6.md`, and
+the queue is in `docs/NEXT-TASKS.md`.

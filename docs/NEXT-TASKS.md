@@ -28,6 +28,28 @@ Work the first open item, then stop.
 
 [ ] Q6 STOP and report. Phase 6 (test builder and enrollment) starts only when the owner provides its prompt.
 
+## Phase 6 — the test builder and enrollment
+
+Branch `phase-6`, one pull request. The specification and the audit of what already exists is
+`docs/PHASE-6.md`; the rules and the assumptions are `docs/decisions.md` 0068. Same protocol
+as above: one unit per session, push once, stop. Every new row in this queue must enforce the
+owner's publish rule — **only an Administrator publishes or archives a test; an editor builds
+a draft and submits it** — and an editor calling either route must be refused with 403.
+
+[ ] P1 Data model. One migration: `tests` (exam, creator, status `DRAFT`/`SUBMITTED`/`PUBLISHED`/`ARCHIVED`, current version, optional `max_attempts`), `test_versions` (duration, marks per question, negative marks per question, frozen once published), `test_questions` (order, unique per version and position), `enrollments` (user, test, version, attempt number, status `OPEN`/`COMPLETED`/`EXPIRED`, unique `coin_transaction_id`, idempotency key). Indexes for the student catalog and the editor list, and a **partial unique index for one open enrollment per (user, test)**. Retire the `publish_tests` editor flag so `tests.publish` is Admin-only: the migration refuses the grant to an editor and `docs/permissions.md` says so. Proof: `apps/api/test/tests-model.test.ts` in the database job — CHECKs, the published freeze, the partial unique index under two concurrent inserts, the enrollment/ledger link, and the editor grant refusal. The Prisma schema models are part of this unit, because the database job runs the API against the same schema.
+
+[ ] P2 Editor/Admin test-builder API: create a draft, edit it, add, remove and reorder questions from the bank (validated: own or admin question, published, same exam), set duration, marks and negative marking, submit; Admin publish and archive. Strict query and body validation. Permission tests: an Editor with `manage_tests` builds and submits; an Editor without it gets 403; an Editor with `publish_tests` is no longer possible, and an Editor or Student calling publish or archive gets **403** (route-access sweep plus per-route tests); a Student is refused on every builder route. Answer keys are never in a student response. Create on a published test opens a new version and leaves an open enrollment's snapshot untouched. Tests: `apps/api/test/tests-builder.test.ts` in the database job.
+
+[ ] P3 Test-builder web pages for Editor and Admin, server-checked with `loadPermissionSession`, mobile responsive, linked from the editor and admin navigation: draft list, builder form (pattern, question picker, ordering), submit; Admin view with publish and archive. The publish and archive controls do not render for an Editor, and the navigation link follows the permission. Playwright in the existing `e2e` job: an editor builds a test, adds questions, sets the pattern and submits; an admin publishes it; the editor's page has no publish button; an editor posting to the publish route gets the API's 403; a student cannot reach the pages or the APIs. Specs pin every setting they read with the upsert-and-verify fixture and use unique emails. The spec's editor holds `manage_tests` only, because `publish_tests` no longer exists.
+
+[ ] P4 Enrollment API: `GET /v1/tests`, `GET /v1/tests/:id`, `POST /v1/tests/:id/enroll`, `GET /v1/enrollments/me`. Self-only — no `userId` anywhere, the account is the session's. Enrollment is one transaction: lock the wallet row, read the cost from `default_enrollment_cost`, write the `ENROLLMENT` ledger row with the request's Idempotency-Key and `reference_type = 'enrollment'`, `reference_id = <enrollment id>`, then the enrollment row. Refusals: insufficient balance, an open enrollment for that test, the test's maximum attempts reached, a suspended account, an unpublished or archived test. Database-job tests: two simultaneous submits write one debit and one enrollment; two students racing for the last 100 coins give one success and one refusal with a correct balance; retakes pay again and the old attempt stays untouched.
+
+[ ] P5 Student catalog and enroll web pages: `/tests` and `/tests/<id>`, server-checked, with title, duration, question count, total marks, cost and the student's own state; enroll is a form post; `/wallet` shows the ENROLLMENT row afterwards. Playwright: a student browses, enrolls, the balance drops by 100, the wallet history shows the ENROLLMENT row, a second enroll is refused, an insufficient-balance message is shown, and an anonymous visitor is redirected. Settings pinned with the upsert-and-verify fixture, unique emails.
+
+[ ] P6 Docs and merge: `docs/permissions.md` (the new routes and the Admin-only publish rule), `docs/decisions.md` (the assumptions confirmed or corrected), Known gaps, `docs/ROADMAP.md`, `README.md`, the `PROGRESS.md` claim table with run links, the PR description, then mark ready and merge **only** when all nine jobs are green in both runs; then confirm main CI. Never push to `main`.
+
+[ ] P7 STOP and report. The attempt engine (starting and taking a test) is the next phase and starts only on the owner's prompt.
+
 ## Reporting
 
 Report in at most 8 lines: what was pushed, which queue item, which test proves it, what is
