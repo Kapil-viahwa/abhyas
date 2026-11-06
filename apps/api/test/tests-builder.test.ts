@@ -253,7 +253,10 @@ describe('the test builder over HTTP', () => {
         marks: 2,
         negativeMarks: '0.5',
         createdBy: owner.id,
-        publishedAt: published ? new Date() : null,
+        // The options are written before the version is published: `question_options_frozen`
+        // refuses an insert into a version whose `published_at` is already set, so publishing
+        // is a second statement rather than a flag on the first.
+        publishedAt: null,
         options: {
           create: [
             { position: 1, optionHtml: '<p>4</p>', isCorrect: false },
@@ -263,6 +266,13 @@ describe('the test builder over HTTP', () => {
         },
       },
     });
+
+    if (published) {
+      await db.client.questionVersion.update({
+        where: { questionId_version: { questionId: question.id, version: 1 } },
+        data: { publishedAt: new Date() },
+      });
+    }
 
     return question.id;
   }
@@ -520,6 +530,14 @@ describe('the test builder over HTTP', () => {
 
     const anonymous = await app.inject({ method: 'GET', url: '/v1/editor/tests' });
     expect(anonymous.statusCode).toBe(401);
+
+    // Not one of the refusals moved the paper.
+    const untouched = await db.client.test.findUniqueOrThrow({
+      where: { id: paper.id },
+      select: { status: true, currentVersion: true },
+    });
+    expect(untouched.status).toBe('DRAFT');
+    expect(untouched.currentVersion).toBe(1);
   });
 
   it('refuses an editor publish or archive, and keeps one editor out of another paper', async () => {
@@ -545,6 +563,14 @@ describe('the test builder over HTTP', () => {
 
     const foreignSubmit = await call('POST', `/v1/editor/tests/${paper.id}/submit`, editorB.token);
     expect(foreignSubmit.statusCode).toBe(404);
+
+    // The two refusals published nothing and archived nothing.
+    const stillSubmitted = await db.client.test.findUniqueOrThrow({
+      where: { id: paper.id },
+      select: { status: true, publishedAt: true },
+    });
+    expect(stillSubmitted.status).toBe('SUBMITTED');
+    expect(stillSubmitted.publishedAt).toBeNull();
   });
 
   it('validates every question on the paper', async () => {
