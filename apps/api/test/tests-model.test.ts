@@ -140,29 +140,61 @@ describe('phase 6 test model and enrollment', () => {
     return question.id;
   }
 
+  /** A 64-hex fingerprint, the shape `coin_transactions_fingerprint_format` requires. */
+  function fingerprint(): string {
+    return randomUUID().replace(/-/g, '').repeat(2);
+  }
+
   /**
-   * A wallet funded to 200 and one ENROLLMENT charge of 100, written the way `CoinService.spend`
-   * will write them in P4: the ledger's own trigger moves the wallet.
+   * Keeps the test's wallet funded without ever posting a negative balance: the ledger's own
+   * trigger moves `coin_wallets`, so a test that charges the same student twice must top the
+   * wallet up through the ledger (an ADMIN_CREDIT row) rather than assume there is money left.
    */
-  async function enrollmentCharge(userId: string): Promise<string> {
+  async function ensureFunds(userId: string): Promise<number> {
     const wallet = await db.client.coinWallet.upsert({
       where: { userId },
-      create: { userId, balance: 200 },
+      create: { userId, balance: 0 },
       update: {},
       select: { balance: true },
     });
 
+    if (wallet.balance >= 100) {
+      return wallet.balance;
+    }
+
+    const topUp = 1000 - wallet.balance;
+    await db.client.coinTransaction.create({
+      data: {
+        userId,
+        type: 'ADMIN_CREDIT',
+        amount: topUp,
+        previousBalance: wallet.balance,
+        newBalance: wallet.balance + topUp,
+        idempotencyKey: `topup:${randomUUID()}`,
+        requestFingerprint: fingerprint(),
+      },
+    });
+
+    return wallet.balance + topUp;
+  }
+
+  /**
+   * One ENROLLMENT charge of 100, written the way `CoinService.spend` will write it in P4: the
+   * ledger's own trigger checks `previous_balance` and moves the wallet.
+   */
+  async function enrollmentCharge(userId: string): Promise<string> {
+    const previous = await ensureFunds(userId);
     const entry = await db.client.coinTransaction.create({
       data: {
         userId,
         type: 'ENROLLMENT',
         amount: -100,
-        previousBalance: wallet.balance,
-        newBalance: wallet.balance - 100,
+        previousBalance: previous,
+        newBalance: previous - 100,
         referenceType: 'enrollment',
         referenceId: randomUUID(),
         idempotencyKey: `enroll:${randomUUID()}`,
-        requestFingerprint: randomUUID().replace(/-/g, '').repeat(2),
+        requestFingerprint: fingerprint(),
       },
       select: { id: true },
     });
@@ -171,22 +203,16 @@ describe('phase 6 test model and enrollment', () => {
 
   /** A ledger row of another type, for the "not an ENROLLMENT" case. */
   async function adminCredit(userId: string): Promise<string> {
-    const wallet = await db.client.coinWallet.upsert({
-      where: { userId },
-      create: { userId, balance: 200 },
-      update: {},
-      select: { balance: true },
-    });
-
+    const previous = await ensureFunds(userId);
     const entry = await db.client.coinTransaction.create({
       data: {
         userId,
         type: 'ADMIN_CREDIT',
         amount: 10,
-        previousBalance: wallet.balance,
-        newBalance: wallet.balance + 10,
+        previousBalance: previous,
+        newBalance: previous + 10,
         idempotencyKey: `admin:${randomUUID()}`,
-        requestFingerprint: randomUUID().replace(/-/g, '').repeat(2),
+        requestFingerprint: fingerprint(),
       },
       select: { id: true },
     });
