@@ -1480,3 +1480,92 @@ drain bounds each API call at fifteen seconds, logs when it hits its round cap r
 pretending the job is finished, counts consecutive failed drains per job, marks the job
 `FAILED` after five, and raises a Redis alert counter for the operator
 (`apps/worker/src/jobs/coin-bulk.spec.ts`).
+
+
+
+## 0064 — A student's history is paged by number, with the page capped
+
+**Decided in phase 5, item 4b (student wallet).**
+
+**Numbered pages, not a keyset yet.** `GET /v1/coins/me/history` takes `page` and `pageSize`
+(the latter capped at 100), because a student wants "page 2 of my ledger" and a numbered page
+is what the wallet table shows. The cost is a `skip`, which a deep page pays for; the query is
+bounded by `userId`, so it scans one person's entries rather than the table.
+
+**The page number is capped at 10,000.** A caller asking for page 100,000,000 would otherwise
+hand Postgres a `skip` it has to walk. Beyond 10,000 the API answers 400 rather than quietly
+serving an empty page: a client that far into a ledger is asking a question the screen does not
+offer. Keyset pagination (cursor on `(created_at, id)`) is the later improvement when archives
+grow, and it is noted here so the cap is a decision rather than a surprise.
+
+**Proof.** `apps/api/test/wallet.test.ts`: a repeated parameter (`type=A&type=B`, `page=1&page=2`)
+is refused, and an absurd `page=100000000` is refused.
+
+
+
+## 0065 — The Administrator's coin forms: the form's key is the ledger's key, and a preview is only a cookie
+
+**Decided in phase 5, item Q4 (admin coin screens).**
+
+**The form's `Idempotency-Key` reaches the ledger unchanged in meaning.** `CoinsService`
+stores the request (its own fingerprint and the response) under `(actor, key)`, and passes the
+same key to `CoinService` as `admin:<actor>:<key>`. The API-level key answers a replayed form
+with the first answer, and the ledger-level key is what makes two submissions that arrive *at
+the same time* one movement: whichever wins the wallet's row lock writes the row, the loser
+replays it. The audit row for the adjustment is written by the winner only, because a replay is
+the first decision already recorded. Proven in `apps/api/test/coins-admin.test.ts`, where both
+submissions are sent with `Promise.all` and exactly one ledger row and one audit row exist.
+
+**A refused proof keeps the whole request.** `POST /v1/admin/coins/adjust` and `/bulk` answer
+403 `reauth_required` until a proof (password or a code to the Administrator's own number)
+verifies, and the proof check runs *before* the request is stored — so nothing has been
+consumed. The web form answers that refusal by redirecting back with the same key, and now
+with the same amount and remark, because the stored fingerprint is bound to the exact body: a
+retry with a different body would be a 409, not a retry. The screen re-renders those fields,
+the Administrator enters the proof, and the second submission is the same request.
+
+**A bulk preview is convenience, not authority.** The matched accounts, the amount and the
+reason live in one httpOnly cookie for fifteen minutes; confirming posts the matched ids back,
+and the API re-reads every account, re-checks `coin_max_bulk_users` and `coin_max_bulk_coins`
+and creates the job itself. A tampered cookie therefore cannot credit an account the preview
+never matched, and an expired one is refused with a message rather than a stale confirmation.
+The job's own idempotency key means a double click on confirm creates one job.
+
+**Proof.** `e2e/admin-coins.spec.ts` (an Administrator credits one account; two simultaneous
+submissions of the open form write one row; a CSV with one unmatched row previews, credits the
+matched two and reports the job; an editor and a student are refused by the pages and by a
+direct post to the write route), and `apps/api/test/coins-admin.test.ts` for the ledger,
+fingerprint and audit behaviour underneath it.
+
+
+
+## 0066 — The internal coin route's address list: a pinned /24 in development and CI, the operator's own in production
+
+**Decided in phase 5, Q4 (the first browser proof of a bulk job).**
+
+**What the browser found.** The worker does not write coins: it calls `POST /v1/internal/coins/bulk/drain`
+with `INTERNAL_API_SECRET`, and that route answers **404** unless the caller's address is one of
+`INTERNAL_ALLOWED_ADDRESSES`. Development and CI listed `127.0.0.1/32`, which no container can
+present — the worker arrives from its own address on the Compose network — so every job stayed
+`QUEUED` while the worker logged `could not be drained: the API answered 404`. The reconciliation
+job knocked on the same door every 24 hours and was refused the same way, silently.
+
+**Why the obvious fix is refused.** Compose gives a new project a /16, and
+`parseAllowedAddress` refuses any block wider than /24 (decision 0057: a coin-moving route must
+not accept the internet). Listing a /16 is therefore not allowed, and a container address cannot
+be known before the network exists.
+
+**The fix: pin the development network.** `docker-compose.yml` now declares the default network
+as `10.213.0.0/24` and both the API and the worker allow exactly that block. It is a development
+and CI topology, written down where the network is created, and the worker's address is inside it
+by construction.
+
+**Production is untouched.** `docker-compose.prod.yml` still requires `INTERNAL_ALLOWED_ADDRESSES`
+from the environment, and the shared validator still refuses a block wider than /24. The operator
+sets it to the worker's (and any operator host's) exact address or its /24; nothing in CI proves
+the production list, which is why it is a deploy note rather than a test.
+
+**Proof.** The e2e job's stack now drains: `e2e/admin-coins.spec.ts` shows a bulk job reaching
+`COMPLETED` with `2 / 2` credited and its report downloadable, in both runs of `ea400ea`. The
+refusal itself stays proven by `coins-admin.test.ts` (404 without the secret) and
+`internal-access.spec.ts` (the address rule).

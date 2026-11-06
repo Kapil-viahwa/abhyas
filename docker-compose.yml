@@ -50,15 +50,15 @@ services:
       timeout: 5s
       retries: 20
 
-  # One-shot migrations, as the owner role. Kept out of `up` by a profile so the
-  # stack still starts with one command; run it explicitly once Postgres is up:
-  #   docker compose run --rm migrate
+  # One-shot migrations, as the owner role. It runs as part of `up`, and the API and the
+  # worker wait for it to finish before they start, so neither can meet a schema older than
+  # its code; the worker used to boot first and log a table that did not exist yet.
+  #   docker compose run --rm migrate     # also works on its own, once Postgres is up
   # The API itself never migrates and connects as the application role.
   migrate:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    profiles: ['tools']
     command:
       ['sh', '-c', 'cd /repo/apps/api && node node_modules/prisma/build/index.js migrate deploy']
     environment:
@@ -86,9 +86,11 @@ services:
       # Shared with the web tier: the API asks it to drop cached catalog pages.
       REVALIDATE_SECRET: dev-only-revalidate-secret
       # The worker's own secret for the internal routes, and the only address allowed to
-      # present it. It is not the revalidation secret (phase 5, item 3b).
+      # present it. It is not the revalidation secret (phase 5, item 3b). The block is the
+      # compose network pinned below: a container cannot reach the API from 127.0.0.1, and a
+      # block wider than /24 is refused by the shared validator.
       INTERNAL_API_SECRET: dev-only-internal-api-secret-please-change
-      INTERNAL_ALLOWED_ADDRESSES: 127.0.0.1/32
+      INTERNAL_ALLOWED_ADDRESSES: 10.213.0.0/24
       # The web container's own address, so revalidation works from inside the network.
       REVALIDATE_URL: http://web:3000/api/revalidate
       # Public base URL of the web app, used for links in email.
@@ -112,6 +114,9 @@ services:
     ports:
       - '3001:3001'
     depends_on:
+      # Migrations first: the schema is never older than the code that reads it.
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -185,8 +190,10 @@ services:
       EMAIL_PROVIDER: console
       ALLOW_DEV_LOGIN: 'true'
       # The worker's own secret for the API's internal routes, never the revalidation one.
+      # The allowed block is the compose network pinned below, not loopback: the worker is
+      # another container, and a /24 is as wide as the validator accepts.
       INTERNAL_API_SECRET: dev-only-internal-api-secret-please-change
-      INTERNAL_ALLOWED_ADDRESSES: 127.0.0.1/32
+      INTERNAL_ALLOWED_ADDRESSES: 10.213.0.0/24
       # The import job stores images through the same private bucket as the API.
       S3_ENDPOINT: http://s3mock:9090
       S3_REGION: us-east-1
@@ -195,10 +202,21 @@ services:
       S3_SECRET_ACCESS_KEY: abhyas-dev-secret
       S3_FORCE_PATH_STYLE: 'true'
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       s3mock:
         condition: service_healthy
+
+networks:
+  # A fixed /24, because the worker calls the API's internal routes from inside the network
+  # and `INTERNAL_ALLOWED_ADDRESSES` refuses a block wider than /24. Without it Compose
+  # picks a /16, no container address can be listed, and every drain answers 404.
+  default:
+    ipam:
+      config:
+        - subnet: 10.213.0.0/24
 
 volumes:
   pgdata:

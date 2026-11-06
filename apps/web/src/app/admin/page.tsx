@@ -25,6 +25,7 @@ export default async function AdminOverviewPage(): Promise<ReactElement> {
     <AdminPage
       csrf={csrf}
       current="/admin"
+      permissions={session.profile.permissions}
       title="Administrator area"
       subtitle={`${session.profile.fullName} · ${session.profile.roleCode}`}
     >
@@ -55,6 +56,11 @@ export default async function AdminOverviewPage(): Promise<ReactElement> {
           <Link href="/admin/users/new" className="text-sky-400 hover:text-sky-300">
             Create an editor
           </Link>
+          {session.profile.permissions.includes('coins.write') ? (
+            <Link href="/admin/coins" className="text-sky-400 hover:text-sky-300">
+              Coins
+            </Link>
+          ) : null}
           <Link href="/admin/catalog" className="text-sky-400 hover:text-sky-300">
             Catalog
           </Link>

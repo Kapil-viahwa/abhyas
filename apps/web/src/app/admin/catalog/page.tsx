@@ -32,6 +32,7 @@ export default async function AdminCatalogPage({ searchParams }: PageProps): Pro
   return (
     <AdminPage
       csrf={csrf}
+      permissions={session.profile.permissions}
       current="/admin/catalog"
       title="Catalog"
       subtitle="Categories, exams, subjects and topics. Every write reaches the public pages after revalidation."

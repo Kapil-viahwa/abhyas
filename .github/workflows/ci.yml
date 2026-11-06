@@ -275,7 +275,7 @@ jobs:
         shell: bash
         run: |
           docker compose ps -a > "$RUNNER_TEMP/compose-ps.log" 2>&1 || true
-          for service in worker api web; do
+          for service in migrate worker api web; do
             docker compose logs --no-color "$service" > "$RUNNER_TEMP/$service-logs.log" 2>&1 || true
             if [ "$service" = "worker" ]; then
               while IFS= read -r line; do
@@ -340,16 +340,16 @@ jobs:
         run: |
           set -o pipefail
           pnpm exec playwright install --with-deps chromium 2>&1 | tee "$RUNNER_TEMP/playwright-install.log"
-      - name: Bring the stack up and wait for health
+      # The stack's one-shot `migrate` service is a dependency of the API and the worker
+      # (condition: service_completed_successfully), so `up` applies the migrations before
+      # either boots and `--wait` is satisfied only once migrations have finished. Playwright
+      # therefore always starts against a migrated, healthy stack, and the worker never
+      # meets a table that does not exist yet.
+      - name: Bring the stack up (migrations first) and wait for health
         shell: bash
         run: |
           set -o pipefail
           docker compose up -d --build --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-up.log"
-      - name: Apply migrations as the owner role
-        shell: bash
-        run: |
-          set -o pipefail
-          docker compose run --rm migrate 2>&1 | tee "$RUNNER_TEMP/migrate.log"
       # Both halves of the master switch, in one job. The default stack proves the switch is
       # off: the mobile screens are hidden and their routes and form posts answer 404. Then
       # the OTP override turns it on with the fake provider and a fixed code (decision 0051),
@@ -401,7 +401,7 @@ jobs:
         shell: bash
         run: |
           docker compose ps -a > "$RUNNER_TEMP/compose-ps.log" 2>&1 || true
-          for service in worker api web; do
+          for service in migrate worker api web; do
             docker compose logs --no-color "$service" > "$RUNNER_TEMP/$service-logs.log" 2>&1 || true
             if [ "$service" = "worker" ]; then
               while IFS= read -r line; do

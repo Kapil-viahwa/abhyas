@@ -2,6 +2,15 @@
 
 Acknowledged at Phase F0. These bind every phase of this repository.
 
+## Session protocol
+
+A session does **one unit of work**, pushes **once**, and **stops immediately**. It does not
+poll or wait for CI after pushing; it ends by saying "pushed `<sha>`, runs queued". The next
+session starts by reading the finished CI runs for the latest commit of the branch, fixes any
+red job first (quoting the first real error before changing anything), and only then takes the
+next unit. The ordered queue lives in `docs/NEXT-TASKS.md`; the pre-push checklist is below.
+Never read files you do not need, never print large logs, and quote only the first real error.
+
 ## Execution first
 
 1. **Nothing is done until it has run.** We never write "done", "works" or "tests pass" for anything not seen passing, either in a sandbox or in a CI run we have read. If code cannot be run, say so, rely on CI, and list exactly what stayed unverified.
@@ -26,3 +35,24 @@ Acknowledged at Phase F0. These bind every phase of this repository.
 
 9. **`PROGRESS.md` stays honest**, with columns: Built, Verified by (CI run link or test name), Known gaps.
 10. **End of every phase report:** CI run link, a table of job statuses, what changed, what is still unverified. Then stop for approval.
+
+
+
+## Pre-push checklist
+
+Run this on your own diff before every push. Each line is a failure that has already cost a
+red run on this repository.
+
+- Every indexed access (`array[0]`, `match[1]`, destructuring, `Record` lookups, regex
+  groups) is handled as possibly undefined (`noUncheckedIndexedAccess`).
+- Callback and arrow return types match the declared type (no `Promise<number>` where
+  `Promise<void>` is required).
+- Regexes that list control characters carry a single-line `eslint-disable-next-line` with a
+  written reason; no lint config changes.
+- Test assertions describe what the code now does, and do not depend on ordering or shared
+  state between tests.
+- Anything de-duplicated or compared is normalised first (lower-case, trim), then
+  de-duplicated.
+- New env variables are added to `.env.example`, both compose files, the per-service env
+  test and the validator in the same push.
+- No push while any run for the branch is in progress; no push to `main`.

@@ -56,7 +56,13 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
   const error = single(params.error);
 
   return (
-    <AdminPage csrf={csrf} current="/admin/users" title="Accounts" subtitle={`${list.total} accounts match`}>
+    <AdminPage
+      csrf={csrf}
+      permissions={session.profile.permissions}
+      current="/admin/users"
+      title="Accounts"
+      subtitle={`${list.total} accounts match`}
+    >
       <FieldError message={error} />
 
       <form method="get" className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 sm:p-6">

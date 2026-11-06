@@ -244,16 +244,18 @@ export class CoinsService {
   adjust(
     actor: AuthenticatedUser,
     input: { readonly userId: string; readonly amount: number; readonly remark: string },
+    idempotencyKey?: string,
   ): Promise<CoinEntryResult> {
-    return this.coins.adjust(actor, input);
+    return this.coins.adjust(actor, input, idempotencyKey === undefined ? {} : { idempotencyKey });
   }
 
   /**
    * An adjustment that answers a double-submitted form with the first answer.
    *
-   * The key comes from the form and is the same for both submissions; the fingerprint covers
-   * the request, so the same key with a different body is a bug and is refused rather than
-   * silently answered.
+   * The key comes from the form and is the same for both submissions; the ledger key is
+   * derived from it, so two submissions that arrive at once still write one ledger row. The
+   * fingerprint covers the request, so the same key with a different body is a bug and is
+   * refused rather than silently answered.
    */
   async adjustIdempotent(
     actor: AuthenticatedUser,
@@ -266,7 +268,7 @@ export class CoinsService {
       'adjust',
       key,
       { userId: input.userId, amount: input.amount, remark: input.remark },
-      () => this.adjust(actor, input),
+      () => this.adjust(actor, input, `admin:${actor.id}:${key}`),
       meta,
     );
   }

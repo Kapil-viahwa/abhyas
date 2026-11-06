@@ -16,6 +16,12 @@ A production-grade mock test platform for India's competitive exams (SSC, Bankin
 - Only an Admin can add or deduct coins outside the rules above.
 - Coins live in an append-only ledger: DB transactions, row locks, idempotency keys, CHECK constraints.
 
+The full rules are in [docs/PHASE5-SPEC.md](docs/PHASE5-SPEC.md), the routes and who may call
+them in [docs/permissions.md](docs/permissions.md#phase-5-a-students-own-wallet), and the
+decisions behind them (0060–0066) in [docs/decisions.md](docs/decisions.md). A student sees
+their own wallet at `/wallet`; an Administrator runs the coin tools at `/admin/coins`, and both
+are server-checked against the session rather than a token in the browser.
+
 ## Stack (fixed)
 
 pnpm monorepo · Node 22

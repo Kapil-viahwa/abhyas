@@ -147,3 +147,37 @@ OTP introduces **no new permission codes**, because it introduces no privileged 
   and is audited as `SETTINGS_CHANGED` like every other setting.
 - The alert counter and the daily SMS budget are not exposed as routes; they are read from Redis
   by an operator (see `docs/otp-enable-runbook.md`).
+
+
+
+## Phase 5: a student's own wallet
+
+| Route | Declared access | Who may call it | What it returns |
+| --- | --- | --- | --- |
+| `GET /v1/coins/me` | `@Authenticated` | any signed-in, active account | its own balance, total earned, total spent, today's Asia/Kolkata daily reward state and the next reward date |
+| `GET /v1/coins/me/history` | `@Authenticated` | any signed-in, active account | its own ledger page (newest first, type and date filters, page size at most 100), without ids, idempotency keys or fingerprints |
+
+There is no `userId` parameter on either route: the account is the session's. A suspended
+account is refused on both. The Administrator tools under `/v1/admin/coins` keep the
+`coins.write` permission and are listed above.
+
+
+## Phase 5: the Administrator's coin screens
+
+The screens under `/admin/coins` are not a second gateway: they are forms that call the
+routes above, and the API decides every one of them.
+
+| Screen | Server check before it renders | What it calls |
+| --- | --- | --- |
+| `/admin/coins` | `coins.write` (`loadPermissionSession`) | `GET /v1/admin/coins/recipients` |
+| `/admin/coins/<userId>` | `coins.write` | `GET /v1/admin/users/<id>`, `GET .../ledger`, `POST .../adjust` |
+| `/admin/coins/bulk` | `coins.write` | `POST .../bulk/preview` (draft kept in one httpOnly cookie) |
+| `/admin/coins/bulk/<jobId>` | `coins.write` | `GET .../bulk/<id>`, `.../bulk/<id>/report` |
+
+An account without `coins.write` is redirected to `/account?denied=1` before the page renders,
+and the navigation link exists only for an account that holds it. The web routes
+(`/api/admin/coins/adjust`, `/bulk/preview`, `/bulk/confirm`, `/download`) pass the session to
+the API and return its refusal; they never hold `coins.write` themselves, so an editor or a
+student who posts to one still receives the API's 403. The ID in the URL is never trusted to
+grant access to somebody else's ledger — it is an Administrator-only route, and the API checks
+the permission before it reads the row.

@@ -27,6 +27,7 @@ export default async function SettingsPage({ searchParams }: PageProps): Promise
   return (
     <AdminPage
       csrf={csrf}
+      permissions={session.profile.permissions}
       current="/admin/settings"
       title="Settings"
       subtitle="Every change is bounded by the row itself and recorded in the audit trail."

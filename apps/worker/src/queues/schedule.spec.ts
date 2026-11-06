@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { OTP_RETENTION_MINUTES } from '../jobs/otp-purge';
 import { runMaintenanceJob } from './dispatch';
-import { COIN_BULK_DRAIN_JOB, OTP_PURGE_JOB } from './maintenance';
+import { COIN_BULK_DRAIN_JOB, COIN_RECONCILIATION_JOB, OTP_PURGE_JOB } from './maintenance';
 import { OTP_PURGE_INTERVAL_MS, REPEATABLE_JOBS, registerRepeatableJobs, type RepeatableQueueHost } from './schedule';
 
 interface RecordedAdd {
@@ -39,6 +39,7 @@ describe('the worker schedule', () => {
     for (const job of REPEATABLE_JOBS) {
       let deleted = 0;
       let drained = 0;
+      let reconciled = 0;
       const result = await runMaintenanceJob(
         { name: job.name, data: job.data },
         {
@@ -58,12 +59,19 @@ describe('the worker schedule', () => {
               return { jobs: 0, rounds: 0, finished: 0 };
             },
           },
+          coinReconciliation: {
+            run: async () => {
+              reconciled += 1;
+              return { walletsChecked: 0, mismatches: 0 };
+            },
+          },
         },
       );
 
       expect(result, job.name).toBeDefined();
       expect(deleted, job.name).toBe(job.name === OTP_PURGE_JOB ? 1 : 0);
       expect(drained, job.name).toBe(job.name === COIN_BULK_DRAIN_JOB ? 1 : 0);
+      expect(reconciled, job.name).toBe(job.name === COIN_RECONCILIATION_JOB ? 1 : 0);
     }
   });
 

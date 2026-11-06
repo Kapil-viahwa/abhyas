@@ -157,13 +157,16 @@ describe('the administrator coin tools', () => {
     const key = freshKey();
     const payload = { userId: student.id, amount: 120, remark: 'Double click', reauth: { password: PASSWORD } };
 
-    const first = await call('POST', '/v1/admin/coins/adjust', admin.token, payload, key);
-    const second = await call('POST', '/v1/admin/coins/adjust', admin.token, payload, key);
+    // Both submissions at once, the way a double click arrives: one ledger row, one answer.
+    const results = await Promise.all([
+      call('POST', '/v1/admin/coins/adjust', admin.token, payload, key),
+      call('POST', '/v1/admin/coins/adjust', admin.token, payload, key),
+    ]);
 
-    expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(200);
-    expect((second.json() as { id: string }).id).toBe((first.json() as { id: string }).id);
+    expect(results.map((result) => result.statusCode)).toEqual([200, 200]);
+    expect(new Set(results.map((result) => (result.json() as { id: string }).id)).size).toBe(1);
     expect(await db.client.coinTransaction.count({ where: { userId: student.id } })).toBe(1);
+    expect(await db.client.auditLog.count({ where: { action: 'COIN_ADJUSTED', actorUserId: admin.id } })).toBe(1);
 
     // The same key naming a different request is a bug, not a retry.
     const different = await call(

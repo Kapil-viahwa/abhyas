@@ -1,5 +1,5 @@
 import { OTP_RETENTION_MINUTES } from '../jobs/otp-purge';
-import { COIN_BULK_DRAIN_JOB, OTP_PURGE_JOB } from './maintenance';
+import { COIN_BULK_DRAIN_JOB, COIN_RECONCILIATION_JOB, OTP_PURGE_JOB } from './maintenance';
 
 /**
  * The repeatable jobs the worker registers on boot.
@@ -10,6 +10,8 @@ import { COIN_BULK_DRAIN_JOB, OTP_PURGE_JOB } from './maintenance';
 export const OTP_PURGE_INTERVAL_MS = 15 * 60 * 1000;
 /** A queued bulk assignment should start within half a minute of the Administrator's click. */
 export const COIN_BULK_DRAIN_INTERVAL_MS = 30 * 1000;
+/** Once a day: a wallet that drifted should be noticed before a person spends from it. */
+export const COIN_RECONCILIATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export interface RepeatableJob {
   readonly name: string;
@@ -35,6 +37,11 @@ export const REPEATABLE_JOBS: readonly RepeatableJob[] = [
   {
     name: COIN_BULK_DRAIN_JOB,
     every: COIN_BULK_DRAIN_INTERVAL_MS,
+    data: {},
+  },
+  {
+    name: COIN_RECONCILIATION_JOB,
+    every: COIN_RECONCILIATION_INTERVAL_MS,
     data: {},
   },
 ];
