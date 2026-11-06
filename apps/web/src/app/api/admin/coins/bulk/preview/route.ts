@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-import { callWithSession } from '../../../../../lib/authenticated-write';
+import { callWithSession } from '../../../../../../lib/authenticated-write';
 import {
   BULK_DRAFT_COOKIE,
   BULK_DRAFT_MAX_AGE_SECONDS,
@@ -8,12 +8,12 @@ import {
   BULK_IDENTIFIERS_MAX,
   parseIdentifiersCsv,
   serialiseBulkDraft,
-} from '../../../../../lib/coin-bulk';
-import { previewBulk } from '../../../../../lib/coins-api';
-import { webConfig } from '../../../../../lib/config';
-import { errorRedirect, guardFormPost, redirectTo, stringField } from '../../../../../lib/route-handler';
-import { clearSessionCookies, setSessionCookies } from '../../../../../lib/session';
-import { errorMessage } from '../../../../../lib/upstream';
+} from '../../../../../../lib/coin-bulk';
+import { previewBulk } from '../../../../../../lib/coins-api';
+import { webConfig } from '../../../../../../lib/config';
+import { errorRedirect, guardFormPost, redirectTo, stringField } from '../../../../../../lib/route-handler';
+import { clearSessionCookies, setSessionCookies } from '../../../../../../lib/session';
+import { errorMessage } from '../../../../../../lib/upstream';
 
 export const dynamic = 'force-dynamic';
 
