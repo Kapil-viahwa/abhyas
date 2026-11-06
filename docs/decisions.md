@@ -1480,3 +1480,23 @@ drain bounds each API call at fifteen seconds, logs when it hits its round cap r
 pretending the job is finished, counts consecutive failed drains per job, marks the job
 `FAILED` after five, and raises a Redis alert counter for the operator
 (`apps/worker/src/jobs/coin-bulk.spec.ts`).
+
+
+
+## 0064 — A student's history is paged by number, with the page capped
+
+**Decided in phase 5, item 4b (student wallet).**
+
+**Numbered pages, not a keyset yet.** `GET /v1/coins/me/history` takes `page` and `pageSize`
+(the latter capped at 100), because a student wants "page 2 of my ledger" and a numbered page
+is what the wallet table shows. The cost is a `skip`, which a deep page pays for; the query is
+bounded by `userId`, so it scans one person's entries rather than the table.
+
+**The page number is capped at 10,000.** A caller asking for page 100,000,000 would otherwise
+hand Postgres a `skip` it has to walk. Beyond 10,000 the API answers 400 rather than quietly
+serving an empty page: a client that far into a ledger is asking a question the screen does not
+offer. Keyset pagination (cursor on `(created_at, id)`) is the later improvement when archives
+grow, and it is noted here so the cap is a decision rather than a surprise.
+
+**Proof.** `apps/api/test/wallet.test.ts`: a repeated parameter (`type=A&type=B`, `page=1&page=2`)
+is refused, and an absurd `page=100000000` is refused.

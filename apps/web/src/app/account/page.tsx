@@ -48,6 +48,15 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
         </form>
       </header>
 
+      <nav className="flex flex-wrap gap-3 text-sm">
+        <Link href="/account" className="text-slate-200">
+          Account
+        </Link>
+        <Link href="/wallet" className="text-sky-400 hover:text-sky-300">
+          Wallet
+        </Link>
+      </nav>
+
       <Notice message={params.denied === '1' ? 'You do not have access to that page.' : undefined} />
       <Notice message={params.password === 'changed' ? 'Password changed. Other devices were signed out.' : undefined} />
       <Notice message={params.revoked === '1' ? 'That session was ended.' : undefined} />

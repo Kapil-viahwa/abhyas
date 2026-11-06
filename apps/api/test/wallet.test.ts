@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
 import type { INestApplicationContext } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import Redis from 'ioredis';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { hashPassword } from '../src/auth/password';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
+import { createApiApplication } from '../src/bootstrap';
+import { WalletService } from '../src/coins/wallet.service';
+import { businessDate } from '../src/otp/otp-code';
 
 import { createMigratedTestDatabase, type TestDatabase } from './support/database';
 
@@ -26,7 +27,7 @@ const savedEnv: NodeJS.ProcessEnv = { ...process.env };
 
 describe('the student wallet', () => {
   let db!: TestDatabase;
-  let app!: NestFastifyApplication;
+  let app!: import('@nestjs/platform-fastify').NestFastifyApplication;
   let context!: INestApplicationContext;
   let redis!: Redis;
   let roleId = '';
@@ -43,10 +44,8 @@ describe('the student wallet', () => {
 
     roleId = (await db.client.role.findUniqueOrThrow({ where: { code: 'USER' }, select: { id: true } })).id;
 
-    app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter({ trustProxy: true }), {
-      logger: ['error'],
-    });
-    await app.init();
+    // The shared bootstrap, so the test runs against the adapter options the process uses.
+    ({ app } = await createApiApplication({ logger: ['error'] }));
     context = app.select(AppModule);
   }, 180_000);
 
@@ -157,28 +156,31 @@ describe('the student wallet', () => {
     const suspended = await makeStudent(1000);
     await db.client.user.update({ where: { id: suspended.id }, data: { status: 'SUSPENDED' } });
 
-    // The auth guard refuses a suspended account's session before the controller runs, so the
-    // answer is 401 rather than the handler's 403. Both are refusals, and neither leaks data.
+    // The auth guard refuses a suspended account's session before the controller runs, which is
+    // why the answer is 401 rather than the handler's 403. Neither refuses with any data.
     for (const response of [
       await get('/v1/coins/me', suspended.token),
       await get('/v1/coins/me/history', suspended.token),
     ]) {
-      expect([401, 403]).toContain(response.statusCode);
+      expect(response.statusCode).toBe(401);
       expect(response.body).not.toContain('balance');
     }
   });
 
-  it('refuses hostile page, page size and type values instead of coercing them', async () => {
+  it('refuses hostile page, page size, type values and repeated parameters instead of coercing them', async () => {
     const mine = await makeStudent(1000);
 
     for (const query of [
       'page=abc',
       'page=1e3',
       'page=0',
+      'page=100000000',
       'pageSize=0',
       'pageSize=101',
       'pageSize=10.5',
       'type=BOGUS',
+      'type=A&type=B',
+      'page=1&page=2',
       'from=not-a-date',
       'from=2024-13-40',
       'from=2025-01-02&to=2025-01-01',
@@ -188,9 +190,42 @@ describe('the student wallet', () => {
     }
   });
 
+  it('uses the Asia/Kolkata business date, not the UTC one', async () => {
+    const mine = await makeStudent(1000);
+    // 18:31 UTC on 1 January is 00:01 IST on 2 January; 18:29 UTC is still 1 January in IST.
+    const afterMidnightIst = new Date('2026-01-01T18:31:00.000Z');
+    const beforeMidnightIst = new Date('2026-01-01T18:29:00.000Z');
+    expect(businessDate(afterMidnightIst)).toBe('2026-01-02');
+    expect(businessDate(beforeMidnightIst)).toBe('2026-01-01');
+
+    const entry = randomUUID();
+    await db.client.$executeRawUnsafe(
+      `INSERT INTO "coin_transactions"
+         ("id", "user_id", "type", "amount", "previous_balance", "new_balance", "idempotency_key", "request_fingerprint")
+       VALUES ($1::uuid, $2::uuid, 'DAILY_REWARD', 10, 1000, 1010, $3, $4)`,
+      entry,
+      mine.id,
+      `wallet-${randomUUID()}`,
+      'e'.repeat(64),
+    );
+    await db.client.$executeRawUnsafe(
+      'INSERT INTO "daily_rewards" ("user_id", "reward_date", "amount", "coin_transaction_id") VALUES ($1::uuid, $2::date, 10, $3::uuid)',
+      mine.id,
+      '2026-01-02',
+      entry,
+    );
+
+    const wallet = context.get(WalletService);
+    const paid = await wallet.overview(mine.id, afterMidnightIst);
+    const notYet = await wallet.overview(mine.id, beforeMidnightIst);
+
+    expect(paid.today).toEqual({ rewardDate: '2026-01-02', paid: true, amount: 10 });
+    expect(notYet.today).toEqual({ rewardDate: '2026-01-01', paid: false, amount: 10 });
+  });
+
   it('shows the daily reward as paid once, with its amount', async () => {
     const mine = await makeStudent(1000);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = businessDate(new Date());
 
     const entry = randomUUID();
     await db.client.$executeRawUnsafe(

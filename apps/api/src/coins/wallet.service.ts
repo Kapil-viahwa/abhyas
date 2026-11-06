@@ -53,10 +53,10 @@ export class WalletService {
     return this.database.prisma;
   }
 
-  async overview(userId: string): Promise<WalletOverview> {
+  async overview(userId: string, at: Date = new Date()): Promise<WalletOverview> {
     await this.assertActive(userId);
 
-    const today = businessDate(new Date());
+    const today = businessDate(at);
     const [wallet, earned, spent, reward, setting] = await Promise.all([
       this.prisma.coinWallet.findUnique({ where: { userId }, select: { balance: true } }),
       this.prisma.coinTransaction.aggregate({ _sum: { amount: true }, where: { userId, amount: { gt: 0 } } }),
@@ -84,7 +84,7 @@ export class WalletService {
   async history(userId: string, query: Record<string, unknown>): Promise<WalletHistoryPage> {
     await this.assertActive(userId);
 
-    const page = wholeNumber(query.page, 'page', 1, Number.MAX_SAFE_INTEGER);
+    const page = wholeNumber(query.page, 'page', 1, 10_000);
     const pageSize = wholeNumber(query.pageSize, 'pageSize', 1, MAX_PAGE_SIZE);
     const type = historyType(query.type);
     const from = dateBoundary(query.from, 'from');
