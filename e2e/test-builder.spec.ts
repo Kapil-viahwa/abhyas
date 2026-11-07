@@ -43,6 +43,9 @@ const betaText = `Beta builder question ${marker}`;
 /** The paper the first test creates, used by the rest. */
 let testId = '';
 
+/** One of the fixture's published questions, for the question-editor check. */
+let alphaQuestionId = '';
+
 let adminSeeded = false;
 
 function seedAdmin(): void {
@@ -152,8 +155,8 @@ test.describe.serial('the test builder', () => {
     const editorId = new URL(page.url()).pathname.split('/').filter(Boolean).pop() ?? '';
     expect(editorId).not.toBe('');
 
-    seedBuilderFixture({ editorId, marker, alphaText, betaText });
-
+    const seeded = seedBuilderFixture({ editorId, marker, alphaText, betaText });
+    alphaQuestionId = seeded.alphaQuestionId;
     const context = await browser.newContext(CLIENT);
     const editor = await context.newPage();
     await signIn(editor, editorEmail, EDITOR_LOGIN);
@@ -299,6 +302,32 @@ test.describe.serial('the test builder', () => {
     expect(refused.status()).toBe(303);
     expect(refused.headers()['location'] ?? '').toContain('error=');
     expect(refused.headers()['location'] ?? '').not.toContain('archived=1');
+
+    await context.close();
+  });
+
+  // The two question pages threw a server error between phase 4 and the catalog fix in
+  // `316423a`: `catalogChoices` read a nested tree the API never sent, so both pages died
+  // before they painted. The editor has no data-testid of its own, so the wait is on the
+  // student-preview panel — the one test id the form carries — rather than a sleep.
+  test('the question pages render for an editor', async ({ browser }) => {
+    expect(alphaQuestionId).not.toBe('');
+
+    const context = await browser.newContext(CLIENT);
+    const editor = await context.newPage();
+    await signIn(editor, editorEmail, EDITOR_LOGIN);
+
+    await editor.goto('/editor/questions/new');
+    await expect(editor).toHaveURL(/\/editor\/questions\/new$/);
+    await expect(editor.getByRole('heading', { name: 'New question' })).toBeVisible();
+    await expect(editor.getByTestId('question-preview')).toBeVisible();
+    await expect(editor.getByRole('button', { name: 'Create draft' })).toBeVisible();
+
+    await editor.goto(`/editor/questions/${alphaQuestionId}`);
+    await expect(editor.getByRole('heading', { name: 'Edit question' })).toBeVisible();
+    await expect(editor.getByTestId('question-preview')).toBeVisible();
+    // The fixture's question is published, which only the API's own answer can say.
+    await expect(editor.getByRole('button', { name: 'Already published' })).toBeVisible();
 
     await context.close();
   });
