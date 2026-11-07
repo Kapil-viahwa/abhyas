@@ -23,6 +23,15 @@ function sqlLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+/** One `psql` call against the e2e stack, the same route `./coin-settings` uses. */
+function runSql(sql: string): void {
+  execFileSync(
+    'docker',
+    ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'abhyas', '-d', 'abhyas', '-v', 'ON_ERROR_STOP=1', '-c', sql],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  );
+}
+
 export function seedBuilderFixture(input: {
   readonly editorId: string;
   readonly marker: string;
@@ -55,11 +64,78 @@ export function seedBuilderFixture(input: {
     'END $$;',
   ].join('\n');
 
-  execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'abhyas', '-d', 'abhyas', '-v', 'ON_ERROR_STOP=1', '-c', sql],
-    { cwd: process.cwd(), encoding: 'utf8' },
-  );
+  runSql(sql);
 
   return { examId: exam, alphaQuestionId: alpha, betaQuestionId: beta };
+}
+
+
+
+/**
+ * An editor row for a spec that only needs an owner.
+ *
+ * The catalog and enrollment specs build their paper in SQL beside the bank, so they do not
+ * need to drive the admin's "create editor" screen for an account nothing signs in as. The
+ * password hash is a well-formed dummy: it exists because the column is NOT NULL, and no
+ * password matches it.
+ */
+export function seedAuthor(marker: string): { readonly authorId: string; readonly email: string } {
+  const author = randomUUID();
+  const email = `e2e-catalog-author-${marker}@example.com`;
+
+  const sql = [
+    'DO $$',
+    'BEGIN',
+    `  INSERT INTO users (id, email, password_hash, full_name, role_id)`,
+    `  SELECT ${sqlLiteral(author)}::uuid, ${sqlLiteral(email)}, 'scrypt$16384$8$1$c2FsdA==$aGFzaA==', 'E2E Catalog Author', r.id`,
+    `  FROM roles r WHERE r.code = 'EDITOR';`,
+    'END $$;',
+  ].join('\n');
+
+  runSql(sql);
+
+  return { authorId: author, email };
+}
+
+/**
+ * A PUBLISHED paper over the fixture's questions, written the way the builder would leave it.
+ *
+ * The version is written unpublished, its questions placed, and only then stamped, because
+ * `test_questions_frozen` refuses a placement in a published version — the same two-statement
+ * order the question fixture uses for options.
+ */
+export function publishSeededPaper(input: {
+  readonly authorId: string;
+  readonly examId: string;
+  readonly questionIds: readonly string[];
+  readonly title: string;
+  readonly durationMinutes?: number;
+  readonly maxAttempts?: number | null;
+}): { readonly testId: string } {
+  if (input.questionIds.length === 0) {
+    throw new Error('A seeded paper needs at least one question');
+  }
+
+  const test = randomUUID();
+  const version = randomUUID();
+  const positions = input.questionIds
+    .map((questionId, index) => `    (${sqlLiteral(version)}::uuid, ${sqlLiteral(questionId)}::uuid, ${String(index + 1)})`)
+    .join(',\n');
+
+  const sql = [
+    'DO $$',
+    'BEGIN',
+    `  INSERT INTO tests (id, exam_id, created_by, title, status, current_version, published_at, max_attempts)`,
+    `  VALUES (${sqlLiteral(test)}::uuid, ${sqlLiteral(input.examId)}::uuid, ${sqlLiteral(input.authorId)}::uuid, ${sqlLiteral(input.title)}, 'PUBLISHED', 1, now(), ${input.maxAttempts === null || input.maxAttempts === undefined ? 'NULL' : String(input.maxAttempts)});`,
+    `  INSERT INTO test_versions (id, test_id, version, duration_minutes, marks_per_question, negative_marks_per_question, created_by)`,
+    `  VALUES (${sqlLiteral(version)}::uuid, ${sqlLiteral(test)}::uuid, 1, ${String(input.durationMinutes ?? 45)}, 2, 0.5, ${sqlLiteral(input.authorId)}::uuid);`,
+    '  INSERT INTO test_questions (test_version_id, question_id, position) VALUES',
+    `${positions};`,
+    `  UPDATE test_versions SET published_at = now() WHERE id = ${sqlLiteral(version)}::uuid;`,
+    'END $$;',
+  ].join('\n');
+
+  runSql(sql);
+
+  return { testId: test };
 }
