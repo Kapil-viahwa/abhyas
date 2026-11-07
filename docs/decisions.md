@@ -1980,3 +1980,63 @@ field from `enrollments.service.ts`; there is no second fetch style and no clien
 A page that cannot load its data renders an error sentence instead of throwing (the catalog, the
 enrollment list and the detail page each have their own empty/error branch), because a thrown
 server component shows the student a crash and the run a missing test id.
+
+
+
+## 0074 — Phase 7: the server's clock, submit-only answers, and the sweeper
+
+**Decided before phase 7's first unit. Two parts: what the owner has decided, and what this
+session assumes and the owner will confirm.**
+
+### Decided by the owner
+
+**The server owns the clock.** `POST /v1/enrollments/:id/attempt` computes `deadline_at =
+started_at + test_version.duration_minutes` and stores it. The page shows a countdown from the
+remaining seconds the server sends, re-synced on every read, and never decides expiry itself: a
+browser clock, a paused tab or a manipulated timer cannot extend or shorten an attempt.
+
+**Answers are saved only on submit.** There is no autosave and no partial-save endpoint. The
+consequence is accepted and is written plainly in `docs/PHASE-7.md`: an attempt the server ends
+at its deadline without a submit call has an **empty answer set**, so every question is
+unattempted and the score is zero. Closing the browser scores zero.
+
+**One start per enrollment, and no resume.** Starting delivers the paper once; a second start is
+refused, a reload does not re-deliver it and the questions are never returned by any later read.
+Ending moves the enrollment to `COMPLETED` (submitted) or `EXPIRED` (auto-submitted); a new
+attempt needs a new enrollment and a new payment.
+
+**Scoring is one pure function.** Correct earns the version's `marks_per_question`, wrong loses
+its `negative_marks_per_question`, unattempted scores zero, single-correct only, no partial
+marking. `accuracy = correct ÷ attempted` with zero attempted giving zero. The function is a
+function of (version, submitted answers) alone, unit-tested on its own, and the only place that
+computes marks.
+
+**Answer keys stay on the server until the attempt has ended.** The phase 6 projection rule holds
+before the end — no `is_correct`, `numerical_answer` or `explanation_html` in the start response
+or in any pre-end read — and the post-end result is the only student response that carries them.
+
+**Questions come in the version's order.** No shuffling in this phase.
+
+### Assumed, owner to confirm
+
+- **A grace window of `attempt_submit_grace_seconds`, default 5, bounds 0–60.** A submit arriving
+  within it of `deadline_at` is accepted for network latency; later than that the attempt has
+  already been ended by the server and the submit is refused with a clear message.
+- **The sweeper lives in the existing worker and runs at least every 30 seconds**, following the
+  bulk-coin drain's shape (a repeatable job, a query over database state, work done through the
+  API's own service so there is still one writer, row locks and idempotency so a kill resumes).
+  The same ending happens **lazily** on any read or submit of an expired attempt, so no result
+  depends on the worker being up.
+- **A reload mid-test ends access to the paper.** The page warns before leaving, the enrollment
+  is not refunded, and there is no resume.
+- **The autosave table exists but no autosave endpoint does.** `attempt_answers` is in A1's data
+  model so a later autosave is a new write path rather than a rewrite; nothing writes it before a
+  submit in this phase.
+- **One attempt per enrollment and one result per attempt**, enforced by unique indexes and by a
+  trigger that refuses to change a written result, so a submit racing the sweeper or two workers
+  still produce exactly one result.
+
+**Consequence for the queue:** A1 adds `attempts`, `attempt_answers`, `results` and the grace
+setting; A2 writes the pure scoring function; A3 the four student routes and both expiry paths;
+A4 and A5 the taking and result screens; A6 docs and merge; A7 stop. The specification and the
+audit of what already exists are in `docs/PHASE-7.md`, and the queue is in `docs/NEXT-TASKS.md`.
