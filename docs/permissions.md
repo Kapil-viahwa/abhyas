@@ -217,6 +217,13 @@ and no builder response reaches a student: the answer key (`isCorrect`, the expl
 numerical question's answer) is serialised only in these Editor and Administrator responses,
 never to a student.
 
+**No builder route takes an `Idempotency-Key`.** `PUT /questions` replaces the paper's whole
+list and `PATCH` sets the pattern as a whole state, so a retry rewrites the same state rather
+than adding to it; the one write that is not naturally re-tried is `POST /v1/editor/tests`,
+where a double submit can create two empty drafts, nothing charged and both abandonable
+(decision 0071). Every route here is a state write, not a money write, which is why the key
+rule stops at `/v1/tests/:id/enroll`.
+
 
 
 ## Phase 6, P3: the test-builder screens

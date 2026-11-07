@@ -1685,6 +1685,38 @@ in the API and the pages; P4 makes the debit and the enrollment one transaction 
 row locked. The specification and the audit of what already exists are in `docs/PHASE-6.md`, and
 the queue is in `docs/NEXT-TASKS.md`.
 
+### Confirmed or corrected at the close of the phase
+
+**The publish rule needed no assumption.** The owner confirmed it, and it is built: the
+migration deletes editor grants of `tests.publish` and a trigger refuses a new one, `POST
+/v1/admin/tests/:id/publish` and `.../archive` answer **403** to an Editor or a Student before
+any handler runs, the builder page renders neither control without `tests.publish`, and
+`e2e/test-builder.spec.ts` proves both halves (0069).
+
+The four assumptions came out as follows.
+
+- **Lifecycle — confirmed as written.** The migration CHECKs the four statuses and 0070 records
+  the transition table: a second submit, a second publish, an edit after archive and a publish
+  of a draft are all 409.
+- **Freezing — confirmed.** 0069 freezes a published version and its placements by trigger; 0070
+  opens a new version when a published paper is edited and leaves an open enrollment's
+  `test_version_id` pointing at the version it was sold.
+- **The debit — corrected in one respect.** It is not `CoinService.spend` but the new
+  `CoinService.spendWithin`, the same private `applyEntry` path exported for a caller that
+  already holds a transaction. The row is written inside the enrollment `$transaction` under the
+  wallet row's `FOR UPDATE`, with the key prefixed `enroll:` and looked up scoped to the caller
+  before the transaction and again under the lock (0072). The rest of the assumption held: one
+  `ENROLLMENT` row per enrollment, `reference_type 'enrollment'`, `reference_id` = the
+  enrollment's id, and the existing partial unique index keeps its meaning.
+- **The student catalog — confirmed, with two fields added.** It also carries
+  `marksPerQuestion`, `negativeMarksPerQuestion` and `maxAttempts`, and the caller's own
+  `enrollment` state (`status`, `attemptNumber`, `enrollmentId`, `attemptsUsed`). It carries no
+  question, option, `isCorrect`, explanation, `created_by`, ledger id, idempotency key or
+  fingerprint, which the P4 tests assert field by field.
+
+Two smaller decisions followed from building it: refusals carry a stable `code` beside their
+unchanged message (0073), and the builder routes take no `Idempotency-Key` (0071).
+
 
 
 ## 0069 — Phase 6, P1: the published paper is frozen by trigger, and publishing a test is an Administrator's permission

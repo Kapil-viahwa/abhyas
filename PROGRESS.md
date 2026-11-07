@@ -266,6 +266,11 @@ Every row names the test that executes the claim. The runs are the two on `8129e
 | Administrator coin writes need a proof made in the last ten minutes | Adjust and bulk answer 403 `reauth_required` without a password or a code, and the screens keep the same key, amount and remark so the retry is the same request (decision 0065). An Administrator whose mobile is not linked has the password path only | No change planned; an OTP-less fallback exists |
 | The internal coin route's allowed addresses in production are the operator's to set | Development and CI pin the compose network to `10.213.0.0/24` and allow exactly that block (decision 0066). `docker-compose.prod.yml` still requires `INTERNAL_ALLOWED_ADDRESSES` from the environment, must be no wider than /24, and nothing in CI proves the production value: the operator must set it to the worker's address (or the /24 it lives in) or every bulk drain and reconciliation is refused 404 | The deploy note in the Q5 PR; verified by the first production drain |
 | The wallet still lets the application role `INSERT`/`UPDATE` `coin_wallets`, guarded by a trigger | Only the ledger's trigger may move a balance, but the privilege is broader than it needs to be; a `SECURITY DEFINER` function that owns the movement is the preferred later design (decision 0061) | Later clean-up, before launch hardening |
+| Builder routes accept no `Idempotency-Key` | Every builder write is a whole-state write (`PUT /questions` replaces the list, `PATCH` sets the pattern), so a retry rewrites the same state. The one exception is `POST /v1/editor/tests`: a double submit can create two empty drafts. Nothing is charged and both are abandonable, but they are two rows (decision 0071) | A key column on `tests` if it ever matters; owed with the attempt engine, not before |
+| No attempt engine yet | An enrollment is `OPEN` and stays open: nothing starts an attempt, times it, autosaves, submits it or moves it to `COMPLETED`. Only direct SQL can close one, which is how the retake rule is tested today; the `/tests/<id>` copy says taking the paper is the next phase | Phase 7, on the owner's prompt |
+| Enrollment has no refund path, by design | An archived or withdrawn test cannot be un-bought; its enrollments stay and still appear in "Your tests", while `/tests/<id>` answers 404 because the paper is no longer sold. There is no cancel or refund action anywhere (decision 0068) | Deliberate; a refund would be a new ledger type and a new decision |
+| `default_enrollment_cost` of 0 closes enrollment | A platform that sets the price to 0 is not selling free papers: enrollment answers 409 `not_for_sale`, because a zero `ENROLLMENT` row is refused by `coin_transactions_amount_non_zero`. The Admin settings screen still accepts 0, which is how sales are closed deliberately | Deploy note, not a defect |
+| Existing editor `publish_tests` grants are deleted by `20270101000000` | The migration revokes them and a trigger refuses a new editor grant of `tests.publish`; an editor keeps `content.publish` for question versions, which is where that capability moved (decision 0069) | Deploy note: nothing to migrate by hand, but an editor who could publish tests before cannot afterwards |
 
 
 ## What CI proves for phase 6, P1 (the test model and enrollment)
@@ -433,8 +438,53 @@ The check list behind this paragraph returns one row per job name and every row 
 | A student short of coins is told so and is not charged | e2e | "a student without enough coins is told so, and is not charged": `signup_coins` 50 for that student's grant only and restored at once, balance 50, `error=insufficient_coins`, "not have enough coins", balance still 50, zero rows | [job 128306980188](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980188) |
 | An anonymous visitor is sent to sign in | e2e | "an anonymous visitor is sent to sign in": `/tests` lands on `/login?next=%2Ftests`, the paper on `/login?next=%2Ftests%2F<id>` | [job 128306980188](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980188) |
 | The money rules still hold after the refusal-code change | database | the ten cases already in `enrollments.test.ts`, whose message assertions are unchanged (`/already used for another test/`, `/open enrollment/`, `/allows 1 attempt/`, `/Not enough coins/`, `/not published yet/`, `/archived/`), with every balance, ledger-count and row-count assertion beside them | [job 128306980232](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980232) |
-| Refusals are told apart by the API's `code`, not by its status | database, added in this push (so this push is not docs-only) | new "names every refusal with a stable code beside its unchanged message": `open_enrollment`, `key_reused`, `attempt_cap_reached`, `not_for_sale` (draft and archived), `insufficient_coins`, and a malformed 400 that carries no `code` at all, with every balance and count unchanged afterwards | unverified: its own CI is not read |
+| Refusals are told apart by the API's `code`, not by its status | database, added in this push (so this push is not docs-only) | new "names every refusal with a stable code beside its unchanged message": `open_enrollment`, `key_reused`, `attempt_cap_reached`, `not_for_sale` (draft and archived), `insufficient_coins`, and a malformed 400 that carries no `code` at all, with every balance and count unchanged afterwards | [job 128417626675](https://github.com/Kapil-viahwa/abhyas/actions/runs/42377370890/job/128417626675) |
 | The form's `Idempotency-Key` is generated once per render and reused on a retry | source, not asserted by a job | `apps/web/src/app/tests/[id]/page.tsx:42` generates it when the URL carries none, `:147` posts it, and `apps/web/src/app/api/enrollments/enroll/route.ts:44` returns it on a refusal so the re-rendered page carries the same one; the double-submit test proves the one-key rule at the API boundary | — |
 | Lint, typecheck, secrets and advisories are clean | lint, typecheck, gitleaks, audit | `pnpm lint`, `pnpm typecheck`, the secret scan, `pnpm audit:ci` | [job 128306980145](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980145), [job 128306980195](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980195), [job 128306980153](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980153), [job 128306980239](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388/job/128306980239) |
 
 The spec pins `signup_coins` 1,000, `daily_reward_coins` 0 and `default_enrollment_cost` 100 in `beforeAll` and restores 1,000 / 10 / 100 in `afterAll`, so the specs that run after it in the one-worker e2e job read the values they expect.
+
+
+
+## Phase 6 — every unit, its claim and the run that proved it
+
+One row per unit. "Verified" names a finished CI run whose job executed the proof; a unit whose
+own claim table above already lists the runs is summarised here, and nothing is verified that a
+green job did not run.
+
+| Unit | Claim | Proving test file | Verified in |
+| --- | --- | --- | --- |
+| P1 | `tests`, `test_versions`, `test_questions` and `enrollments` exist with their CHECKs and triggers; a published paper is frozen; one OPEN enrollment per student and test is a partial unique index; an enrollment points only at its own debit; `tests.publish` is an Administrator's alone and question publishing moved to `content.publish` | `apps/api/test/tests-model.test.ts` | [run 42226802128](https://github.com/Kapil-viahwa/abhyas/actions/runs/42226802128) (`database`) and the docs-only commit's [run 42228821627](https://github.com/Kapil-viahwa/abhyas/actions/runs/42228821627) |
+| P2 | An Editor with `manage_tests` creates, edits, orders and submits a paper; without the flag every write is 403; an Editor or Student calling publish or archive is 403; a Student is refused on every builder route; every transition outside the table is 409; a revision leaves the sold version alone; the answer key never reaches a student | `apps/api/test/tests-builder.test.ts`, `apps/api/src/auth/route-access.spec.ts` | [run 42234741135](https://github.com/Kapil-viahwa/abhyas/actions/runs/42234741135) (`database`, `unit`) |
+| P3 | The builder screens build, order and submit a paper; no publish control renders for an Editor; a hand-posted publish route returns the API's 403 and nothing is published; an Administrator publishes from the review queue; a Student reaches none of the pages or routes | `e2e/test-builder.spec.ts` | [run 42331153252](https://github.com/Kapil-viahwa/abhyas/actions/runs/42331153252) (`e2e` 3m26s) |
+| P3b | `/editor/questions/new` and `/editor/questions/<id>` render for an editor | `e2e/test-builder.spec.ts` — "the question pages render for an editor" | [run 42335778524](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524) (`e2e` 4m20s) |
+| P4 | Enrollment writes one `ENROLLMENT` debit and one `OPEN` row in one transaction; one key pays once, sequentially and concurrently; two keys racing one paper give one 201 and one 409 with the debit rolled back; the last coins are spent once and the balance never goes negative; a retake pays again; the attempt cap is enforced; a suspended account and a draft, submitted or archived paper write nothing; no `userId`, key, ledger id or answer key appears in any answer | `apps/api/test/enrollments.test.ts` (11 cases) | [run 42335778524](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524) (`database`), extended in [run 42377370890](https://github.com/Kapil-viahwa/abhyas/actions/runs/42377370890) |
+| P5 | A student browses the catalog, enrolls, the balance falls by exactly 100 and `/wallet` shows the `ENROLLMENT` row; a second enroll is refused with the open-enrollment sentence and charges nothing; a double submit of one key writes one debit; too few coins is refused with nothing charged; an anonymous visitor is redirected; refusals are told apart by the API's `code` | `e2e/tests-enroll.spec.ts`, `apps/api/test/enrollments.test.ts` — "names every refusal with a stable code beside its unchanged message" | [run 42340527388](https://github.com/Kapil-viahwa/abhyas/actions/runs/42340527388) (`e2e`, `database`); the codes case in [run 42377370890](https://github.com/Kapil-viahwa/abhyas/actions/runs/42377370890) (`database`) |
+| P6 | The docs match the code and the merge with `main` is resolved with nothing dropped | — | **unverified.** The merge commit `525fc5c` and the docs commit on top have no read run; PR #26 merges only when both runs on the merged head are green |
+
+### The merge with `main`, and what it brought
+
+GitHub reported PR #26 conflicting with `main`. Nothing of phase 6 was reverted: `main` had
+moved ahead with four CI commits (PRs #22–#25), of which two were not yet on `phase-6` — the
+cached, bounded Playwright browser install and decision 0067. They were brought in by a merge
+commit, and the only conflict was `docs/decisions.md`, where both sides appended at the end:
+main's 0067 is kept and placed **before** phase 6's 0068–0073, so the file stays in ascending
+order, and no decision was renumbered or dropped.
+
+The migration needed no rename. `main` gained no migration, so
+`apps/api/prisma/migrations/20270101000000_tests_and_enrollments` already sorts after every
+migration on `main` (the newest is `20261201000000_coin_admin_requests`); its SQL was not
+touched, and `schema.prisma`, `package.json` and `pnpm-lock.yaml` came through the merge
+unchanged because `main` changed none of them.
+
+### Deploy notes
+
+- **Migration order.** `pnpm db:migrate` applies `20270101000000_tests_and_enrollments` last.
+  It creates the four tables, their triggers and the partial unique index, adds
+  `content.publish` and revokes existing editor grants of `tests.publish`.
+- **`default_enrollment_cost`** must be above 0 before a student tries to enroll: the migration
+  leaves the existing default of 100, and a value of 0 closes enrollment with 409 `not_for_sale`
+  rather than selling free papers.
+- **Existing editor `publish_tests` grants are deleted** by that migration and cannot be
+  re-created; an editor who published tests before can no longer do so, and keeps
+  `content.publish` for question versions.
