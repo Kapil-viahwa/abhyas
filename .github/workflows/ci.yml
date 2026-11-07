@@ -342,11 +342,41 @@ jobs:
         run: |
           set -o pipefail
           pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      # The browser download is the only step that has ever blown this job's budget: 9m22s on
+      # `7790330` and 11m16s on `bd37281`, against 16-21s when the CDN behaves (decision 0067).
+      # The browsers themselves are cached per runner OS and per installed Playwright version.
+      # The OS packages `--with-deps` pulls in are not in that cache, so a hit still runs
+      # `install-deps`: a restored Chromium without libnss3 and its neighbours does not launch.
+      - name: Read the Playwright version
+        id: playwright-version
+        shell: bash
+        run: |
+          version="$(pnpm exec playwright --version 2>/dev/null | awk '{print $NF}')"
+          echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Restore the Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
       - name: Install Playwright browsers
+        # Eight minutes. Healthy is 16-21s and the two stalled runs were 9m22s and 11m16s, so a
+        # download that is not going to finish fails here with its own message instead of eating
+        # the job's twenty, and the stack steps plus the log collection still get to run.
+        timeout-minutes: 8
         shell: bash
         run: |
           set -o pipefail
-          pnpm exec playwright install --with-deps chromium 2>&1 | tee "$RUNNER_TEMP/playwright-install.log"
+          {
+            if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "browser cache hit for Playwright ${{ steps.playwright-version.outputs.version }}: installing only the OS dependencies"
+              pnpm exec playwright install-deps chromium
+            elif ! pnpm exec playwright install --with-deps chromium; then
+              echo "::warning title=playwright::the Chromium download failed once; retrying once"
+              sleep 5
+              pnpm exec playwright install --with-deps chromium
+            fi
+          } 2>&1 | tee "$RUNNER_TEMP/playwright-install.log"
       # The stack's one-shot `migrate` service is a dependency of the API and the worker
       # (condition: service_completed_successfully), so `up` applies the migrations before
       # either boots and `--wait` is satisfied only once migrations have finished. Playwright
