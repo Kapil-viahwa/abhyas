@@ -244,3 +244,30 @@ role carries it, and an Administrator has every code), following the coin link's
 (`apps/web/src/components/admin-shell.tsx`). The answer key — `isCorrect`, the explanation and
 a numerical question's answer — is rendered only on `/editor/tests/<id>`, which is
 `tests.read` behind the session; no student-facing page renders it in this unit.
+
+
+
+## Phase 6, P4: the student catalog and enrollment
+
+Every route below is `@Authenticated()`: a signed-in account, of any role, and nothing more.
+**There is no `userId` parameter on any of them** — the account is the session's. The two routes
+that could carry one (`POST /v1/tests/:id/enroll` and the reads beside it) refuse a `userId` in the
+body *or* the query with **400**, naming it, rather than ignoring it. A suspended account's session
+no longer authenticates, so the guard answers **401** before any handler runs; the service also
+answers 403 for a non-active row as a second line.
+
+| Route | Declared access | What it does | Refusals |
+| --- | --- | --- | --- |
+| `GET /v1/tests` | `@Authenticated` | published papers, priced at `default_enrollment_cost`, with the caller's own state per paper | 400 for an unknown/repeated/`userId` query value, or a `pageSize` above 50; 401 anonymous or suspended |
+| `GET /v1/tests/:id` | `@Authenticated` | one published paper's summary and pattern, with the caller's own state | 404 for an unknown, draft, submitted or archived paper; 401 |
+| `POST /v1/tests/:id/enroll` | `@Authenticated` | buys one attempt: one `ENROLLMENT` debit and one `OPEN` enrollment, in one transaction | 400 for a missing or malformed `Idempotency-Key`, a body field, or an unaffordable price; 401; 404 unknown paper; **409** for a draft, submitted or archived paper, an open enrollment, the attempt cap, or a key already spent on another test |
+| `GET /v1/enrollments/me` | `@Authenticated` | the caller's own enrollments, newest first, paged (max 100) | 400 for an unknown/`userId` query value; 401 |
+
+What none of them ever selects, so none of them can leak: a question, an option, `isCorrect`, an
+explanation, a numerical answer, a `created_by`, another student's row, a ledger id, an idempotency
+key or a request fingerprint. The catalog's answer is a whitelist of summary fields, and the
+enrollment's is the caller's own row plus the paper it bought.
+
+`default_enrollment_cost` is the one price, read **inside** the enrollment transaction. A value of
+`0` closes enrollment (409) rather than selling a free paper, because a ledger row of zero is
+refused by `coin_transactions_amount_non_zero`.

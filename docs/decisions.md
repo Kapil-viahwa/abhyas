@@ -1796,3 +1796,70 @@ own coverage. So `e2e/tests-fixture.ts` inserts one category, exam, subject and 
 questions owned by the editor, through the same `docker compose exec ... psql` route the coin
 settings fixture uses, and the spec then exercises only the builder screens. When the catalog
 grows an "assign owner" control, the fixture should be replaced by it.
+
+
+
+## 0072 — Phase 6, P4: enrollment is one transaction, in one lock order
+
+**Status:** accepted · **Phase:** 6
+
+**The lock order is wallet, test, enrollments.** Every enrollment transaction takes the caller's
+`coin_wallets` row `FOR UPDATE` first, then the `tests` row `FOR SHARE`, then reads and inserts
+`enrollments`. The order is what keeps two shapes of concurrency safe at once: two requests from
+**one** student (a double click, two tabs, a retry) meet on the wallet row and serialise, so only one
+of them decides the balance; two requests from **different** students meet on the shared test row in
+SHARE mode, which readers never block, so neither waits for the other's wallet. Taking the test row
+first, or the enrollment rows first, would let two students hold different locks in opposite orders.
+The same reason the `enrollments` row is last: it is the only row this transaction creates.
+
+The wallet lock is taken through **`CoinService.lockWallet`**, added for this, and the debit is
+written through **`CoinService.spendWithin`** — `spend`'s own logic (`applyEntry`) running inside the
+transaction the enrollment opened. No second code path writes a ledger row or a balance: the
+wallet's trigger still moves the balance, the insufficient-funds check is still `applyEntry`'s 400
+("Not enough coins for this charge"), and a replayed key still returns the original row.
+
+**An `Idempotency-Key` is the student's, and it is checked twice.** Before the transaction the key
+is looked up on `enrollments (user_id, idempotency_key)`; inside it, again, under the wallet lock —
+two requests carrying one key can both pass the first check. A key already spent on **this** test
+answers with the first enrollment, byte for byte, and charges nothing; the same key on **another**
+test is a 409 and writes nothing, because silently serving a different paper's purchase would be
+worse than a refusal. On the ledger the key is prefixed `enroll:` (`enroll:<key>`), so it cannot
+collide with `signup:`, `daily:` or `admin:` — and the 8..100-character client bound exists because
+the ledger refuses a key above 200 characters, prefix included.
+
+**Two different keys racing for one paper end in exactly one winner, never a 500.** The open
+enrollment check and the attempt count are advisory; the decision is the database's own indexes —
+`enrollments_one_open_per_test` (the partial unique index) and `enrollments_user_test_attempt_key`.
+A `P2002` from the insert aborts the transaction, so the debit written a moment earlier rolls back
+with it, and the API answers **409** ("Another enrollment for this test was written at the same
+moment; try again"). The test proves one 201, one 409, one ledger row, one enrollment row and the
+balance moved once.
+
+**A retake is a new enrollment with a new attempt number and a new debit.** A completed or expired
+attempt leaves its row, its `coin_transaction_id` and its `test_version_id` untouched; the new row
+is `attempt_number = prior + 1` and points at the version that is published **now**. That is what
+`coin_transactions_one_enrollment_per_reference` (one `ENROLLMENT` row per `(reference_type,
+reference_id)`) is for: each enrollment is its own reference, so a retake can never share a debit
+with the attempt before it. The attempt engine that closes an attempt (COMPLETED) is phase 7; this
+unit only reads that state.
+
+**Status codes, and why each one.** `201` for a new enrollment, and the same `201` for a replay —
+the body is identical, so a client that retries cannot tell it apart, which is the point. `400` for
+a missing or malformed key, a body field (including `userId`), an unknown query value, or an
+unaffordable price: the wallet's own insufficient-funds answer is a 400 and enrollment reuses it.
+`409` for a paper that is not for sale (draft, submitted, archived), an open enrollment, a reached
+attempt cap, and a reused key on another test — all of them states the client could have known.
+`404` for an unknown paper, so the catalog cannot be used to discover drafts. `401` for an
+anonymous or suspended session, the guard's answer before any handler.
+
+**The price is read inside the transaction, and zero closes the shop.** `default_enrollment_cost`
+has bounds `0..100000`; a zero would need a zero-amount ledger row, which
+`coin_transactions_amount_non_zero` refuses, so a zero is a 409 ("Enrollment is closed") rather
+than a free paper. The read happens after the checks, so the amount charged is the amount the
+setting held while the transaction ran.
+
+**The catalog never selects a question.** `GET /v1/tests` and `GET /v1/tests/:id` select the paper's
+summary, its live version's pattern and counts, and the caller's own enrollments — nothing from
+`test_questions`, `questions`, `question_versions` or `question_options`. The enrollment's own
+answer is the same projection plus the row it wrote. The attempt serialiser in phase 7 is the first
+student-facing response that may carry a question, and it will own its own projection.
