@@ -22,8 +22,9 @@ import { createMigratedTestDatabase, type TestDatabase } from './support/databas
  * price spends it once and never goes negative; an open enrollment blocks a second one and a
  * retake after completion pays again, leaving the old attempt untouched; the paper's attempt
  * cap is enforced; a suspended account, a draft, a submitted paper and an archived one are all
- * refused with nothing written; and no answer carries a `userId`, an answer key, a creator or
- * a ledger detail.
+ * refused with nothing written; each refusal names a stable `code` beside the message it always
+ * sent, which is how the web tier tells three different 409s and two different 400s apart; and
+ * no answer carries a `userId`, an answer key, a creator or a ledger detail.
  */
 
 const PASSWORD = 'correct-horse-9battery';
@@ -697,6 +698,85 @@ describe('enrollment over HTTP', () => {
     expect(await enrollmentRows(student)).toBe(0);
     expect(await ledgerRows(student)).toBe(0);
     expect(await balanceOf(student)).toBe(1000);
+  });
+
+  it('names every refusal with a stable code beside its unchanged message', async () => {
+    const student = await makePerson('USER', [], null);
+    await fund(student, 1000);
+
+    const testId = await publishedPaper(1);
+    const key = `codes-${randomUUID()}`;
+
+    const first = await enroll(student, testId, key);
+    expect(first.statusCode, first.body).toBe(201);
+    const firstBody = first.json() as EnrollmentView;
+
+    // A second attempt at a paper whose first attempt is still open.
+    const blocked = await enroll(student, testId, `codes-open-${randomUUID()}`);
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ code: 'open_enrollment' });
+    expect(blocked.json().message).toMatch(/open enrollment/);
+
+    // The key that paid for the first paper, offered for another one.
+    const other = await publishedPaper();
+    const reused = await enroll(student, other, key);
+    expect(reused.statusCode).toBe(409);
+    expect(reused.json()).toMatchObject({ code: 'key_reused' });
+    expect(reused.json().message).toMatch(/already used for another test/);
+
+    // The paper's one attempt is spent once its open row is closed.
+    await db.client.enrollment.update({
+      where: { id: firstBody.id },
+      data: { status: 'COMPLETED', completedAt: new Date() },
+    });
+
+    const capped = await enroll(student, testId, `codes-cap-${randomUUID()}`);
+    expect(capped.statusCode).toBe(409);
+    expect(capped.json()).toMatchObject({ code: 'attempt_cap_reached' });
+    expect(capped.json().message).toMatch(/allows 1 attempt/);
+
+    // A paper that cannot be bought yet, and one that has been withdrawn.
+    const draft = await createPaper();
+    const onDraft = await enroll(student, draft, `codes-draft-${randomUUID()}`);
+    expect(onDraft.statusCode).toBe(409);
+    expect(onDraft.json()).toMatchObject({ code: 'not_for_sale' });
+    expect(onDraft.json().message).toMatch(/not published yet/);
+
+    const archived = await publishedPaper();
+    const archiving = await call('POST', `/v1/admin/tests/${archived}/archive`, admin.token);
+    expect(archiving.statusCode, archiving.body).toBe(200);
+
+    const onArchived = await enroll(student, archived, `codes-archived-${randomUUID()}`);
+    expect(onArchived.statusCode).toBe(409);
+    expect(onArchived.json()).toMatchObject({ code: 'not_for_sale' });
+    expect(onArchived.json().message).toMatch(/archived/);
+
+    // The refusal a 400 shares with a malformed request: the price.
+    const poor = await makePerson('USER', [], null);
+    await fund(poor, 50);
+    const affordable = await publishedPaper();
+
+    const broke = await enroll(poor, affordable, `codes-poor-${randomUUID()}`);
+    expect(broke.statusCode).toBe(400);
+    expect(broke.json()).toMatchObject({ code: 'insufficient_coins' });
+    expect(broke.json().message).toMatch(/Not enough coins/);
+
+    // The other 400 carries no code at all, so a screen can never mistake a malformed body for
+    // a student who is short of coins.
+    const malformed = await call('POST', `/v1/tests/${testId}/enroll`, student.token, {
+      payload: { testId },
+      key: `codes-malformed-${randomUUID()}`,
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json().code).toBeUndefined();
+
+    // Every refusal above left the wallets and the rows exactly where they were.
+    expect(await balanceOf(student)).toBe(900);
+    expect(await ledgerRows(student)).toBe(1);
+    expect(await enrollmentRows(student)).toBe(1);
+    expect(await balanceOf(poor)).toBe(50);
+    expect(await ledgerRows(poor)).toBe(0);
+    expect(await enrollmentRows(poor)).toBe(0);
   });
 
   it('charges the price the setting names, read at enrollment time', async () => {
