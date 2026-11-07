@@ -1980,3 +1980,128 @@ field from `enrollments.service.ts`; there is no second fetch style and no clien
 A page that cannot load its data renders an error sentence instead of throwing (the catalog, the
 enrollment list and the detail page each have their own empty/error branch), because a thrown
 server component shows the student a crash and the run a missing test id.
+
+
+
+## 0074 — Phase 7: the server's clock, submit-only answers, and the sweeper
+
+**Decided before phase 7's first unit. Two parts: what the owner has decided, and what this
+session assumes and the owner will confirm.**
+
+### Decided by the owner
+
+**The server owns the clock.** `POST /v1/enrollments/:id/attempt` computes `deadline_at =
+started_at + test_version.duration_minutes` and stores it. The page shows a countdown from the
+remaining seconds the server sends, re-synced on every read, and never decides expiry itself: a
+browser clock, a paused tab or a manipulated timer cannot extend or shorten an attempt.
+
+**Answers are saved only on submit.** There is no autosave and no partial-save endpoint. The
+consequence is accepted and is written plainly in `docs/PHASE-7.md`: an attempt the server ends
+at its deadline without a submit call has an **empty answer set**, so every question is
+unattempted and the score is zero. Closing the browser scores zero.
+
+**One start per enrollment, and no resume.** Starting delivers the paper once; a second start is
+refused, a reload does not re-deliver it and the questions are never returned by any later read.
+Ending moves the enrollment to `COMPLETED` (submitted) or `EXPIRED` (auto-submitted); a new
+attempt needs a new enrollment and a new payment.
+
+**Scoring is one pure function.** Correct earns the version's `marks_per_question`, wrong loses
+its `negative_marks_per_question`, unattempted scores zero, single-correct only, no partial
+marking. `accuracy = correct ÷ attempted` with zero attempted giving zero. The function is a
+function of (version, submitted answers) alone, unit-tested on its own, and the only place that
+computes marks.
+
+**Answer keys stay on the server until the attempt has ended.** The phase 6 projection rule holds
+before the end — no `is_correct`, `numerical_answer` or `explanation_html` in the start response
+or in any pre-end read — and the post-end result is the only student response that carries them.
+
+**Questions come in the version's order.** No shuffling in this phase.
+
+### Assumed, owner to confirm
+
+- **A grace window of `attempt_submit_grace_seconds`, default 5, bounds 0–60.** A submit arriving
+  within it of `deadline_at` is accepted for network latency; later than that the attempt has
+  already been ended by the server and the submit is refused with a clear message.
+- **The sweeper lives in the existing worker and runs at least every 30 seconds**, following the
+  bulk-coin drain's shape (a repeatable job, a query over database state, work done through the
+  API's own service so there is still one writer, row locks and idempotency so a kill resumes).
+  The same ending happens **lazily** on any read or submit of an expired attempt, so no result
+  depends on the worker being up.
+- **A reload mid-test ends access to the paper.** The page warns before leaving, the enrollment
+  is not refunded, and there is no resume.
+- **The autosave table exists but no autosave endpoint does.** `attempt_answers` is in A1's data
+  model so a later autosave is a new write path rather than a rewrite; nothing writes it before a
+  submit in this phase.
+- **One attempt per enrollment and one result per attempt**, enforced by unique indexes and by a
+  trigger that refuses to change a written result, so a submit racing the sweeper or two workers
+  still produce exactly one result.
+
+**Consequence for the queue:** A1 adds `attempts`, `attempt_answers`, `results` and the grace
+setting; A2 writes the pure scoring function; A3 the four student routes and both expiry paths;
+A4 and A5 the taking and result screens; A6 docs and merge; A7 stop. The specification and the
+audit of what already exists are in `docs/PHASE-7.md`, and the queue is in `docs/NEXT-TASKS.md`.
+
+
+
+## 0075 — Phase 7, A1: the attempt's guards live in the database
+
+**Decided while writing the attempt migration.** A3 will compute and write these rows, but the
+rules that must never be skipped are enforced by Postgres, in the same style as the paper's
+freeze (0069) and the ledger's guards (0060).
+
+**An attempt's student and version are read from its enrollment.** SQL has no foreign key over a
+pair of columns that are only unique together, and `enrollments` already proves that a purchase
+is one student's one version of one paper. So a `BEFORE INSERT` trigger reads the enrollment and
+raises unless `user_id` and `test_version_id` are exactly its own. The pair is then fixed for
+life: the same table's one-way trigger refuses any update to the enrollment, the student, the
+version, the start or the deadline.
+
+**The start is the database's now(), not the application's.** `started_at` has a default, and a
+`BEFORE INSERT` trigger overwrites whatever the writer sent — Prisma's model carries the column,
+so without the trigger a caller could back-date an attempt to look early or late. The deadline
+is *computed* in A3, where the version's duration is read inside the same transaction that
+starts the attempt, and is only *stored and guarded* here: the CHECK is `deadline_at >
+started_at`, and the one-way trigger refuses a later change to it. Computing it in the database
+would need the duration copied onto the attempt or a trigger reading another table, and the API
+already owns the version read.
+
+**Ending is one way and once.** `IN_PROGRESS` may move to `SUBMITTED` or `AUTO_SUBMITTED`; every
+other change, including a second ending and a jump back, is refused. A single CHECK pairs
+`submitted_at` and `submit_source`, so a row can never be half-submitted. Two simultaneous
+endings do not need a lock to be safe: the handler's update is conditional on `status =
+'IN_PROGRESS'`, and the trigger refuses the loser's write even if it gets that far.
+
+**Answers exist only for attempted questions.** A row per answered question, with
+`chosen_option_id NOT NULL`: an unattempted question simply has no row, which is what "answers
+are saved only on submit" means in the data model, and it is why an auto-submitted attempt
+without a submit call has an empty set. A guard trigger checks that the question is placed in
+the attempt's version and that the option belongs to that question, and refuses any insert,
+update or delete once the attempt has ended. The table stays real so autosave can later be a
+write path (0074).
+
+**A result is written after the end and never after.** A trigger refuses a result for an attempt
+that is still `IN_PROGRESS`, and a second trigger refuses every `UPDATE` and `DELETE`. The
+counts CHECK `attempted = correct + wrong` and `correct + wrong + unattempted = total_questions`,
+accuracy is bounded, and a CHECK states the zero case: accuracy is 0 when nothing was attempted.
+
+**`attempt_submit_grace_seconds` is created here, not in A3.** Decision 0074 places the setting
+in A1's migration, so the row exists (integer, default 5, bounds 0–60) before the handler that
+reads it is written.
+
+### Assumed, owner to confirm: numerical-answer questions in a test
+
+**A published test can contain `NUMERICAL` questions today.** Phase 6's P2 validates that a
+placed question is the caller's own (or an Administrator's), published, and in the paper's exam
+— it does not filter on `question_type`. A numerical question has no options at all; its answer
+is `question_versions.numerical_answer`, and the deferred trigger enforces the "no options for a
+numerical" rule. The two question types therefore mean two different answering and scoring
+shapes, and A1 stores only a chosen option, because that is the only shape the answer table can
+hold safely now.
+
+**Not designed here, and not changed in the builder either.** This unit adds no numerical
+scoring and no builder restriction. The open item for the owner is whether a paper may contain a
+numerical-answer question at all before the attempt engine can score one. Until it is decided,
+A2's scoring function will treat a numerical question in a paper as it treats any question with
+no chosen option — unattempted — and the recommendation is that the builder refuse a numerical
+question once A3 exists, so a paper can never contain a question the engine cannot score. That
+recommendation is recorded here rather than acted on, because the builder is not in A1's scope.

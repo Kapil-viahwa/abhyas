@@ -53,6 +53,71 @@ a draft and submits it** — and an editor calling either route must be refused 
 
 [ ] P7 STOP and report. The attempt engine (starting and taking a test) is the next phase and starts only on the owner's prompt.
 
+## Phase 7 — the attempt engine
+
+Branch `phase-7`, one pull request. The specification and the audit of what already exists is
+`docs/PHASE-7.md`; the rules and the assumptions are `docs/decisions.md` 0074. Same protocol as
+above: one unit per session, push once, stop. Every row must keep the owner's rules — the server
+owns the clock, answers are saved only on submit, one start per enrollment and no resume, and
+answer keys never leave the server before the attempt has ended.
+
+[ ] A1 Data model. One migration: `attempts` (unique enrollment, `started_at`, `deadline_at`,
+`submitted_at`, `status` `IN_PROGRESS`/`SUBMITTED`/`AUTO_SUBMITTED`, submit source), with CHECK
+`deadline_at > started_at`; `attempt_answers` (attempt, question, chosen option) with
+`UNIQUE (attempt, question)` and a guard that the question is in the attempt's version and the
+option is that question's; `results` (score, correct, wrong, unattempted, attempted, accuracy,
+marks) with `UNIQUE (attempt)` and a trigger that refuses `UPDATE`/`DELETE`; the
+`attempt_submit_grace_seconds` setting (integer, default 5, 0–60). Prisma models in the same
+unit, because the database job runs the API against the schema. Proof: a database-job test file
+— the CHECKs, one attempt per enrollment, one answer per question, a foreign question or option
+refused, a result immutable once written, and two simultaneous inserts of the same attempt
+leaving exactly one.
+
+[ ] A2 The scoring function. A pure function of (version, submitted answers): correct ×
+marks per question − wrong × negative marks per question, unattempted zero, `accuracy =
+correct ÷ attempted` with zero attempted giving zero, carrying marks as the version's decimals
+rather than floats. Unit tests: all correct, all wrong with negative marking, all unattempted,
+mixed, zero attempted, fractional marks, a question not in the version ignored or refused
+(state which), duplicate answers refused, and a property-style check that score equals
+`marks × correct − negative × wrong` over generated answer sets. No HTTP, no database: this is
+the only place marks are computed.
+
+[ ] A3 Attempt API and expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
+anywhere, an `OPEN` enrollment required, one start only, the deadline computed on the server,
+questions returned once in the version's order **without** `is_correct`, a numerical answer or an
+explanation); `POST /v1/attempts/:id/submit` (idempotent, the grace window honoured, every answer
+validated against the version's questions and their options, one result written in one
+transaction); `GET /v1/attempts/:id` (status and remaining seconds, never the questions);
+`GET /v1/attempts/:id/result` (own, only after the end, answer keys and explanations only then).
+Expiry is lazy on any read or submit **and** swept by a repeatable job in `apps/worker` every 30
+seconds, both running the same service function under a row lock. Proof: database-job tests — a
+simultaneous submit and sweep giving exactly one result, a submit after the grace window refused
+with its message, a second start refused, a student reading another student's attempt refused,
+no answer key in any pre-end response, and the sweeper ending an expired attempt by itself.
+
+[ ] A4 The taking page. `/attempts/<id>`: the paper in the version's order, a countdown from the
+server's remaining seconds that re-syncs on every read and never decides expiry, answer selection
+for single-correct questions, a submit confirmation, a warning before leaving, and an automatic
+redirect to the result when the attempt ends. Server-checked with `loadSession`. Playwright:
+a student starts, answers, submits and sees the result; a slow page does not move the deadline
+(the deadline shown after a delay is the server's); a submit after expiry is refused with the
+message.
+
+[ ] A5 The result and review pages, with Playwright: score, accuracy, correct, wrong, unattempted,
+and the per-question review (the student's answer, the correct answer, the explanation) only
+after the attempt has ended; another student cannot open either page. The enrollment page stops
+promising "taking it is the next phase" and links to the start.
+
+[ ] A6 Docs and merge: `docs/permissions.md` (the four routes and who may call them),
+`docs/decisions.md` (0074's assumptions confirmed or corrected), the known gaps (no autosave by
+decision, closing the browser scores zero, no resume, no refund), `docs/ROADMAP.md`, the README
+link, the `PROGRESS.md` claim table with run links, the PR description; then mark ready and merge
+with a normal merge commit **only** when all nine jobs are green in both runs of the exact head;
+then read `main` CI. Never push to `main`.
+
+[ ] A7 STOP and report. Results, analytics and dashboards (phase 8) start only on the owner's
+prompt.
+
 ## Reporting
 
 Report in at most 8 lines: what was pushed, which queue item, which test proves it, what is
