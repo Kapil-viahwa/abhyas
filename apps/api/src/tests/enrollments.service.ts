@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../auth/access';
@@ -208,6 +208,21 @@ function isUniqueViolation(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'P2002';
 }
 
+/**
+ * The refusals a screen has to tell apart, each with a stable code beside its message.
+ *
+ * The status alone is not enough: an unaffordable enrollment and a malformed one are both a
+ * 400, and three different 409s mean three different things to a student. The codes are the
+ * contract the web tier reads; the messages stay the human ones the API always sent.
+ */
+export const ENROLLMENT_ERROR_CODES = {
+  insufficient: 'insufficient_coins',
+  open: 'open_enrollment',
+  attempts: 'attempt_cap_reached',
+  unavailable: 'not_for_sale',
+  keyReused: 'key_reused',
+} as const;
+
 @Injectable()
 export class EnrollmentsService {
   constructor(
@@ -338,7 +353,10 @@ export class EnrollmentsService {
 
     if (existing !== null) {
       if (existing.testId !== testId) {
-        throw new ConflictException('That Idempotency-Key was already used for another test');
+        throw new ConflictException({
+          code: ENROLLMENT_ERROR_CODES.keyReused,
+          message: 'That Idempotency-Key was already used for another test',
+        });
       }
       return this.view(actor.id, existing.id);
     }
@@ -359,7 +377,10 @@ export class EnrollmentsService {
           });
           if (raced !== null) {
             if (raced.testId !== testId) {
-              throw new ConflictException('That Idempotency-Key was already used for another test');
+              throw new ConflictException({
+                code: ENROLLMENT_ERROR_CODES.keyReused,
+                message: 'That Idempotency-Key was already used for another test',
+              });
             }
             return raced.id;
           }
@@ -378,10 +399,16 @@ export class EnrollmentsService {
             throw new NotFoundException('Unknown test');
           }
           if (test.status === 'ARCHIVED') {
-            throw new ConflictException('This test has been archived and is no longer sold');
+            throw new ConflictException({
+              code: ENROLLMENT_ERROR_CODES.unavailable,
+              message: 'This test has been archived and is no longer sold',
+            });
           }
           if (test.status !== 'PUBLISHED') {
-            throw new ConflictException('This test is not published yet');
+            throw new ConflictException({
+              code: ENROLLMENT_ERROR_CODES.unavailable,
+              message: 'This test is not published yet',
+            });
           }
 
           // The live version, not a draft revision a builder may be editing beside it.
@@ -391,7 +418,10 @@ export class EnrollmentsService {
             select: { id: true, version: true },
           });
           if (version === null) {
-            throw new ConflictException('This test has no published version to enroll in');
+            throw new ConflictException({
+              code: ENROLLMENT_ERROR_CODES.unavailable,
+              message: 'This test has no published version to enroll in',
+            });
           }
 
           // Step 4: one open enrollment per test, and the paper's own attempt cap.
@@ -400,12 +430,18 @@ export class EnrollmentsService {
             select: { id: true },
           });
           if (open !== null) {
-            throw new ConflictException('You already have an open enrollment for this test');
+            throw new ConflictException({
+              code: ENROLLMENT_ERROR_CODES.open,
+              message: 'You already have an open enrollment for this test',
+            });
           }
 
           const used = await tx.enrollment.count({ where: { userId: actor.id, testId } });
           if (test.max_attempts !== null && used >= test.max_attempts) {
-            throw new ConflictException(`This test allows ${String(test.max_attempts)} attempt(s)`);
+            throw new ConflictException({
+              code: ENROLLMENT_ERROR_CODES.attempts,
+              message: `This test allows ${String(test.max_attempts)} attempt(s)`,
+            });
           }
 
           // Step 5: the price, read here so it is the one this enrollment pays.
@@ -417,14 +453,27 @@ export class EnrollmentsService {
 
           // Step 6: the debit and the row, in one transaction. The enrollment id comes first so
           // the ledger's `reference_id` names the row that will exist.
-          const entry = await this.coins.spendWithin(tx, {
-            userId: actor.id,
-            amount: cost,
-            type: 'ENROLLMENT',
-            idempotencyKey: `enroll:${idempotencyKey}`,
-            reference: { type: 'enrollment', id: enrollmentId },
-            description: `Enrollment in ${test.title}`,
-          });
+          let entry: { readonly id: string };
+
+          try {
+            entry = await this.coins.spendWithin(tx, {
+              userId: actor.id,
+              amount: cost,
+              type: 'ENROLLMENT',
+              idempotencyKey: `enroll:${idempotencyKey}`,
+              reference: { type: 'enrollment', id: enrollmentId },
+              description: `Enrollment in ${test.title}`,
+            });
+          } catch (error) {
+            // The one refusal a student has to be told apart from every other 400: the price.
+            if (error instanceof BadRequestException && /Not enough coins/.test(error.message)) {
+              throw new BadRequestException({
+                code: ENROLLMENT_ERROR_CODES.insufficient,
+                message: error.message,
+              });
+            }
+            throw error;
+          }
 
           await tx.enrollment.create({
             data: {
@@ -462,9 +511,13 @@ export class EnrollmentsService {
       )
       .catch((error: unknown) => {
         // Step 7: two different keys for one test can pass the checks together. The database's
-        // own indexes decide; either violation rolls the debit back and is a 409, never a 500.
+        // own indexes win, the debit is rolled back with the transaction, and the student sees
+        // the same refusal a plain second attempt gets.
         if (isUniqueViolation(error)) {
-          throw new ConflictException('Another enrollment for this test was written at the same moment; try again');
+          throw new ConflictException({
+            code: ENROLLMENT_ERROR_CODES.open,
+            message: 'Another enrollment for this test was written at the same moment; try again',
+          });
         }
         throw error;
       });
@@ -510,7 +563,10 @@ export class EnrollmentsService {
   /** The price of one attempt. Zero closes enrollment rather than selling a free paper. */
   private requireCost(value: number | null): number {
     if (value === null || value <= 0) {
-      throw new ConflictException('Enrollment is closed: the platform has set no enrollment cost');
+      throw new ConflictException({
+        code: ENROLLMENT_ERROR_CODES.unavailable,
+        message: 'Enrollment is closed: the platform has set no enrollment cost',
+      });
     }
 
     return value;

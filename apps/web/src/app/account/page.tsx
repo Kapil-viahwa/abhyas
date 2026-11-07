@@ -55,6 +55,9 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
         <Link href="/wallet" className="text-sky-400 hover:text-sky-300">
           Wallet
         </Link>
+        <Link href="/tests" className="text-sky-400 hover:text-sky-300">
+          Tests
+        </Link>
       </nav>
 
       <Notice message={params.denied === '1' ? 'You do not have access to that page.' : undefined} />
