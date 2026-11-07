@@ -25,6 +25,6 @@
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/yauzl": "2.10.3",
-    "prisma": "^5.22.0"
+    "prisma": "^7.10.1"
   }
 }
