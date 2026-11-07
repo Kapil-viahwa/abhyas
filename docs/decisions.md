@@ -2040,3 +2040,68 @@ or in any pre-end read — and the post-end result is the only student response 
 setting; A2 writes the pure scoring function; A3 the four student routes and both expiry paths;
 A4 and A5 the taking and result screens; A6 docs and merge; A7 stop. The specification and the
 audit of what already exists are in `docs/PHASE-7.md`, and the queue is in `docs/NEXT-TASKS.md`.
+
+
+
+## 0075 — Phase 7, A1: the attempt's guards live in the database
+
+**Decided while writing the attempt migration.** A3 will compute and write these rows, but the
+rules that must never be skipped are enforced by Postgres, in the same style as the paper's
+freeze (0069) and the ledger's guards (0060).
+
+**An attempt's student and version are read from its enrollment.** SQL has no foreign key over a
+pair of columns that are only unique together, and `enrollments` already proves that a purchase
+is one student's one version of one paper. So a `BEFORE INSERT` trigger reads the enrollment and
+raises unless `user_id` and `test_version_id` are exactly its own. The pair is then fixed for
+life: the same table's one-way trigger refuses any update to the enrollment, the student, the
+version, the start or the deadline.
+
+**The start is the database's now(), not the application's.** `started_at` has a default, and a
+`BEFORE INSERT` trigger overwrites whatever the writer sent — Prisma's model carries the column,
+so without the trigger a caller could back-date an attempt to look early or late. The deadline
+is *computed* in A3, where the version's duration is read inside the same transaction that
+starts the attempt, and is only *stored and guarded* here: the CHECK is `deadline_at >
+started_at`, and the one-way trigger refuses a later change to it. Computing it in the database
+would need the duration copied onto the attempt or a trigger reading another table, and the API
+already owns the version read.
+
+**Ending is one way and once.** `IN_PROGRESS` may move to `SUBMITTED` or `AUTO_SUBMITTED`; every
+other change, including a second ending and a jump back, is refused. A single CHECK pairs
+`submitted_at` and `submit_source`, so a row can never be half-submitted. Two simultaneous
+endings do not need a lock to be safe: the handler's update is conditional on `status =
+'IN_PROGRESS'`, and the trigger refuses the loser's write even if it gets that far.
+
+**Answers exist only for attempted questions.** A row per answered question, with
+`chosen_option_id NOT NULL`: an unattempted question simply has no row, which is what "answers
+are saved only on submit" means in the data model, and it is why an auto-submitted attempt
+without a submit call has an empty set. A guard trigger checks that the question is placed in
+the attempt's version and that the option belongs to that question, and refuses any insert,
+update or delete once the attempt has ended. The table stays real so autosave can later be a
+write path (0074).
+
+**A result is written after the end and never after.** A trigger refuses a result for an attempt
+that is still `IN_PROGRESS`, and a second trigger refuses every `UPDATE` and `DELETE`. The
+counts CHECK `attempted = correct + wrong` and `correct + wrong + unattempted = total_questions`,
+accuracy is bounded, and a CHECK states the zero case: accuracy is 0 when nothing was attempted.
+
+**`attempt_submit_grace_seconds` is created here, not in A3.** Decision 0074 places the setting
+in A1's migration, so the row exists (integer, default 5, bounds 0–60) before the handler that
+reads it is written.
+
+### Assumed, owner to confirm: numerical-answer questions in a test
+
+**A published test can contain `NUMERICAL` questions today.** Phase 6's P2 validates that a
+placed question is the caller's own (or an Administrator's), published, and in the paper's exam
+— it does not filter on `question_type`. A numerical question has no options at all; its answer
+is `question_versions.numerical_answer`, and the deferred trigger enforces the "no options for a
+numerical" rule. The two question types therefore mean two different answering and scoring
+shapes, and A1 stores only a chosen option, because that is the only shape the answer table can
+hold safely now.
+
+**Not designed here, and not changed in the builder either.** This unit adds no numerical
+scoring and no builder restriction. The open item for the owner is whether a paper may contain a
+numerical-answer question at all before the attempt engine can score one. Until it is decided,
+A2's scoring function will treat a numerical question in a paper as it treats any question with
+no chosen option — unattempted — and the recommendation is that the builder refuse a numerical
+question once A3 exists, so a paper can never contain a question the engine cannot score. That
+recommendation is recorded here rather than acted on, because the builder is not in A1's scope.

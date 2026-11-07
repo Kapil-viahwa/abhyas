@@ -488,3 +488,50 @@ unchanged because `main` changed none of them.
 - **Existing editor `publish_tests` grants are deleted** by that migration and cannot be
   re-created; an editor who published tests before can no longer do so, and keeps
   `content.publish` for question versions.
+
+
+
+## Phase 7, A1 (pushed, runs queued)
+
+**The attempt model.** One migration, `20270201000000_attempts`, sorts after every migration on
+`main` (the newest is `20270101000000_tests_and_enrollments`); no existing migration was edited
+and no directory needed renaming.
+
+- `attempts` — `enrollment_id` (`UNIQUE`: one attempt per enrollment), `user_id`,
+  `test_version_id`, `started_at` (the database's `now()`, overwritten by a trigger so a caller
+  cannot back-date it), `deadline_at` (`CHECK deadline_at > started_at`), `status`
+  (`IN_PROGRESS`, `SUBMITTED`, `AUTO_SUBMITTED`) with one CHECK pairing `submitted_at` and
+  `submit_source`, and a one-way trigger: `IN_PROGRESS` moves to an ended status exactly once and
+  the enrollment, student, version, start and deadline never change. A `BEFORE INSERT` trigger
+  reads the enrollment and refuses a student or version that is not its own.
+- `attempt_answers` — a row only for an answered question (`chosen_option_id NOT NULL`),
+  `UNIQUE (attempt_id, question_id)`, a guard that the question is placed in the attempt's
+  version and the option belongs to that question, and a refusal of every write once the attempt
+  has ended. The table is real so autosave can be added later as a write path (0074); no autosave
+  route, column or setting is added.
+- `results` — `UNIQUE (attempt_id)`, counts, `score`, `total_marks`, `accuracy`, CHECKs
+  (`attempted = correct + wrong`, `correct + wrong + unattempted = total_questions`, accuracy in
+  `[0, 1]`, accuracy 0 when nothing was attempted), a trigger that refuses an insert while the
+  attempt is still running, and one that refuses every `UPDATE`/`DELETE`.
+- `attempt_submit_grace_seconds` (integer, default 5, bounds 0–60) is created here, as 0074
+  places it in A1.
+- Indexes: `attempts (status, deadline_at) WHERE status = 'IN_PROGRESS'` for the future sweeper,
+  `attempts (user_id)`, and the unique `attempt_answers (attempt_id, question_id)`.
+
+Proof: `apps/api/test/attempts-model.test.ts` in the database job — one attempt per enrollment
+under two simultaneous inserts, the deadline CHECK, the submitted pair, `started_at` from the
+database, the one-way status under two simultaneous endings, answers unique per question and
+tied to the version and the question, answers frozen after the end, a result only after the end
+and immutable, one result under two simultaneous inserts, the count and accuracy CHECKs, the
+student/version consistency, and the grace setting's row.
+
+**The finding that shaped the queue: a published test can contain `NUMERICAL` questions.** P2's
+builder validation checks ownership, publication and the paper's exam, not `question_type`. A
+numerical question has no options and its answer is `question_versions.numerical_answer`, so A1
+stores only a chosen option (the shape the engine can score) and decision 0075 records
+"numerical-answer questions in tests" as an owner-to-confirm item: the recommendation is that
+the builder refuse them once A3 exists, but the builder is not changed in this unit.
+
+**Not verified here:** this session cannot run Postgres, so neither the migration nor the test
+file has executed. A1 stays `[ ]` in `docs/NEXT-TASKS.md` until the runs on the pushed commits
+are read and green.
