@@ -9,6 +9,7 @@ import { MediaController } from '../media/media.controller';
 import { OtpController } from '../otp/otp.controller';
 import { QuestionsController } from '../questions/questions.controller';
 import { AdminTestsController, EditorTestsController } from '../tests/tests.controller';
+import { EnrollmentsController, StudentTestsController } from '../tests/enrollments.controller';
 import { IS_PUBLIC_KEY, AUTHENTICATED_KEY, PERMISSIONS_KEY } from './access';
 import { AccountController } from './account.controller';
 import { AuthController } from './auth.controller';
@@ -29,6 +30,8 @@ export const HTTP_CONTROLLERS = [
   QuestionsController,
   EditorTestsController,
   AdminTestsController,
+  StudentTestsController,
+  EnrollmentsController,
   OtpController,
 ];
 

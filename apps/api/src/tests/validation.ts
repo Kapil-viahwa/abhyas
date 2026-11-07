@@ -223,3 +223,140 @@ export function parseTestQuery(query: Record<string, string | string[] | undefin
     page: Number.isInteger(page) && page > 0 ? page : 1,
   };
 }
+
+
+
+// ---------------------------------------------------------------------------
+// The student side: the catalog, and the enroll request
+// ---------------------------------------------------------------------------
+
+/** One page of the student catalog is small on purpose: a list a person scrolls, not exports. */
+export const MAX_STUDENT_PAGE_SIZE = 50;
+export const MAX_ENROLLMENT_PAGE_SIZE = 100;
+export const DEFAULT_STUDENT_PAGE_SIZE = 20;
+
+/** The setting that prices one attempt. Read inside the enrollment transaction. */
+export const ENROLLMENT_COST_SETTING = 'default_enrollment_cost';
+
+/**
+ * An `Idempotency-Key` a person's client may send.
+ *
+ * Bounded at both ends: the ledger stores `enroll:<key>` and refuses a key outside 8..200, so
+ * the longest key that can survive the prefix is 100 characters. Anything else is a 400 rather
+ * than a silent truncation.
+ */
+export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,100}$/;
+
+export interface StudentPageQuery {
+  readonly page: number;
+  readonly pageSize: number;
+}
+
+export interface StudentCatalogQuery extends StudentPageQuery {
+  readonly examId: string | undefined;
+}
+
+const STUDENT_CATALOG_FIELDS = ['page', 'pageSize', 'examId'] as const;
+const STUDENT_PAGE_FIELDS = ['page', 'pageSize'] as const;
+
+/** A query parameter the student routes do not read is refused, not ignored. */
+function rejectUnknownQuery(query: Record<string, string | string[] | undefined>, allowed: readonly string[]): void {
+  for (const key of Object.keys(query)) {
+    if (key === 'userId') {
+      throw new BadRequestException('userId is never accepted: the account comes from your session');
+    }
+    if (!allowed.includes(key)) {
+      throw new BadRequestException(`${key} is not a query parameter this endpoint accepts`);
+    }
+    if (Array.isArray(query[key])) {
+      throw new BadRequestException(`${key} may be sent only once`);
+    }
+  }
+}
+
+function pageNumber(
+  query: Record<string, string | string[] | undefined>,
+  key: 'page' | 'pageSize',
+  fallback: number,
+  max: number,
+): number {
+  const value = query[key];
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  if (typeof value !== 'string' || !/^\d{1,6}$/.test(value.trim())) {
+    throw new BadRequestException(`${key} must be a whole number`);
+  }
+  const parsed = Number(value);
+
+  if (parsed < 1 || parsed > max) {
+    throw new BadRequestException(`${key} must be between 1 and ${String(max)}`);
+  }
+
+  return parsed;
+}
+
+export function parseStudentCatalogQuery(
+  query: Record<string, string | string[] | undefined>,
+): StudentCatalogQuery {
+  rejectUnknownQuery(query, STUDENT_CATALOG_FIELDS);
+  const examId = optionalString(query, 'examId');
+
+  return {
+    page: pageNumber(query, 'page', 1, 10_000),
+    pageSize: pageNumber(query, 'pageSize', DEFAULT_STUDENT_PAGE_SIZE, MAX_STUDENT_PAGE_SIZE),
+    examId: examId === undefined ? undefined : parseUuid(examId, 'exam id'),
+  };
+}
+
+export function parseEnrollmentPageQuery(
+  query: Record<string, string | string[] | undefined>,
+): StudentPageQuery {
+  rejectUnknownQuery(query, STUDENT_PAGE_FIELDS);
+
+  return {
+    page: pageNumber(query, 'page', 1, 10_000),
+    pageSize: pageNumber(query, 'pageSize', DEFAULT_STUDENT_PAGE_SIZE, MAX_ENROLLMENT_PAGE_SIZE),
+  };
+}
+
+/** The enroll route takes no query parameters at all, and names `userId` when it sees one. */
+export function parseEnrollQuery(query: Record<string, string | string[] | undefined>): void {
+  rejectUnknownQuery(query, []);
+}
+
+/**
+ * Enrollment takes no body. The account is the session's, so a `userId` is refused by name
+ * rather than ignored — the same rule the wallet follows, made explicit where money moves.
+ */
+export function parseEnrollBody(body: unknown): void {
+  if (body === undefined || body === null) {
+    return;
+  }
+  if (typeof body !== 'object' || Array.isArray(body)) {
+    throw new BadRequestException('Send no body to enroll: the account comes from your session');
+  }
+
+  for (const key of Object.keys(body as Record<string, unknown>)) {
+    if (key === 'userId') {
+      throw new BadRequestException('userId is never accepted: the account comes from your session');
+    }
+    throw new BadRequestException(`${key} is not a field this endpoint accepts`);
+  }
+}
+
+/** The `Idempotency-Key` header an enroll request must carry. */
+export function parseIdempotencyKey(value: string | undefined): string {
+  const key = value?.trim() ?? '';
+
+  if (key === '') {
+    throw new BadRequestException('An Idempotency-Key header is required');
+  }
+  if (!IDEMPOTENCY_KEY_PATTERN.test(key)) {
+    throw new BadRequestException(
+      'An Idempotency-Key must be 8 to 100 characters of letters, digits, dot, colon, dash or underscore',
+    );
+  }
+
+  return key;
+}
