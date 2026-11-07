@@ -271,3 +271,38 @@ enrollment's is the caller's own row plus the paper it bought.
 `default_enrollment_cost` is the one price, read **inside** the enrollment transaction. A value of
 `0` closes enrollment (409) rather than selling a free paper, because a ledger row of zero is
 refused by `coin_transactions_amount_non_zero`.
+
+
+
+## Phase 6, P5: the student catalog and enroll screens
+
+The screens are server-rendered forms over the P4 routes and hold no rule of their own: they
+read the session, call the API with its access token, and print the API's answer. The token
+never reaches the browser.
+
+| Screen | Server check before it renders | What it calls |
+| --- | --- | --- |
+| `/tests` | `loadSession` — any signed-in account; an anonymous visitor is sent to `/login?next=%2Ftests` | `GET /v1/tests`, `GET /v1/enrollments/me` |
+| `/tests/<id>` | `loadSession` — anonymous to `/login?next=%2Ftests%2F<id>` | `GET /v1/tests/<id>`, `GET /v1/coins/me` (the balance), and the enroll form posts to `/api/enrollments/enroll` |
+| `/api/enrollments/enroll` | `guardFormPost` (Origin + double submit), then the session cookie | `POST /v1/tests/<id>/enroll` |
+
+The enroll form carries one `Idempotency-Key` generated when the page renders. On a refusal the
+handler sends the same key back in the redirect, so pressing the button again is the same
+request to the API and cannot charge twice; only a fresh page load without the key starts a new
+one. The key is not a credential.
+
+Refusals are read from the API's own `code`, never from the status alone — an unaffordable
+enrollment and a malformed one are both a 400 — and the page turns the code into a sentence:
+
+| Code | What the student reads |
+| --- | --- |
+| `insufficient_coins` | not enough coins yet; add coins and retry with the same button, which cannot charge twice |
+| `open_enrollment` | an open attempt already exists for this test |
+| `attempt_cap_reached` | every attempt this test allows has been used |
+| `not_for_sale` | the test is no longer available to enroll in; also used when the platform has set no price |
+| anything else | one generic sentence; the API's text is never put in the URL or the page |
+
+Nothing on these screens reads a question, an option, an answer key, an explanation or a
+`created_by`: the API's projection has none of them, and the pages render its summary fields
+only. `/wallet` already lists the `ENROLLMENT` row (its history includes the type) and its type
+filter offers it; the Tests link is added to the account and wallet navigation beside Wallet.

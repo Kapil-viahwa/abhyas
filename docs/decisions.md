@@ -1863,3 +1863,42 @@ summary, its live version's pattern and counts, and the caller's own enrollments
 `test_questions`, `questions`, `question_versions` or `question_options`. The enrollment's own
 answer is the same projection plus the row it wrote. The attempt serialiser in phase 7 is the first
 student-facing response that may carry a question, and it will own its own projection.
+
+
+
+## 0073 — Phase 6, P5: one key per render, and refusals told apart by code
+
+**Status:** accepted · **Phase:** 6
+
+**The enroll form's `Idempotency-Key` is generated once per render, and the refusal returns it.**
+The key is created when `/tests/<id>` renders and carried in a hidden field. On 201 the handler
+redirects to `?enrolled=1` with no key, so the next page load (or a deliberate new attempt) is a
+new intent with a new key. On a refusal it redirects to `?error=<code>&key=<key>`, and the page
+reuses that key instead of generating one. That is what makes a retry safe: adding coins after an
+`insufficient_coins` refusal and pressing the same button replays the first request — which
+wrote nothing — instead of risking a second debit; and a retry after an `open_enrollment`
+refusal replays the enrollment that already exists. The key lives only in the form and the URL
+of that one page; it is never stored in the browser, and it names the intent, not the person.
+
+**Refusals are classified by the API's `code`, not by its status.** Three different 409s (an open
+enrollment, the attempt cap, a paper no longer for sale) and two 400s (an unaffordable price, a
+malformed request) mean five different things to a student, and the status cannot tell them
+apart. P4's messages were already exact but messages are prose; this unit adds a stable `code`
+beside each one — `insufficient_coins`, `open_enrollment`, `attempt_cap_reached`, `not_for_sale`,
+`key_reused` — thrown as `{ code, message }` the way `reauth_required` already is (decision 0065).
+The message is unchanged, so every existing assertion on it still holds; the web tier reads the
+code and a plain `switch` turns it into the sentence the student sees. Anything unrecognised —
+including a 500 or a proxy error — becomes one generic sentence, and no API text is ever put into
+the URL: the redirect carries the code, never the message.
+
+**The insufficient-funds code is added at the enrollment boundary, not in `CoinService`.** The
+ledger's own 400 ("Not enough coins for this charge") is shared by every debit, the admin's
+included; the enrollment service catches exactly that message and rethrows it with the code, so
+nothing else in the coin path changes and the wallet's own behaviour stays as verified in P4.
+
+**The pages are read-only projections.** `GET /v1/tests`, `GET /v1/tests/:id` and
+`GET /v1/enrollments/me` are called through one small helper whose types are copied field for
+field from `enrollments.service.ts`; there is no second fetch style and no client-side state.
+A page that cannot load its data renders an error sentence instead of throwing (the catalog, the
+enrollment list and the detail page each have their own empty/error branch), because a thrown
+server component shows the student a crash and the run a missing test id.

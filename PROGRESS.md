@@ -372,3 +372,35 @@ All nine jobs on `8342d935be27be525222e37ccfbaf9cc644bf406` are green — [run 4
 | No answer key, explanation, creator, `userId`, key, ledger id or fingerprint appears in any enrollment, catalog or detail answer | database | the same forbidden-field loop in the first test, over all four responses (`isCorrect`, `explanationHtml`, `answerKey`, `createdBy`, `userId`, `idempotencyKey`, `coinTransactionId`, `requestFingerprint`) | [job 128292257845](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292257845) |
 | The question pages render for an editor, and every route declares its access | e2e, unit | `e2e/test-builder.spec.ts` — "the question pages render for an editor" (`/editor/questions/new` and the seeded question's page, waiting on the editor's `question-preview` id and reading its "Already published" button); `apps/api/src/auth/route-access.spec.ts` with `StudentTestsController` and `EnrollmentsController` registered | [job 128292257700](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292257700), [job 128292257896](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292257896) |
 | Lint, typecheck, secrets and advisories are clean | lint, typecheck, gitleaks, audit | `pnpm lint`, `pnpm typecheck`, the secret scan, `pnpm audit:ci` | [job 128292257928](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292257928), [job 128292258002](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292258002), [job 128292257905](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292257905), [job 128292257937](https://github.com/Kapil-viahwa/abhyas/actions/runs/42335778524/job/128292257937) |
+
+
+
+## Phase 6, P5 (pushed, runs queued)
+
+**The screens.** `/tests` renders the P4 catalog (title, exam, duration, question count, total
+marks, negative marking, cost, the student's own state) with the student's own enrollments above
+it, paginated by the API's own pages, with empty states for both lists. `/tests/<id>` renders the
+same details, the pattern and the enroll form, with the cost and the student's balance
+(`GET /v1/coins/me`, no new endpoint). Both read `loadSession` first, so an anonymous visitor is
+sent to `/login?next=…`. The post is `/api/enrollments/enroll`, which behind `guardFormPost` and
+`callWithSession` calls `POST /v1/tests/:id/enroll`; a Tests link joins the account and wallet
+navigation. `apps/web/src/lib/student-tests-api.ts` holds the types, copied field for field from
+`enrollments.service.ts`, and the refusal mapping.
+
+**The two non-obvious rules.** The `Idempotency-Key` is generated once per render and carried
+back in the redirect on a refusal, so a retry is the same request and cannot charge twice
+(decision 0073). Refusals are classified by the API's `code` — the P4 service now sends
+`insufficient_coins`, `open_enrollment`, `attempt_cap_reached`, `not_for_sale` and `key_reused`
+beside its unchanged messages, thrown as `{ code, message }` like `reauth_required` — so an
+unaffordable enrollment is not confused with a malformed one, and nothing raw is rendered.
+
+**Proof.** `e2e/tests-enroll.spec.ts` in the e2e job, on a paper (and a second one) seeded in SQL
+beside its bank through `e2e/tests-fixture.ts`: a new verified student sees 1,000 coins, browses
+the catalog, enrolls, sees the confirmation, the balance falls to 900 and `/wallet` shows the
+`ENROLLMENT` row; a second enrollment is refused with the open-enrollment message and charges
+nothing; two concurrent posts of the form's one key write one debit; a student with 50 coins is
+told they do not have enough and is not charged; and anonymous visitors are sent to sign in.
+`signup_coins`, `daily_reward_coins` and `default_enrollment_cost` are pinned and restored.
+
+**Not verified here:** nothing has been compiled or run by me. `docs/NEXT-TASKS.md` keeps P5 as
+`[ ]` until the runs on the pushed commit are read and green.
