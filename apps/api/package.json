@@ -24,7 +24,7 @@
     "@nestjs/common": "^11.1.18",
     "@nestjs/core": "^11.1.18",
     "@nestjs/platform-fastify": "^11.1.18",
-    "@nestjs/swagger": "^11.0.0",
+    "@nestjs/swagger": "^12.0.5",
     "@node-rs/argon2": "^2.0.0",
     "@prisma/client": "^5.22.0",
     "exceljs": "4.4.0",
