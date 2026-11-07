@@ -135,7 +135,7 @@ describe('questions and media over HTTP', () => {
     });
 
     if (withFlags) {
-      const codes = ['content.read', 'content.write', 'tests.publish'];
+      const codes = ['content.read', 'content.write', 'content.publish'];
       for (const code of codes) {
         const permission = await db.client.permission.findUniqueOrThrow({ where: { code }, select: { id: true } });
         // A person cannot grant themselves a permission (the database refuses it), so the

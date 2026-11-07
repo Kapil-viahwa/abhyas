@@ -23,7 +23,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       flags: {
         manage_questions: stringField(guard.form, 'manage_questions') === 'on',
         manage_tests: stringField(guard.form, 'manage_tests') === 'on',
-        publish_tests: stringField(guard.form, 'publish_tests') === 'on',
       },
     }),
   );

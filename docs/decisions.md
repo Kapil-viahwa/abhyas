@@ -1617,3 +1617,366 @@ change) restored that cache in **4s** and ran `install-deps` in **11s**; both ru
 does not touch the browser CDN at all, which is where the 9m22s and 11m16s went. If a later hit
 ever fails to launch the restored browser, the cache is removed and the install keeps only its
 timeout and retry.
+
+## 0068 — Phase 6: the test pattern, the publish rule and the enrollment rules
+
+**Decided before phase 6's first unit. Two parts: what the owner has decided, and what this
+session assumes and the owner will confirm.**
+
+### Decided by the owner
+
+**Only an Administrator publishes or archives a test.** An editor builds a draft and submits
+it; the hand-off is the editor's last action. This is a decision, not a default: `tests.publish`
+belongs to `ADMIN`, an editor calling publish or archive is refused with **403** by the API
+before any handler runs, the publish and archive controls do not render on an editor's screen,
+and a Playwright test proves both halves. Phase 6 therefore also **retires the `publish_tests`
+editor flag** that phase 3 introduced (decision 0033): the three-flag model becomes two flags,
+`manage_questions` and `manage_tests`, and a migration refuses `tests.publish` on an editor
+account. Until that migration lands, "an editor cannot publish" is not true of this repository,
+and `docs/PHASE-6.md` says so.
+
+**The pattern is per test and editor-editable.** The editor who assembles a paper sets its
+questions, its duration, its marks per question and its negative marking. Nothing derives the
+pattern from the exam.
+
+**Single-correct questions only, no partial marking.** The question bank's `MCQ` already
+enforces exactly one correct option by a deferred trigger; phase 6 papers use those, and the
+negative marking is one number for the paper rather than a per-option weighting. No
+multiple-correct question type and no partial credit in the attempt engine after it.
+
+**Editors may see answer keys; only an Administrator moves coins.** An editor reads the key and
+explanation of the questions they may edit. No coin is added or removed by anyone but an Admin;
+the single run-time debit is enrollment.
+
+**Enrollment costs 100 coins per attempt, from `default_enrollment_cost`** (already a
+setting, default 100, `apps/api/test/operations.test.ts` asserts it). There is no refund, and a
+retake pays again. A student holds at most one **open** enrollment per test at a time, and a
+test may carry an optional maximum number of attempts. Every phase 6 e2e spec pins the
+settings it reads with the upsert-and-verify fixture in `e2e/coin-settings.ts`.
+
+**Accuracy is correct ÷ attempted.** Defined here, computed in the results phase.
+
+### Assumed, owner to confirm
+
+These do not block work; each is reversible without changing the shape of the data or the
+ledger.
+
+- **Lifecycle:** `DRAFT` → `SUBMITTED` → `PUBLISHED` → `ARCHIVED`. Editors create drafts and
+  submit; only an Administrator publishes or archives. `SUBMITTED` exists because the hand-off
+  is a real state — an editor's work is done and the Administrator has something to review.
+- **Freezing:** publishing freezes a test version's questions, ordering, duration, marks and
+  negative marking. Editing a published test opens a **new version**; an open enrollment keeps
+  the version it was sold, so a retake cannot change the paper under a student already sitting
+  it. This is the same rule the question bank already uses (`question_versions_frozen`).
+- **The debit:** enrollment writes one `ENROLLMENT` ledger row through `CoinService.spend` in
+  the same transaction as the enrollment row, with the request's `Idempotency-Key`. A double
+  click or a retry writes one debit. The row's `reference_type` is `'enrollment'` and its
+  `reference_id` is the enrollment's id, so the existing partial unique index
+  `coin_transactions_one_enrollment_per_reference`
+  (`(reference_type, reference_id)` where `type = 'ENROLLMENT'`, migration `20260801000000`)
+  keeps its meaning and each enrollment — including a retake — is its own charge.
+- **The student catalog** lists published tests only, with title, exam, duration, question
+  count, total marks, cost and the student's own enrollment state. It never shows an answer
+  key, an explanation, a draft or an archived test.
+
+**Consequence for the queue:** P1 adds the schema, the partial unique index for one open
+enrollment and the retirement of the editor publish grant; P2 and P3 enforce the publish rule
+in the API and the pages; P4 makes the debit and the enrollment one transaction with the wallet
+row locked. The specification and the audit of what already exists are in `docs/PHASE-6.md`, and
+the queue is in `docs/NEXT-TASKS.md`.
+
+### Confirmed or corrected at the close of the phase
+
+**The publish rule needed no assumption.** The owner confirmed it, and it is built: the
+migration deletes editor grants of `tests.publish` and a trigger refuses a new one, `POST
+/v1/admin/tests/:id/publish` and `.../archive` answer **403** to an Editor or a Student before
+any handler runs, the builder page renders neither control without `tests.publish`, and
+`e2e/test-builder.spec.ts` proves both halves (0069).
+
+The four assumptions came out as follows.
+
+- **Lifecycle — confirmed as written.** The migration CHECKs the four statuses and 0070 records
+  the transition table: a second submit, a second publish, an edit after archive and a publish
+  of a draft are all 409.
+- **Freezing — confirmed.** 0069 freezes a published version and its placements by trigger; 0070
+  opens a new version when a published paper is edited and leaves an open enrollment's
+  `test_version_id` pointing at the version it was sold.
+- **The debit — corrected in one respect.** It is not `CoinService.spend` but the new
+  `CoinService.spendWithin`, the same private `applyEntry` path exported for a caller that
+  already holds a transaction. The row is written inside the enrollment `$transaction` under the
+  wallet row's `FOR UPDATE`, with the key prefixed `enroll:` and looked up scoped to the caller
+  before the transaction and again under the lock (0072). The rest of the assumption held: one
+  `ENROLLMENT` row per enrollment, `reference_type 'enrollment'`, `reference_id` = the
+  enrollment's id, and the existing partial unique index keeps its meaning.
+- **The student catalog — confirmed, with two fields added.** It also carries
+  `marksPerQuestion`, `negativeMarksPerQuestion` and `maxAttempts`, and the caller's own
+  `enrollment` state (`status`, `attemptNumber`, `enrollmentId`, `attemptsUsed`). It carries no
+  question, option, `isCorrect`, explanation, `created_by`, ledger id, idempotency key or
+  fingerprint, which the P4 tests assert field by field.
+
+Two smaller decisions followed from building it: refusals carry a stable `code` beside their
+unchanged message (0073), and the builder routes take no `Idempotency-Key` (0071).
+
+
+
+## 0069 — Phase 6, P1: the published paper is frozen by trigger, and publishing a test is an Administrator's permission
+
+**Status:** accepted · **Phase:** 6
+
+**The freeze is a trigger, not a service rule.** A `test_versions` row with `published_at` set
+cannot be updated or deleted (`test_versions_frozen`), its question list cannot be added to,
+reordered or removed (`test_questions_frozen`), and a published test cannot go back to `DRAFT`
+or `SUBMITTED` nor be deleted (`tests_status_frozen`). This is the rule
+`question_versions_frozen` already uses, applied to the paper: an enrollment points at a
+version, so the version a student paid for must be immutable even if a later code path forgets
+to check. Editing a published test therefore creates a new version (P2), and an open attempt
+keeps the one it bought (P4).
+
+**`tests.publish` is now an Administrator's alone, so question publishing got its own code.**
+The phase 4 question-publish route was guarded by `tests.publish`, which phase 3 also exposed
+to editors through the `publish_tests` flag. Retiring the flag alone would have taken question
+publishing away from editors, which was never the owner's decision. So the migration adds
+`content.publish` ("Publish a question version"), grants it on the `EDITOR` and `ADMIN` roles,
+and repoints the question publish route (`POST /v1/questions/:id/publish`) at it.
+`tests.publish` stays a role permission of `ADMIN`; the migration deletes existing editor grants of it (rather than failing
+the deploy on them) and the replaced `user_permissions_editor_flags_only` trigger refuses a new
+grant to anything but an `ADMIN` account.
+
+**Safety on existing data.** The new migration was written to apply to an empty schema (which
+is how every database test applies it: `prisma migrate deploy` on a fresh schema) and to a
+database with earlier phases' rows: it deletes the editor `tests.publish` grants instead of
+assuming there are none, and it only adds tables and permissions. This session could not run
+Docker, so the migration has not been executed against a real Postgres here; the `database`
+job on the pushed commit is what will prove it, on both an empty schema and the seeded one.
+
+**Consequences.** The three editor flags become two, `manage_questions` and `manage_tests`;
+`docs/permissions.md`, the admin users screens, the web route handlers and the flag tests all
+say so. `apps/api/test/tests-model.test.ts` proves the CHECKs, the freeze, one open enrollment
+per student and test under two concurrent inserts, the enrollment-to-ledger link, and the
+editor grant refusal.
+
+
+
+## 0070 — Phase 6, P2: the paper's lifecycle, the revision, and one winner
+
+**Status:** accepted · **Phase:** 6
+
+**The allowed transitions are an explicit table, and everything else is a 409.**
+
+| From | Action | To | Who |
+| --- | --- | --- | --- |
+| `DRAFT` | submit | `SUBMITTED` | the paper's editor (`tests.write`) or an Administrator |
+| `SUBMITTED` | publish | `PUBLISHED` | **an Administrator** (`tests.publish`) |
+| `PUBLISHED` (a revision is open) | publish | `PUBLISHED` | **an Administrator** |
+| `PUBLISHED` | archive | `ARCHIVED` | **an Administrator** |
+| `PUBLISHED` (a revision is open) | submit | `PUBLISHED`, `submitted_at` set | the paper's editor |
+
+Anything else — publishing a draft, archiving a draft or a submitted test, a second submit, a
+second publish, editing a submitted or archived test, submit or edit after archive — answers
+**409** with the reason in the body. The table lives in `TestsService` as those explicit
+checks; it is not inferred from a status ordering.
+
+**A published test does not go back to `DRAFT` or `SUBMITTED`.** The P1 trigger
+(`tests_published_frozen`) refuses that, because a student could have paid for the paper in
+between. So a revision's hand-off is `submitted_at` plus a `TEST_SUBMITTED` audit row with
+`revision: true`, and the Administrator publishes the revision directly. The alternative —
+letting a published row slip back to `SUBMITTED` — would make the freeze depend on a code path
+rather than the database.
+
+**What happens to the live paper while a revision is being edited.** The test row keeps
+`status = PUBLISHED` and its `published_at`; `current_version` moves to the new unpublished
+version, and the paper a student buys is the newest version **with** `published_at` set. Editing
+a published test therefore:
+
+- creates version `N+1` as a **copy** of the live version's pattern *and* its ordered question
+  list, because an Administrator should review a complete paper, not an empty one;
+- leaves version `N` published, frozen by trigger, and referenced by every open enrollment;
+- changes nothing a student holding enrollment sees until an Administrator publishes the
+  revision, at which point new enrollments get `N+1` and existing ones keep `N` (decision
+  0069). The API response carries both: `version` (being edited) and `publishedVersion`
+  (being sold).
+
+**Atomicity is a row lock plus a guarded write.** Every state-changing call opens one
+transaction, takes `SELECT ... FOR UPDATE` on the `tests` row, re-reads the state, and then
+writes with the state in the `WHERE` (`updateMany({ where: { id, status } })`, or
+`updateMany({ where: { id, publishedAt: null } })` for the version stamp), refusing when the
+count is not 1. Two simultaneous submits or publishes therefore serialise on the lock: the
+second reads what the first committed and gets a 409, and exactly one audit row is written.
+The concurrency proof is in `apps/api/test/tests-builder.test.ts`.
+
+**The question list is replaced, not patched.** `PUT /v1/editor/tests/:id/questions` takes the
+whole ordered list, validates every id (exists, is the caller's own unless an Administrator,
+belongs to the paper's exam, is published), then deletes and re-inserts inside the same
+transaction. That is what makes reordering atomic and the positions gapless 1..n — there is no
+window in which two positions collide, and the unique `(test_version_id, position)` index is
+never violated by a partially applied reorder.
+
+**Strict bodies and queries.** An unknown field is a 400 rather than silently ignored, so a
+client that misspells `maxAttempts` learns it did. The limits are bounded at the edge of the
+API as well as in the database: duration 1–600 minutes, marks per question above 0 and at most
+100, negative marks between 0 and the marks, `maxAttempts` null or 1–100, at most 100 questions
+per paper, at most 2,000 characters of description. Repeated query parameters are refused
+rather than read as arrays, and only `status`, `examId` and `page` are filters.
+
+**Answer keys.** The builder's responses are Editor and Administrator only, and they carry
+`isCorrect`, the explanation and a numerical question's answer, because an editor placing a
+question has to see what it asks (the phase 6 rule: editors may read the key). No student-facing
+serialiser exists in this unit; a Student gets 403 on every builder route, and the test checks
+that no 403 body carries either field. The catalog and attempt serialisers that will face
+students are P4, P5 and phase 7, and each owns its projection.
+
+
+
+## 0071 — Phase 6, P3: the builder screens, and why they send no Idempotency-Key
+
+**Status:** accepted · **Phase:** 6
+
+**The pages do not enforce anything the API does not.** `/editor/tests`,
+`/editor/tests/<id>` and `/admin/tests` each read `loadPermissionSession` before rendering, so a
+student is sent to `/account?denied=1` and never receives the shell; the Publish and Archive
+controls render only for `tests.publish`. But the write handlers behind them
+(`/api/editor/tests/create`, `/[id]/pattern`, `/[id]/questions`, `/[id]/submit`,
+`/api/admin/tests/[id]/publish` and `.../archive`) hold no permission logic at all: they read the
+session cookie, pass its access token to the API and return the API's answer. An editor who
+posts to the publish handler by hand is refused by the API with 403, and the handler redirects
+back with that message. This is the same split the coin screens use (decision 0065): the page
+is a convenience, the API is the authority, and there is exactly one place to change a rule.
+
+**No Idempotency-Key, because no builder route accepts one.** The queue asked for a key
+"where the API accepts one", and the P2 routes do not: every write is already idempotent in the
+way that matters. `PUT /questions` replaces the whole ordered list, so sending it twice
+converges on the same paper; `submit`, `publish` and `archive` are guarded by the lifecycle —
+the second call sees the state the first committed and is refused with 409 rather than applied
+twice; `PATCH` is a last-write-wins update of pattern fields; `POST /v1/editor/tests` creates a
+row by definition. The coin tools need a key because a double submit there would move coins
+twice; a double-clicked "Save pattern" here rewrites the same fields, and a double-clicked
+"Submit" is refused. Adding a client key nobody checks would suggest a protection that is not
+there, so the forms send none and the page says so here.
+
+**A published paper's builder page says two things at once.** It shows the live version
+(`publishedVersion`: number, duration, total marks) with a sentence that it "stays exactly as it
+is", and beside it the draft version being edited. That is decision 0070's model made visible:
+the API copies version `N` into an unpublished `N+1` on the first edit, and students keep `N`
+until an Administrator publishes the revision. Without the notice, an editor would reasonably
+assume their change is live the moment they save it.
+
+**Ordering is two buttons, not drag and drop.** `Up`/`Down` post one question id and a
+direction; the handler reads the paper's current order from the API, swaps the pair, and sends
+the whole list back through `PUT /questions`. A drag-and-drop library would have been dependency
+weight for an operation whose correctness lives on the server anyway, and the whole-list PUT is
+what keeps the positions gapless (decision 0070).
+
+**The e2e fixture seeds the exam and the bank in SQL, and that is deliberate.** An editor may
+only build a paper for an exam they created and place their own questions — the P2 object rule.
+The admin UI can create an editor and a catalog entry, but it cannot yet hand an existing exam to
+another account, and authoring a question through the TipTap editor is a flow of its own with its
+own coverage. So `e2e/tests-fixture.ts` inserts one category, exam, subject and two published
+questions owned by the editor, through the same `docker compose exec ... psql` route the coin
+settings fixture uses, and the spec then exercises only the builder screens. When the catalog
+grows an "assign owner" control, the fixture should be replaced by it.
+
+
+
+## 0072 — Phase 6, P4: enrollment is one transaction, in one lock order
+
+**Status:** accepted · **Phase:** 6
+
+**The lock order is wallet, test, enrollments.** Every enrollment transaction takes the caller's
+`coin_wallets` row `FOR UPDATE` first, then the `tests` row `FOR SHARE`, then reads and inserts
+`enrollments`. The order is what keeps two shapes of concurrency safe at once: two requests from
+**one** student (a double click, two tabs, a retry) meet on the wallet row and serialise, so only one
+of them decides the balance; two requests from **different** students meet on the shared test row in
+SHARE mode, which readers never block, so neither waits for the other's wallet. Taking the test row
+first, or the enrollment rows first, would let two students hold different locks in opposite orders.
+The same reason the `enrollments` row is last: it is the only row this transaction creates.
+
+The wallet lock is taken through **`CoinService.lockWallet`**, added for this, and the debit is
+written through **`CoinService.spendWithin`** — `spend`'s own logic (`applyEntry`) running inside the
+transaction the enrollment opened. No second code path writes a ledger row or a balance: the
+wallet's trigger still moves the balance, the insufficient-funds check is still `applyEntry`'s 400
+("Not enough coins for this charge"), and a replayed key still returns the original row.
+
+**An `Idempotency-Key` is the student's, and it is checked twice.** Before the transaction the key
+is looked up on `enrollments (user_id, idempotency_key)`; inside it, again, under the wallet lock —
+two requests carrying one key can both pass the first check. A key already spent on **this** test
+answers with the first enrollment, byte for byte, and charges nothing; the same key on **another**
+test is a 409 and writes nothing, because silently serving a different paper's purchase would be
+worse than a refusal. On the ledger the key is prefixed `enroll:` (`enroll:<key>`), so it cannot
+collide with `signup:`, `daily:` or `admin:` — and the 8..100-character client bound exists because
+the ledger refuses a key above 200 characters, prefix included.
+
+**Two different keys racing for one paper end in exactly one winner, never a 500.** The open
+enrollment check and the attempt count are advisory; the decision is the database's own indexes —
+`enrollments_one_open_per_test` (the partial unique index) and `enrollments_user_test_attempt_key`.
+A `P2002` from the insert aborts the transaction, so the debit written a moment earlier rolls back
+with it, and the API answers **409** ("Another enrollment for this test was written at the same
+moment; try again"). The test proves one 201, one 409, one ledger row, one enrollment row and the
+balance moved once.
+
+**A retake is a new enrollment with a new attempt number and a new debit.** A completed or expired
+attempt leaves its row, its `coin_transaction_id` and its `test_version_id` untouched; the new row
+is `attempt_number = prior + 1` and points at the version that is published **now**. That is what
+`coin_transactions_one_enrollment_per_reference` (one `ENROLLMENT` row per `(reference_type,
+reference_id)`) is for: each enrollment is its own reference, so a retake can never share a debit
+with the attempt before it. The attempt engine that closes an attempt (COMPLETED) is phase 7; this
+unit only reads that state.
+
+**Status codes, and why each one.** `201` for a new enrollment, and the same `201` for a replay —
+the body is identical, so a client that retries cannot tell it apart, which is the point. `400` for
+a missing or malformed key, a body field (including `userId`), an unknown query value, or an
+unaffordable price: the wallet's own insufficient-funds answer is a 400 and enrollment reuses it.
+`409` for a paper that is not for sale (draft, submitted, archived), an open enrollment, a reached
+attempt cap, and a reused key on another test — all of them states the client could have known.
+`404` for an unknown paper, so the catalog cannot be used to discover drafts. `401` for an
+anonymous or suspended session, the guard's answer before any handler.
+
+**The price is read inside the transaction, and zero closes the shop.** `default_enrollment_cost`
+has bounds `0..100000`; a zero would need a zero-amount ledger row, which
+`coin_transactions_amount_non_zero` refuses, so a zero is a 409 ("Enrollment is closed") rather
+than a free paper. The read happens after the checks, so the amount charged is the amount the
+setting held while the transaction ran.
+
+**The catalog never selects a question.** `GET /v1/tests` and `GET /v1/tests/:id` select the paper's
+summary, its live version's pattern and counts, and the caller's own enrollments — nothing from
+`test_questions`, `questions`, `question_versions` or `question_options`. The enrollment's own
+answer is the same projection plus the row it wrote. The attempt serialiser in phase 7 is the first
+student-facing response that may carry a question, and it will own its own projection.
+
+
+
+## 0073 — Phase 6, P5: one key per render, and refusals told apart by code
+
+**Status:** accepted · **Phase:** 6
+
+**The enroll form's `Idempotency-Key` is generated once per render, and the refusal returns it.**
+The key is created when `/tests/<id>` renders and carried in a hidden field. On 201 the handler
+redirects to `?enrolled=1` with no key, so the next page load (or a deliberate new attempt) is a
+new intent with a new key. On a refusal it redirects to `?error=<code>&key=<key>`, and the page
+reuses that key instead of generating one. That is what makes a retry safe: adding coins after an
+`insufficient_coins` refusal and pressing the same button replays the first request — which
+wrote nothing — instead of risking a second debit; and a retry after an `open_enrollment`
+refusal replays the enrollment that already exists. The key lives only in the form and the URL
+of that one page; it is never stored in the browser, and it names the intent, not the person.
+
+**Refusals are classified by the API's `code`, not by its status.** Three different 409s (an open
+enrollment, the attempt cap, a paper no longer for sale) and two 400s (an unaffordable price, a
+malformed request) mean five different things to a student, and the status cannot tell them
+apart. P4's messages were already exact but messages are prose; this unit adds a stable `code`
+beside each one — `insufficient_coins`, `open_enrollment`, `attempt_cap_reached`, `not_for_sale`,
+`key_reused` — thrown as `{ code, message }` the way `reauth_required` already is (decision 0065).
+The message is unchanged, so every existing assertion on it still holds; the web tier reads the
+code and a plain `switch` turns it into the sentence the student sees. Anything unrecognised —
+including a 500 or a proxy error — becomes one generic sentence, and no API text is ever put into
+the URL: the redirect carries the code, never the message.
+
+**The insufficient-funds code is added at the enrollment boundary, not in `CoinService`.** The
+ledger's own 400 ("Not enough coins for this charge") is shared by every debit, the admin's
+included; the enrollment service catches exactly that message and rethrows it with the code, so
+nothing else in the coin path changes and the wallet's own behaviour stays as verified in P4.
+
+**The pages are read-only projections.** `GET /v1/tests`, `GET /v1/tests/:id` and
+`GET /v1/enrollments/me` are called through one small helper whose types are copied field for
+field from `enrollments.service.ts`; there is no second fetch style and no client-side state.
+A page that cannot load its data renders an error sentence instead of throwing (the catalog, the
+enrollment list and the detail page each have their own empty/error branch), because a thrown
+server component shows the student a crash and the run a missing test id.

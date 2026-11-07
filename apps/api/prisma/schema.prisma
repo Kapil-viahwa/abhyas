@@ -77,6 +77,9 @@ model User {
   coinBulkJobs       CoinBulkJob[]    @relation("CoinBulkJobCreator")
   coinBulkRows       CoinBulkJobRow[] @relation("CoinBulkRowUser")
   coinAdminRequests  CoinAdminRequest[] @relation("CoinAdminRequestActor")
+  tests              Test[]            @relation("TestCreator")
+  testVersions       TestVersion[]     @relation("TestVersionAuthor")
+  enrollments        Enrollment[]      @relation("EnrollmentOwner")
 
   @@map("users")
 }
@@ -260,6 +263,7 @@ model Exam {
   creator  User         @relation("ExamCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   subjects Subject[]
   questions Question[]  @relation("QuestionExam")
+  tests     Test[]
 
   @@index([categoryId], map: "exams_category_id_idx")
   @@index([createdBy], map: "exams_created_by_idx")
@@ -328,6 +332,7 @@ model Question {
   creator   User            @relation("QuestionCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   versions  QuestionVersion[]
   importRows ImportRow[]
+  testLinks TestQuestion[]
 
   @@index([examId], map: "questions_exam_id_idx")
   @@index([subjectId], map: "questions_subject_id_idx")
@@ -527,6 +532,7 @@ model CoinTransaction {
   creator User? @relation("CoinLedgerCreator", fields: [createdBy], references: [id], onDelete: Restrict)
   dailyReward CoinDailyReward? @relation("CoinRewardEntry")
   bulkRow     CoinBulkJobRow?  @relation("CoinBulkRowEntry")
+  enrollment  Enrollment?      @relation("EnrollmentCharge")
 
   @@unique([userId, idempotencyKey], map: "coin_transactions_user_idempotency_key")
   @@index([userId, createdAt], map: "coin_transactions_user_created_at_idx")
@@ -613,4 +619,107 @@ model CoinAdminRequest {
   @@id([actorId, key], map: "coin_admin_requests_pkey")
   @@index([createdAt], map: "coin_admin_requests_created_at_idx")
   @@map("coin_admin_requests")
+}
+
+
+
+/// Phase 6: the paper an editor assembles. The pattern lives on a version, so publishing
+/// freezes what an enrolled student was sold and a later edit opens a new version.
+model Test {
+  id             String    @id @default(uuid()) @db.Uuid
+  examId         String    @map("exam_id") @db.Uuid
+  createdBy      String    @map("created_by") @db.Uuid
+  title          String
+  description    String?
+  /// DRAFT -> SUBMITTED -> PUBLISHED -> ARCHIVED. Only an ADMIN publishes or archives.
+  status         String    @default("DRAFT")
+  currentVersion Int       @default(1) @map("current_version")
+  /// Null means unlimited attempts; a number is the cap the server enforces.
+  maxAttempts    Int?      @map("max_attempts")
+  submittedAt    DateTime? @map("submitted_at") @db.Timestamptz(6)
+  publishedAt    DateTime? @map("published_at") @db.Timestamptz(6)
+  archivedAt     DateTime? @map("archived_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  exam        Exam          @relation(fields: [examId], references: [id], onDelete: Restrict)
+  creator     User          @relation("TestCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  versions    TestVersion[]
+  enrollments Enrollment[]
+
+  @@index([examId], map: "tests_exam_id_idx")
+  @@index([createdBy], map: "tests_created_by_idx")
+  @@index([status, publishedAt], map: "tests_status_published_at_idx")
+  @@index([createdBy, status], map: "tests_created_by_status_idx")
+  @@map("tests")
+}
+
+/// One version of a test's pattern. A published version is frozen by trigger, like a
+/// published question version, so an open attempt never changes under the student.
+model TestVersion {
+  id                      String    @id @default(uuid()) @db.Uuid
+  testId                  String    @map("test_id") @db.Uuid
+  version                 Int
+  durationMinutes         Int       @map("duration_minutes")
+  marksPerQuestion        Decimal   @default(1) @map("marks_per_question") @db.Decimal(6, 2)
+  negativeMarksPerQuestion Decimal  @default(0) @map("negative_marks_per_question") @db.Decimal(6, 2)
+  publishedAt             DateTime? @map("published_at") @db.Timestamptz(6)
+  createdBy               String    @map("created_by") @db.Uuid
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  test        Test           @relation(fields: [testId], references: [id], onDelete: Cascade)
+  author      User           @relation("TestVersionAuthor", fields: [createdBy], references: [id], onDelete: Restrict)
+  questions   TestQuestion[]
+  enrollments Enrollment[]
+
+  @@unique([testId, version], map: "test_versions_test_version_key")
+  @@map("test_versions")
+}
+
+/// A question's place in a paper. Ordering is unique per version, and so is the question:
+/// the same question cannot be asked twice in one paper.
+model TestQuestion {
+  id            String @id @default(uuid()) @db.Uuid
+  testVersionId String @map("test_version_id") @db.Uuid
+  questionId    String @map("question_id") @db.Uuid
+  position      Int
+
+  version  TestVersion @relation(fields: [testVersionId], references: [id], onDelete: Cascade)
+  question Question    @relation(fields: [questionId], references: [id], onDelete: Restrict)
+
+  @@unique([testVersionId, position], map: "test_questions_version_position_key")
+  @@unique([testVersionId, questionId], map: "test_questions_version_question_key")
+  @@index([questionId], map: "test_questions_question_id_idx")
+  @@map("test_questions")
+}
+
+/// Phase 6: one student bought one attempt of one paper. The row and its ENROLLMENT ledger
+/// row are written in one transaction (P4); the triggers keep the pair honest — one debit
+/// per enrollment, this student's debit, an ENROLLMENT debit, and a version of this test.
+model Enrollment {
+  id                String    @id @default(uuid()) @db.Uuid
+  testId            String    @map("test_id") @db.Uuid
+  testVersionId     String    @map("test_version_id") @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  attemptNumber     Int       @default(1) @map("attempt_number")
+  /// OPEN, COMPLETED or EXPIRED. A student holds at most one OPEN row per test (partial index).
+  status            String    @default("OPEN")
+  coinTransactionId String    @map("coin_transaction_id") @db.Uuid
+  idempotencyKey    String    @map("idempotency_key")
+  enrolledAt        DateTime  @default(now()) @map("enrolled_at") @db.Timestamptz(6)
+  completedAt       DateTime? @map("completed_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  user            User            @relation("EnrollmentOwner", fields: [userId], references: [id], onDelete: Restrict)
+  test            Test            @relation(fields: [testId], references: [id], onDelete: Restrict)
+  testVersion     TestVersion     @relation(fields: [testVersionId], references: [id], onDelete: Restrict)
+  coinTransaction CoinTransaction @relation("EnrollmentCharge", fields: [coinTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([coinTransactionId], map: "enrollments_coin_transaction_key")
+  @@unique([userId, idempotencyKey], map: "enrollments_user_idempotency_key")
+  @@unique([userId, testId, attemptNumber], map: "enrollments_user_test_attempt_key")
+  @@index([userId, status], map: "enrollments_user_status_idx")
+  @@index([testId, status], map: "enrollments_test_status_idx")
+  @@map("enrollments")
 }

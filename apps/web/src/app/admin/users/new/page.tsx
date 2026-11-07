@@ -16,8 +16,7 @@ const FLAG_FIELDS = [
     label: 'Manage questions',
     hint: 'Create and edit exams, subjects, topics, questions and options',
   },
-  { name: 'manage_tests', label: 'Manage tests', hint: 'Create and edit tests, sections and question placement' },
-  { name: 'publish_tests', label: 'Publish tests', hint: 'Publish or archive a test' },
+  { name: 'manage_tests', label: 'Manage tests', hint: 'Create, edit and submit tests; only an Administrator publishes' },
 ] as const;
 
 export default async function NewEditorPage({ searchParams }: PageProps): Promise<ReactElement> {

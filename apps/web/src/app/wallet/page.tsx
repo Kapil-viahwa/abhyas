@@ -86,6 +86,9 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
           <Link href="/wallet" className="text-slate-200">
             Wallet
           </Link>
+          <Link href="/tests" className="text-sky-400 hover:text-sky-300">
+            Tests
+          </Link>
         </nav>
       </header>
 

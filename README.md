@@ -59,7 +59,7 @@ The rules this repository is built under are in [docs/working-rules.md](docs/wor
 
 Architecture: [docs/architecture.md](docs/architecture.md). Decisions and the reason for every dependency: [docs/decisions.md](docs/decisions.md). Accepted advisories and why: [docs/security-exceptions.md](docs/security-exceptions.md). Honest per-phase status: [PROGRESS.md](PROGRESS.md).
 
-Where the work is going, and what each phase owes: [docs/ROADMAP.md](docs/ROADMAP.md). Per-phase records: [docs/PHASE4-CHECKLIST.md](docs/PHASE4-CHECKLIST.md) (what Phase 4 shipped and what Phase 4b still owes), [docs/PHASE2C-SPEC.md](docs/PHASE2C-SPEC.md) (the mobile OTP specification) and [docs/PHASE5-SPEC.md](docs/PHASE5-SPEC.md) (the coin specification), kept in the repository so a later session can resume from the repo alone.
+Where the work is going, and what each phase owes: [docs/ROADMAP.md](docs/ROADMAP.md). Per-phase records: [docs/PHASE4-CHECKLIST.md](docs/PHASE4-CHECKLIST.md) (what Phase 4 shipped and what Phase 4b still owes), [docs/PHASE2C-SPEC.md](docs/PHASE2C-SPEC.md) (the mobile OTP specification), [docs/PHASE5-SPEC.md](docs/PHASE5-SPEC.md) (the coin specification) and [docs/PHASE-6.md](docs/PHASE-6.md) (the mock-test and enrollment specification, its audit and the owner's rules), kept in the repository so a later session can resume from the repo alone.
 
 ## Getting started
 
@@ -124,6 +124,18 @@ pnpm db:seed:catalog       # a few example exam groups; idempotent by slug, neve
 `NODE_ENV=production` refuses that seed without
 `CATALOG_SEED_CONFIRM=seed-example-catalog`, and it needs an Administrator to own the rows:
 run `pnpm db:seed:admin` first.
+
+## Mock tests
+
+An Editor assembles a paper at `/editor/tests` — its questions, duration, marks per question
+and negative marking — and submits it. Only an Administrator publishes or archives one, at
+`/admin/tests`; an Editor's publish or archive call is refused **403** by the API. A student
+browses published papers at `/tests` and enrolls for the platform's price
+(`default_enrollment_cost`, 100 coins by default); the balance and the `ENROLLMENT` ledger row
+then show on `/wallet`. The rules are in [docs/PHASE-6.md](docs/PHASE-6.md), the routes in
+[docs/permissions.md](docs/permissions.md#phase-6-p2-building-a-test) and the decisions in
+[docs/decisions.md](docs/decisions.md) 0068–0073. Taking an attempt — timers, autosave,
+submission — is phase 7 and is not built yet.
 
 Local commands (each one is what CI runs):
 

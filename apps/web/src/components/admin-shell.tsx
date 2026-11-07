@@ -23,6 +23,7 @@ export function AdminNav({
     { href: '/admin', label: 'Overview' },
     { href: '/admin/users', label: 'Users' },
     ...(permissions?.includes('coins.write') === true ? [{ href: '/admin/coins', label: 'Coins' }] : []),
+    ...(permissions?.includes('tests.read') === true ? [{ href: '/editor/tests', label: 'Tests' }] : []),
     { href: '/admin/catalog', label: 'Catalog' },
     { href: '/editor/questions', label: 'Question bank' },
     { href: '/admin/settings', label: 'Settings' },

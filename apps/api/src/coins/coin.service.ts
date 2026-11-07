@@ -197,6 +197,85 @@ export class CoinService {
   }
 
   /**
+   * Takes the wallet row's lock for a transaction the caller has already opened.
+   *
+   * A debit that has to land beside another row — an enrollment — must lock the wallet first,
+   * the row it is paired with second, and its own rows last, so two of them serialise instead
+   * of deadlocking. Doing it here, before any ledger row is written, means a request that is
+   * refused later rolls back with nothing to undo.
+   */
+  async lockWallet(tx: Prisma.TransactionClient, userId: string): Promise<number> {
+    const id = accountId(userId);
+
+    try {
+      await tx.$executeRaw`
+        INSERT INTO "coin_wallets" ("user_id")
+        VALUES (${id}::uuid)
+        ON CONFLICT ("user_id") DO NOTHING
+      `;
+    } catch (error) {
+      this.rethrowMissingAccount(error);
+    }
+
+    const wallets = await tx.$queryRaw<Array<{ balance: number }>>`
+      SELECT "balance"
+      FROM "coin_wallets"
+      WHERE "user_id" = ${id}::uuid
+      FOR UPDATE
+    `;
+
+    const wallet = wallets[0];
+    if (wallet === undefined) {
+      throw new NotFoundException('No coin wallet exists for that account');
+    }
+
+    return wallet.balance;
+  }
+
+  /**
+   * One debit, inside a transaction the caller opened.
+   *
+   * `spend` opens its own transaction because a coin movement usually stands alone. Enrollment
+   * needs its debit and its enrollment row to commit or roll back together, so it passes its
+   * transaction here instead. The rules do not change: the wallet row is locked before the
+   * ledger is read, a replayed key returns the original row, a key reused for a different
+   * intent is a conflict, and a balance never goes below zero.
+   */
+  async spendWithin(tx: Prisma.TransactionClient, command: CoinSpendCommand): Promise<CoinEntryResult> {
+    if (!(COIN_DEBIT_TYPES as readonly string[]).includes(command.type)) {
+      throw new BadRequestException(`"${command.type}" is not a coin debit type`);
+    }
+
+    const amount = magnitude(command.amount);
+    const userId = accountId(command.userId);
+    const idempotencyKey = key(command.idempotencyKey);
+    const referenceType = command.reference?.type ?? null;
+    const referenceId = command.reference?.id ?? null;
+
+    if ((referenceType === null) !== (referenceId === null)) {
+      throw new BadRequestException('A coin reference needs both a type and an id');
+    }
+
+    const outcome = await this.applyEntry(tx, {
+      userId,
+      type: command.type,
+      signedAmount: -amount,
+      idempotencyKey,
+      referenceType,
+      referenceId,
+      description: command.description ?? null,
+      createdBy: command.createdBy ?? null,
+      fingerprint: requestFingerprint({ type: command.type, amount: -amount, reference: command.reference ?? null }),
+    });
+
+    if (outcome.kind === 'conflict') {
+      throw new ConflictException('That idempotency key was already used for a different coin entry');
+    }
+
+    return toResult(outcome.row, outcome.kind === 'replay');
+  }
+
+  /**
    * The signup grant, paid once the identifier the setting names has been verified.
    *
    * Three rules, all inside the wallet's own transaction: a 0 setting means the grant is

@@ -112,10 +112,6 @@ export default async function AdminUserDetailPage({ params, searchParams }: Page
               <input className="mt-1" type="checkbox" name="manage_tests" value="on" defaultChecked={user.editorFlags.manage_tests} />
               Manage tests
             </label>
-            <label className="flex items-start gap-3 text-sm text-slate-300">
-              <input className="mt-1" type="checkbox" name="publish_tests" value="on" defaultChecked={user.editorFlags.publish_tests} />
-              Publish tests
-            </label>
 
             <button className={buttonClass} type="submit">
               Save capabilities
