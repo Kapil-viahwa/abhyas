@@ -101,18 +101,21 @@ export interface CatalogChoices {
   readonly topics: readonly { id: string; name: string; subjectId: string }[];
 }
 
-interface CatalogTree {
-  readonly categories: readonly {
-    id: string;
-    name: string;
-    exams: readonly {
-      id: string;
-      name: string;
-      subjects: readonly {
-        id: string;
-        name: string;
-        topics: readonly { id: string; name: string }[];
-      }[];
+/**
+ * What `GET /v1/catalog/tree` actually returns: two flat lists, with each exam carrying its own
+ * subjects and each subject its topics. The pickers below are built from that, never from a
+ * nesting the API does not send.
+ */
+export interface CatalogTree {
+  readonly categories: readonly { id: string; name: string }[];
+  readonly exams: readonly {
+    readonly id: string;
+    readonly categoryId: string;
+    readonly name: string;
+    readonly subjects: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly topics: readonly { id: string; name: string }[];
     }[];
   }[];
 }
@@ -129,14 +132,18 @@ export async function catalogChoices(accessToken: string): Promise<CatalogChoice
   const subjects: { id: string; name: string; examId: string }[] = [];
   const topics: { id: string; name: string; subjectId: string }[] = [];
 
+  const categoryNames = new Map<string, string>();
   for (const category of result.body.categories) {
-    for (const exam of category.exams) {
-      exams.push({ id: exam.id, name: `${category.name} · ${exam.name}` });
-      for (const subject of exam.subjects) {
-        subjects.push({ id: subject.id, name: subject.name, examId: exam.id });
-        for (const topic of subject.topics) {
-          topics.push({ id: topic.id, name: topic.name, subjectId: subject.id });
-        }
+    categoryNames.set(category.id, category.name);
+  }
+
+  for (const exam of result.body.exams) {
+    const categoryName = categoryNames.get(exam.categoryId);
+    exams.push({ id: exam.id, name: categoryName === undefined ? exam.name : `${categoryName} · ${exam.name}` });
+    for (const subject of exam.subjects) {
+      subjects.push({ id: subject.id, name: subject.name, examId: exam.id });
+      for (const topic of subject.topics) {
+        topics.push({ id: topic.id, name: topic.name, subjectId: subject.id });
       }
     }
   }
