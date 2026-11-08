@@ -491,7 +491,7 @@ unchanged because `main` changed none of them.
 
 
 
-## Phase 7, A1 (pushed, runs queued)
+## Phase 7, A1 (done — both runs of `9ab5f08` green)
 
 **The attempt model.** One migration, `20270201000000_attempts`, sorts after every migration on
 `main` (the newest is `20270101000000_tests_and_enrollments`); no existing migration was edited
@@ -532,6 +532,49 @@ stores only a chosen option (the shape the engine can score) and decision 0075 r
 "numerical-answer questions in tests" as an owner-to-confirm item: the recommendation is that
 the builder refuse them once A3 exists, but the builder is not changed in this unit.
 
-**Not verified here:** this session cannot run Postgres, so neither the migration nor the test
-file has executed. A1 stays `[ ]` in `docs/NEXT-TASKS.md` until the runs on the pushed commits
-are read and green.
+**Not verified here, proven in CI:** this session cannot run Postgres. The model is proven by
+`apps/api/test/attempts-model.test.ts` in the `database` job, which is green on the head
+`9ab5f08db7f6bccac50b0256a5185cab0d386c11` in both nine-job runs — [run 42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709) (job 128599236097, 2m04s) and [run 42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335) (job 128599247640, 2m22s) — with the other eight jobs (audit, lint, typecheck, unit, docker, compose-smoke, e2e, gitleaks) green in each. The tool that lists them merges the two runs into one row per job name; the two sets of job ids are what separates them. The green job's readable log slice is Postgres and container output, so the vitest summary line is not re-quotable: the green `database` job, running `pnpm test:db` under `set -o pipefail`, is the proof that the file ran in full and that `20270201000000_attempts` applied.
+
+### Every claim, and the test that proves it
+
+Nineteen cases, one file, all passing in both runs.
+
+| Claim | Test | What refuses |
+| --- | --- | --- |
+| One attempt per enrollment under concurrency | `lets one of two simultaneous inserts win and refuses the other` | `attempts_enrollment_key` on the loser, exactly one `fulfilled`, one row left |
+| The deadline must be after the start | `refuses a deadline that is not after the start` | CHECK `attempts_deadline_after_start`, zero rows |
+| The submitted pair exists exactly when not running | `requires submitted_at and submit_source exactly when the attempt is not running` | CHECK `attempts_submitted_fields`, then the same pair accepted on its own enrollment |
+| An unknown submit source is refused | `refuses an unknown submit source` | CHECK `attempts_submit_source_valid` |
+| `started_at` is the database's, never the caller's | `sets started_at from the database, even when the caller sends one` | the `attempts_started_at_from_database` trigger overwrites a 2001 date |
+| The status is one-way and once | `moves IN_PROGRESS to SUBMITTED once and refuses everything after it` | `attempts: an ended attempt cannot be changed`, on an update and on a raw jump back |
+| One of two simultaneous endings wins | `lets exactly one of two simultaneous endings win` | counts `[0, 1]`, ending status still terminal |
+| The enrollment, student, version, start and deadline are fixed | `refuses to change the enrollment, student, version, start or deadline` | `are fixed at start` on a changed student and a changed deadline |
+| The student is the enrollment's | `refuses a student who is not the enrollment's` | `belongs to the enrollment's student`, zero rows |
+| The version is the enrollment's | `refuses a version that is not the enrollment's` | `is of the enrollment's version`, zero rows |
+| One answer per question | `takes one row per question and refuses a second answer to it` | unique `attempt_answers (attempt_id, question_id)`, one row left |
+| The question must be in the attempt's paper | `refuses a question that is not in the attempt's paper` | `is not in this attempt's paper`, zero rows |
+| The option must be that question's | `refuses an option that belongs to another question` | `is not an option of question`, zero rows |
+| Answers are frozen once the attempt ended | `refuses to write or change an answer once the attempt has ended` | `cannot be written or changed once the attempt has ended`, on an insert and a raw update; the stored option unchanged |
+| A result needs an ended attempt | `refuses a result for an attempt that is still running` | `an attempt that is still running has no result`, zero rows |
+| A written result is immutable | `is written once an attempt has ended, and cannot be updated or deleted` | `a written result cannot be updated or deleted`, on update and delete; score still 2 |
+| One result per attempt under concurrency | `lets exactly one of two simultaneous inserts win` | `results_attempt_key`, one row left |
+| The count and accuracy CHECKs | `enforces the count and accuracy CHECKs` | `results_attempted_sum`, `results_total_sum`, `results_accuracy_range`, `results_accuracy_zero_when_unattempted` — each on its own insert, zero rows |
+| The grace setting exists with its bounds | `exists with its bounds` | `attempt_submit_grace_seconds` = 5, min 0, max 60 |
+
+### Two red rounds on the way
+
+- **`46fcc34` — the guard's join named the wrong column.** Both runs of the first head failed
+  only in `database`: `The column o.version_id does not exist in the current database` (P2022)
+  from `attempt_answers_guard`. `question_options` names its version column
+  `question_version_id`. The migration itself applied and 268 of 271 tests passed; all three
+  failures were this one function. Fixed in `60781c0` by correcting the join. The migration had
+  never been applied anywhere shared, so it was edited in place rather than followed by a second
+  migration, and no CHECK, trigger or index was weakened.
+- **`60781c0` — a test regex did not match Prisma's own format.** Both runs again failed only in
+  `database`, now on one case: the expected
+  ``Unique constraint failed on the fields: (`attempt_id`, `question_id`)`` against Prisma 5.22's
+  actual ``(`attempt_id`,`question_id`)``, which prints no space after the comma. The refusal was
+  right and the migration was right; only the assertion was too literal. Fixed in `9ab5f08`,
+  which still names both columns and still asserts the count is one.
+

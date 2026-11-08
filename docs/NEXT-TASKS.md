@@ -61,7 +61,7 @@ above: one unit per session, push once, stop. Every row must keep the owner's ru
 owns the clock, answers are saved only on submit, one start per enrollment and no resume, and
 answer keys never leave the server before the attempt has ended.
 
-[ ] A1 Data model. One migration: `attempts` (unique enrollment, `started_at`, `deadline_at`,
+[x] A1 Data model. One migration: `attempts` (unique enrollment, `started_at`, `deadline_at`,
 `submitted_at`, `status` `IN_PROGRESS`/`SUBMITTED`/`AUTO_SUBMITTED`, submit source), with CHECK
 `deadline_at > started_at`; `attempt_answers` (attempt, question, chosen option) with
 `UNIQUE (attempt, question)` and a guard that the question is in the attempt's version and the
@@ -71,7 +71,7 @@ marks) with `UNIQUE (attempt)` and a trigger that refuses `UPDATE`/`DELETE`; the
 unit, because the database job runs the API against the schema. Proof: a database-job test file
 — the CHECKs, one attempt per enrollment, one answer per question, a foreign question or option
 refused, a result immutable once written, and two simultaneous inserts of the same attempt
-leaving exactly one.
+leaving exactly one. — Verified in both nine-job runs of `9ab5f08db7f6bccac50b0256a5185cab0d386c11`: [run 42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709) and [run 42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335), eighteen green check results between them. The tool that lists them merges the two runs into one row per job name, so the job ids are what separates them: `database` 128599236097 (2m04s) and 128599247640 (2m22s), both green, with the other eight jobs green in each run. The green job's readable log slice is Postgres and container output, so the vitest summary line is not re-quotable; the green `database` job, which runs `pnpm test:db` under `set -o pipefail`, is the proof that `apps/api/test/attempts-model.test.ts` ran in full and passed, and the same step applies the migrations, so `20270201000000_attempts` applied. Two red rounds on the way: `46fcc34` (the answer guard's join named `o.version_id`; the column is `question_version_id`), fixed in `60781c0`, and `60781c0` (a test regex required a space that Prisma 5.22's unique-violation message does not print), fixed in `9ab5f08`. The claim-by-claim table and both rounds are recorded in `PROGRESS.md`.
 
 [ ] A2 The scoring function. A pure function of (version, submitted answers): correct ×
 marks per question − wrong × negative marks per question, unattempted zero, `accuracy =
