@@ -549,7 +549,7 @@ describe('phase 7 attempt model', () => {
 
       await expect(
         db.client.attemptAnswer.create({ data: { attemptId, questionId, chosenOptionId: optionId } }),
-      ).rejects.toThrow(/Unique constraint failed on the fields: \(`attempt_id`, `question_id`\)/);
+      ).rejects.toThrow(/Unique constraint failed on the fields: \(`attempt_id`,\s*`question_id`\)/);
 
       expect(await db.client.attemptAnswer.count({ where: { attemptId } })).toBe(1);
     });
