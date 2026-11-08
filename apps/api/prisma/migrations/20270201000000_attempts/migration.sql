@@ -200,7 +200,7 @@ BEGIN
 
     SELECT v."question_id" INTO option_question
     FROM "question_options" o
-    JOIN "question_versions" v ON v."id" = o."version_id"
+    JOIN "question_versions" v ON v."id" = o."question_version_id"
     WHERE o."id" = NEW."chosen_option_id";
 
     IF option_question IS NULL THEN
