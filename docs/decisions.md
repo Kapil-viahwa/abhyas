@@ -2105,3 +2105,64 @@ A2's scoring function will treat a numerical question in a paper as it treats an
 no chosen option — unattempted — and the recommendation is that the builder refuse a numerical
 question once A3 exists, so a paper can never contain a question the engine cannot score. That
 recommendation is recorded here rather than acted on, because the builder is not in A1's scope.
+
+
+
+## 0076 — Phase 7, A2: scoring in hundredths, and refusal over ignoring
+
+**Decided while writing the pure scoring function.** `scoreAttempt` takes the frozen version's
+questions as plain data and the submitted answers as plain data, and returns exactly the columns
+`results` needs. It reads no database, no clock and no key of its own: the caller loads the
+correct option and passes it in.
+
+**The arithmetic unit is the hundredth, held as a bigint.** `question_versions.marks`,
+`question_versions.negative_marks`, `test_versions.marks_per_question` and
+`test_versions.negative_marks_per_question` are all `NUMERIC(6, 2)`, so a fractional marking —
+0.25 negatives, half marks — is real. Binary floats cannot carry 0.25 or 0.10 exactly, and a
+paper long enough would drift; marks are therefore parsed once, at the edge, into a bigint count
+of hundredths, the score is a sum of those integers, and it is formatted back to a two-place
+string once at the other edge. Nothing in between is a float.
+
+**The caller supplies each question's marks.** The function takes marks per question, not one
+figure for the whole paper. A3 fills it with the version's `marks_per_question` for every
+question — which is exactly the rule in `docs/PHASE-7.md` — and `total_marks` is the sum of
+those marks over every question in the version: the most the paper is worth, a figure no CHECK
+constrains but every student reads.
+Per-question marks would need no rewrite of the function.
+
+**Accuracy rounds half up at the fourth decimal.** `results.accuracy` is `NUMERIC(6, 4)`. The
+ratio is computed in integers as `floor((2 × correct × 10000 + attempted) / (2 × attempted))`,
+so it can never be a float, never NaN, and — because correct is never greater than attempted —
+never above 1.0000. Zero attempted is 0.0000, which is also what the results CHECK
+`results_accuracy_zero_when_unattempted` demands.
+
+**The score is not floored at zero. Assumed, owner to confirm.** A paper with heavy negative
+marking can score below zero, and the number is stored as it comes out. A negative score is
+permitted by the column (`NUMERIC(8, 2)`) and by every results CHECK, which bound the counts and
+the accuracy, not the score. If the owner wants a floor, it belongs here as one statement and
+changes no column.
+
+**Refusal beats ignoring.** An answer for a question outside the version, a second answer to the
+same question, a chosen option that is not that question's, a question with no single correct
+option, and a marks value that is negative, non-finite or finer than two places are all refused
+with a `ScoringError` carrying a stable code — `UNKNOWN_QUESTION`, `DUPLICATE_ANSWER`,
+`UNKNOWN_OPTION`, `NOT_SINGLE_CORRECT`, `INVALID_MARKS` — and a message that names ids only,
+never which option is correct. Every one of these means tampering or a builder bug, and scoring
+around it would hide both. A version that repeats a question or an option is refused with
+`INVALID_QUESTION`.
+
+**`NUMERICAL` questions are refused until the owner decides 0075's open item.** A paper can
+contain one today, because phase 6's builder does not filter on `question_type`, and this
+function cannot score one: its answer is `numerical_answer`, not an option. It therefore refuses
+the whole version rather than silently counting the question as unattempted. The builder is not
+changed in this unit; the recommendation in 0075 stands — once A3 exists, the builder should
+refuse a numerical question, so a paper can never contain a question the engine cannot score.
+
+**The output is strings so the insert cannot trip a CHECK.** `score` and `total_marks` are
+two-place strings, `accuracy` is a four-place string, and the counts are integers; Prisma's
+`Decimal` fields accept the strings unchanged. The unit tests assert every results invariant on
+the output itself.
+
+The tests are `apps/api/src/attempts/scoring.spec.ts`, in the unit job. No database-job test is
+added in this unit, because the insert this output feeds is A3's transaction; A3's tests will
+prove it against the table.

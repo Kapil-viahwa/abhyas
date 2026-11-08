@@ -578,3 +578,44 @@ Nineteen cases, one file, all passing in both runs.
   right and the migration was right; only the assertion was too literal. Fixed in `9ab5f08`,
   which still names both columns and still asserts the count is one.
 
+
+
+
+## Phase 7, A2 (pushed, runs queued)
+
+**The scoring function.** `apps/api/src/attempts/scoring.ts` — one exported function,
+`scoreAttempt(questions, answers)`, pure: no database, no Prisma, no clock, no randomness, no
+I/O. The caller loads the correct option from the database and passes it in; the function never
+reads a key.
+
+- **Exact arithmetic.** Marks are parsed once into hundredths as a bigint, summed as integers,
+  and formatted back at the edge. `question_versions.marks` and `negative_marks` and the two
+  `test_versions` figures are `NUMERIC(6, 2)`, so 0.25 negatives and fractional marks are real;
+  a float would drift. `score` and `total_marks` leave as two-place strings and `accuracy` as a
+  four-place string, the form Prisma's `Decimal` columns take.
+- **Output is exactly the `results` columns** — `score`, `correctCount`, `wrongCount`,
+  `unattemptedCount`, `attemptedCount`, `totalQuestions`, `totalMarks`, `accuracy` — and every
+  A1 CHECK holds on it: attempted = correct + wrong, the three counts sum to the question count,
+  accuracy in [0, 1], accuracy 0.0000 when nothing was attempted.
+- **Accuracy** is `floor((2 × correct × 10000 + attempted) / (2 × attempted))` at four places,
+  rounded half up, zero attempted giving 0.0000.
+- **The score is not floored at zero** (assumed, owner to confirm); the column and every results
+  CHECK allow a negative score.
+- **Refusal over ignoring:** `UNKNOWN_QUESTION`, `DUPLICATE_ANSWER`, `UNKNOWN_OPTION`,
+  `NOT_SINGLE_CORRECT`, `INVALID_MARKS` and `INVALID_QUESTION`, each a `ScoringError` with the
+  stable code and a message that names ids only. A `NUMERICAL` question anywhere in the version
+  refuses the whole version, per decision 0075's open item; the builder is unchanged.
+
+Proof: `apps/api/src/attempts/scoring.spec.ts`, in the unit job — all correct; all wrong with
+negative marking; all unattempted; an empty version; mixed; single question; fractional marks
+and negatives with exact expected scores; per-question marks; accuracy at 1/3, 2/3, 1/2, 1/6,
+5/6 and 1; every refusal with its code; the inputs untouched; determinism; the A1 invariants on
+the output; and a property test over 60 generated versions using a mulberry32 generator written
+in the spec, checking the score against independently computed integer arithmetic, the counts,
+that reordering the answers changes nothing, and that a duplicate answer is refused.
+
+**No database test in this unit.** The insert this output feeds is A3's transaction, so A3's
+tests will prove the output against the `results` table; A2 has no database code to prove.
+
+**Not verified here:** this session cannot run the toolchain. The function and its tests are
+unrun until the runs on the pushed commits are read; A2 stays `[ ]` in `docs/NEXT-TASKS.md`.
