@@ -80,6 +80,7 @@ model User {
   tests              Test[]            @relation("TestCreator")
   testVersions       TestVersion[]     @relation("TestVersionAuthor")
   enrollments        Enrollment[]      @relation("EnrollmentOwner")
+  attempts           Attempt[]         @relation("AttemptOwner")
 
   @@map("users")
 }
@@ -333,6 +334,7 @@ model Question {
   versions  QuestionVersion[]
   importRows ImportRow[]
   testLinks TestQuestion[]
+  attemptAnswers AttemptAnswer[] @relation("AnswerQuestion")
 
   @@index([examId], map: "questions_exam_id_idx")
   @@index([subjectId], map: "questions_subject_id_idx")
@@ -378,6 +380,7 @@ model QuestionOption {
 
   version QuestionVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
   image   MediaAsset?     @relation("OptionImage", fields: [imageId], references: [id], onDelete: SetNull)
+  chosenIn AttemptAnswer[] @relation("AnswerOption")
 
   @@unique([versionId, position], map: "question_options_version_position_key")
   @@map("question_options")
@@ -671,6 +674,7 @@ model TestVersion {
   author      User           @relation("TestVersionAuthor", fields: [createdBy], references: [id], onDelete: Restrict)
   questions   TestQuestion[]
   enrollments Enrollment[]
+  attempts    Attempt[]      @relation("VersionAttempts")
 
   @@unique([testId, version], map: "test_versions_test_version_key")
   @@map("test_versions")
@@ -715,6 +719,7 @@ model Enrollment {
   test            Test            @relation(fields: [testId], references: [id], onDelete: Restrict)
   testVersion     TestVersion     @relation(fields: [testVersionId], references: [id], onDelete: Restrict)
   coinTransaction CoinTransaction @relation("EnrollmentCharge", fields: [coinTransactionId], references: [id], onDelete: Restrict)
+  attempt         Attempt?        @relation("EnrollmentAttempt")
 
   @@unique([coinTransactionId], map: "enrollments_coin_transaction_key")
   @@unique([userId, idempotencyKey], map: "enrollments_user_idempotency_key")
@@ -722,4 +727,77 @@ model Enrollment {
   @@index([userId, status], map: "enrollments_user_status_idx")
   @@index([testId, status], map: "enrollments_test_status_idx")
   @@map("enrollments")
+}
+
+
+
+/// Phase 7: one attempt at one enrollment's paper. It hangs off the enrollment, so nothing
+/// here repeats a purchase, and off the version, so nothing repeats a paper. The database owns
+/// `started_at` (a trigger overwrites whatever an application sends), the status is one-way and
+/// once, and an ended attempt cannot be changed at all — see `20270201000000_attempts`.
+model Attempt {
+  id            String    @id @default(uuid()) @db.Uuid
+  enrollmentId  String    @unique(map: "attempts_enrollment_key") @map("enrollment_id") @db.Uuid
+  userId        String    @map("user_id") @db.Uuid
+  testVersionId String    @map("test_version_id") @db.Uuid
+  /// Set by the database's now() on insert; never a value the caller sends.
+  startedAt     DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  deadlineAt    DateTime  @map("deadline_at") @db.Timestamptz(6)
+  /// IN_PROGRESS -> SUBMITTED or AUTO_SUBMITTED, once.
+  status        String    @default("IN_PROGRESS")
+  submittedAt   DateTime? @map("submitted_at") @db.Timestamptz(6)
+  /// STUDENT, SWEEPER or LAZY; null while the attempt runs.
+  submitSource  String?   @map("submit_source")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  enrollment Enrollment      @relation("EnrollmentAttempt", fields: [enrollmentId], references: [id], onDelete: Restrict)
+  user       User            @relation("AttemptOwner", fields: [userId], references: [id], onDelete: Restrict)
+  version    TestVersion     @relation("VersionAttempts", fields: [testVersionId], references: [id], onDelete: Restrict)
+  answers    AttemptAnswer[]
+  result     Result?
+
+  @@index([userId], map: "attempts_user_id_idx")
+  @@index([status, deadlineAt], map: "attempts_status_deadline_idx")
+  @@map("attempts")
+}
+
+/// Phase 7: one answer given in one attempt. A row exists only for a question the student
+/// answered — an unattempted question has none — and the table is real so autosave can be added
+/// later as a write path. A trigger refuses a question outside the attempt's version, an option
+/// of another question, and any write once the attempt has ended.
+model AttemptAnswer {
+  id             String   @id @default(uuid()) @db.Uuid
+  attemptId      String   @map("attempt_id") @db.Uuid
+  questionId     String   @map("question_id") @db.Uuid
+  chosenOptionId String   @map("chosen_option_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  attempt      Attempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question     Question       @relation("AnswerQuestion", fields: [questionId], references: [id], onDelete: Restrict)
+  chosenOption QuestionOption @relation("AnswerOption", fields: [chosenOptionId], references: [id], onDelete: Restrict)
+
+  @@unique([attemptId, questionId], map: "attempt_answers_attempt_question_key")
+  @@index([questionId], map: "attempt_answers_question_id_idx")
+  @@map("attempt_answers")
+}
+
+/// Phase 7: the one result an attempt has, written once and immutable afterwards. A trigger
+/// refuses an insert while the attempt is still running, and refuses every update and delete.
+model Result {
+  id               String   @id @default(uuid()) @db.Uuid
+  attemptId        String   @unique(map: "results_attempt_key") @map("attempt_id") @db.Uuid
+  score            Decimal  @db.Decimal(8, 2)
+  correctCount     Int      @map("correct_count")
+  wrongCount       Int      @map("wrong_count")
+  unattemptedCount Int      @map("unattempted_count")
+  attemptedCount   Int      @map("attempted_count")
+  totalQuestions   Int      @map("total_questions")
+  totalMarks       Decimal  @map("total_marks") @db.Decimal(8, 2)
+  accuracy         Decimal  @db.Decimal(6, 4)
+  computedAt       DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+
+  attempt Attempt @relation(fields: [attemptId], references: [id], onDelete: Restrict)
+
+  @@map("results")
 }

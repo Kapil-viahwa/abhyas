@@ -488,3 +488,134 @@ unchanged because `main` changed none of them.
 - **Existing editor `publish_tests` grants are deleted** by that migration and cannot be
   re-created; an editor who published tests before can no longer do so, and keeps
   `content.publish` for question versions.
+
+
+
+## Phase 7, A1 (done — both runs of `9ab5f08` green)
+
+**The attempt model.** One migration, `20270201000000_attempts`, sorts after every migration on
+`main` (the newest is `20270101000000_tests_and_enrollments`); no existing migration was edited
+and no directory needed renaming.
+
+- `attempts` — `enrollment_id` (`UNIQUE`: one attempt per enrollment), `user_id`,
+  `test_version_id`, `started_at` (the database's `now()`, overwritten by a trigger so a caller
+  cannot back-date it), `deadline_at` (`CHECK deadline_at > started_at`), `status`
+  (`IN_PROGRESS`, `SUBMITTED`, `AUTO_SUBMITTED`) with one CHECK pairing `submitted_at` and
+  `submit_source`, and a one-way trigger: `IN_PROGRESS` moves to an ended status exactly once and
+  the enrollment, student, version, start and deadline never change. A `BEFORE INSERT` trigger
+  reads the enrollment and refuses a student or version that is not its own.
+- `attempt_answers` — a row only for an answered question (`chosen_option_id NOT NULL`),
+  `UNIQUE (attempt_id, question_id)`, a guard that the question is placed in the attempt's
+  version and the option belongs to that question, and a refusal of every write once the attempt
+  has ended. The table is real so autosave can be added later as a write path (0074); no autosave
+  route, column or setting is added.
+- `results` — `UNIQUE (attempt_id)`, counts, `score`, `total_marks`, `accuracy`, CHECKs
+  (`attempted = correct + wrong`, `correct + wrong + unattempted = total_questions`, accuracy in
+  `[0, 1]`, accuracy 0 when nothing was attempted), a trigger that refuses an insert while the
+  attempt is still running, and one that refuses every `UPDATE`/`DELETE`.
+- `attempt_submit_grace_seconds` (integer, default 5, bounds 0–60) is created here, as 0074
+  places it in A1.
+- Indexes: `attempts (status, deadline_at) WHERE status = 'IN_PROGRESS'` for the future sweeper,
+  `attempts (user_id)`, and the unique `attempt_answers (attempt_id, question_id)`.
+
+Proof: `apps/api/test/attempts-model.test.ts` in the database job — one attempt per enrollment
+under two simultaneous inserts, the deadline CHECK, the submitted pair, `started_at` from the
+database, the one-way status under two simultaneous endings, answers unique per question and
+tied to the version and the question, answers frozen after the end, a result only after the end
+and immutable, one result under two simultaneous inserts, the count and accuracy CHECKs, the
+student/version consistency, and the grace setting's row.
+
+**The finding that shaped the queue: a published test can contain `NUMERICAL` questions.** P2's
+builder validation checks ownership, publication and the paper's exam, not `question_type`. A
+numerical question has no options and its answer is `question_versions.numerical_answer`, so A1
+stores only a chosen option (the shape the engine can score) and decision 0075 records
+"numerical-answer questions in tests" as an owner-to-confirm item: the recommendation is that
+the builder refuse them once A3 exists, but the builder is not changed in this unit.
+
+**Not verified here, proven in CI:** this session cannot run Postgres. The model is proven by
+`apps/api/test/attempts-model.test.ts` in the `database` job, which is green on the head
+`9ab5f08db7f6bccac50b0256a5185cab0d386c11` in both nine-job runs — [run 42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709) (job 128599236097, 2m04s) and [run 42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335) (job 128599247640, 2m22s) — with the other eight jobs (audit, lint, typecheck, unit, docker, compose-smoke, e2e, gitleaks) green in each. The tool that lists them merges the two runs into one row per job name; the two sets of job ids are what separates them. The green job's readable log slice is Postgres and container output, so the vitest summary line is not re-quotable: the green `database` job, running `pnpm test:db` under `set -o pipefail`, is the proof that the file ran in full and that `20270201000000_attempts` applied.
+
+### Every claim, and the test that proves it
+
+Nineteen cases, one file, all passing in both runs.
+
+| Claim | Test | What refuses |
+| --- | --- | --- |
+| One attempt per enrollment under concurrency | `lets one of two simultaneous inserts win and refuses the other` | `attempts_enrollment_key` on the loser, exactly one `fulfilled`, one row left |
+| The deadline must be after the start | `refuses a deadline that is not after the start` | CHECK `attempts_deadline_after_start`, zero rows |
+| The submitted pair exists exactly when not running | `requires submitted_at and submit_source exactly when the attempt is not running` | CHECK `attempts_submitted_fields`, then the same pair accepted on its own enrollment |
+| An unknown submit source is refused | `refuses an unknown submit source` | CHECK `attempts_submit_source_valid` |
+| `started_at` is the database's, never the caller's | `sets started_at from the database, even when the caller sends one` | the `attempts_started_at_from_database` trigger overwrites a 2001 date |
+| The status is one-way and once | `moves IN_PROGRESS to SUBMITTED once and refuses everything after it` | `attempts: an ended attempt cannot be changed`, on an update and on a raw jump back |
+| One of two simultaneous endings wins | `lets exactly one of two simultaneous endings win` | counts `[0, 1]`, ending status still terminal |
+| The enrollment, student, version, start and deadline are fixed | `refuses to change the enrollment, student, version, start or deadline` | `are fixed at start` on a changed student and a changed deadline |
+| The student is the enrollment's | `refuses a student who is not the enrollment's` | `belongs to the enrollment's student`, zero rows |
+| The version is the enrollment's | `refuses a version that is not the enrollment's` | `is of the enrollment's version`, zero rows |
+| One answer per question | `takes one row per question and refuses a second answer to it` | unique `attempt_answers (attempt_id, question_id)`, one row left |
+| The question must be in the attempt's paper | `refuses a question that is not in the attempt's paper` | `is not in this attempt's paper`, zero rows |
+| The option must be that question's | `refuses an option that belongs to another question` | `is not an option of question`, zero rows |
+| Answers are frozen once the attempt ended | `refuses to write or change an answer once the attempt has ended` | `cannot be written or changed once the attempt has ended`, on an insert and a raw update; the stored option unchanged |
+| A result needs an ended attempt | `refuses a result for an attempt that is still running` | `an attempt that is still running has no result`, zero rows |
+| A written result is immutable | `is written once an attempt has ended, and cannot be updated or deleted` | `a written result cannot be updated or deleted`, on update and delete; score still 2 |
+| One result per attempt under concurrency | `lets exactly one of two simultaneous inserts win` | `results_attempt_key`, one row left |
+| The count and accuracy CHECKs | `enforces the count and accuracy CHECKs` | `results_attempted_sum`, `results_total_sum`, `results_accuracy_range`, `results_accuracy_zero_when_unattempted` — each on its own insert, zero rows |
+| The grace setting exists with its bounds | `exists with its bounds` | `attempt_submit_grace_seconds` = 5, min 0, max 60 |
+
+### Two red rounds on the way
+
+- **`46fcc34` — the guard's join named the wrong column.** Both runs of the first head failed
+  only in `database`: `The column o.version_id does not exist in the current database` (P2022)
+  from `attempt_answers_guard`. `question_options` names its version column
+  `question_version_id`. The migration itself applied and 268 of 271 tests passed; all three
+  failures were this one function. Fixed in `60781c0` by correcting the join. The migration had
+  never been applied anywhere shared, so it was edited in place rather than followed by a second
+  migration, and no CHECK, trigger or index was weakened.
+- **`60781c0` — a test regex did not match Prisma's own format.** Both runs again failed only in
+  `database`, now on one case: the expected
+  ``Unique constraint failed on the fields: (`attempt_id`, `question_id`)`` against Prisma 5.22's
+  actual ``(`attempt_id`,`question_id`)``, which prints no space after the comma. The refusal was
+  right and the migration was right; only the assertion was too literal. Fixed in `9ab5f08`,
+  which still names both columns and still asserts the count is one.
+
+
+
+
+## Phase 7, A2 (pushed, runs queued)
+
+**The scoring function.** `apps/api/src/attempts/scoring.ts` — one exported function,
+`scoreAttempt(questions, answers)`, pure: no database, no Prisma, no clock, no randomness, no
+I/O. The caller loads the correct option from the database and passes it in; the function never
+reads a key.
+
+- **Exact arithmetic.** Marks are parsed once into hundredths as a bigint, summed as integers,
+  and formatted back at the edge. `question_versions.marks` and `negative_marks` and the two
+  `test_versions` figures are `NUMERIC(6, 2)`, so 0.25 negatives and fractional marks are real;
+  a float would drift. `score` and `total_marks` leave as two-place strings and `accuracy` as a
+  four-place string, the form Prisma's `Decimal` columns take.
+- **Output is exactly the `results` columns** — `score`, `correctCount`, `wrongCount`,
+  `unattemptedCount`, `attemptedCount`, `totalQuestions`, `totalMarks`, `accuracy` — and every
+  A1 CHECK holds on it: attempted = correct + wrong, the three counts sum to the question count,
+  accuracy in [0, 1], accuracy 0.0000 when nothing was attempted.
+- **Accuracy** is `floor((2 × correct × 10000 + attempted) / (2 × attempted))` at four places,
+  rounded half up, zero attempted giving 0.0000.
+- **The score is not floored at zero** (assumed, owner to confirm); the column and every results
+  CHECK allow a negative score.
+- **Refusal over ignoring:** `UNKNOWN_QUESTION`, `DUPLICATE_ANSWER`, `UNKNOWN_OPTION`,
+  `NOT_SINGLE_CORRECT`, `INVALID_MARKS` and `INVALID_QUESTION`, each a `ScoringError` with the
+  stable code and a message that names ids only. A `NUMERICAL` question anywhere in the version
+  refuses the whole version, per decision 0075's open item; the builder is unchanged.
+
+Proof: `apps/api/src/attempts/scoring.spec.ts`, in the unit job — all correct; all wrong with
+negative marking; all unattempted; an empty version; mixed; single question; fractional marks
+and negatives with exact expected scores; per-question marks; accuracy at 1/3, 2/3, 1/2, 1/6,
+5/6 and 1; every refusal with its code; the inputs untouched; determinism; the A1 invariants on
+the output; and a property test over 60 generated versions using a mulberry32 generator written
+in the spec, checking the score against independently computed integer arithmetic, the counts,
+that reordering the answers changes nothing, and that a duplicate answer is refused.
+
+**No database test in this unit.** The insert this output feeds is A3's transaction, so A3's
+tests will prove the output against the `results` table; A2 has no database code to prove.
+
+**Not verified here:** this session cannot run the toolchain. The function and its tests are
+unrun until the runs on the pushed commits are read; A2 stays `[ ]` in `docs/NEXT-TASKS.md`.
