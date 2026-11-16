@@ -94,3 +94,43 @@ export function readAttemptCounts(attemptId: string): { readonly enrollmentStatu
 
   return { enrollmentStatus, resultScore: resultScore === '' ? null : resultScore, answers };
 }
+
+
+/** How many attempts one enrollment has, for the spec that presses Start twice. */
+export function readAttemptsForEnrollment(enrollmentId: string): number {
+  const count = querySql(
+    `SELECT count(*)::text FROM attempts WHERE enrollment_id = ${sqlLiteral(enrollmentId)}::uuid`,
+  );
+
+  return Number(count);
+}
+
+/**
+ * Moves an attempt's deadline into the past, in one transaction with the A1 trigger disabled for
+ * that transaction only, so the next request from a page sees an expired attempt. Used by the
+ * spec that holds a submit back until the server's own clock has run out; it runs inside the
+ * route handler that holds that request, so the window in which the worker's sweeper could claim
+ * the attempt first is milliseconds long.
+ */
+export function expireAttempt(attemptId: string): void {
+  runSql(
+    [
+      'BEGIN;',
+      '  SET LOCAL session_replication_role = replica;',
+      `  UPDATE attempts SET started_at = now() - interval '2 minutes', deadline_at = now() - interval '1 minute' WHERE id = ${sqlLiteral(attemptId)}::uuid;`,
+      'COMMIT;',
+    ].join('\n'),
+  );
+}
+
+/** Closes an enrollment that never had an attempt, for the spec that checks the not-available screen. */
+export function closeEnrollment(enrollmentId: string): void {
+  runSql(
+    [
+      'BEGIN;',
+      '  SET LOCAL session_replication_role = replica;',
+      `  UPDATE enrollments SET status = 'COMPLETED', completed_at = now() WHERE id = ${sqlLiteral(enrollmentId)}::uuid;`,
+      'COMMIT;',
+    ].join('\n'),
+  );
+}
