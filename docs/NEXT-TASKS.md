@@ -97,7 +97,7 @@ submit and publish, with the previous list and the status left intact, and a val
 building and publishing), `apps/api/src/questions/single-correct.spec.ts` for the four reasons,
 and one Playwright check that the picker does not offer the fixture's numerical question. — Verified in both nine-job runs of `3fcbe4eb3756b48c197812f10552a7c0e54ebc43`: [run 43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670) and [run 43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751), eighteen green check results. Each `unit` job logs `✓ src/questions/single-correct.spec.ts (7 tests)` inside `Test Files 29 passed (29)` / `Tests 227 passed (227)`. The `database` jobs (2m25s and 1m53s) are green under `set -o pipefail`, which proves the whole `test/` suite, `apps/api/test/tests-builder.test.ts` included, ran and passed; their readable log slices are Postgres output, so the vitest summary is not re-quotable. The `e2e` jobs (4m01s and 4m02s) are green under pipefail, so the new picker check and every existing spec passed; their readable slices are container output, so the Playwright list is not re-quotable.
 
-[ ] A3a Attempt API and lazy expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
+[x] A3a Attempt API and lazy expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
 anywhere, an `OPEN` enrollment required, one start only, the deadline computed on the server,
 questions returned once in the version's order **without** `is_correct`, a numerical answer or an
 explanation); `POST /v1/attempts/:id/submit` (idempotent, the grace window honoured, every answer
@@ -109,7 +109,8 @@ attempt under the attempt row lock, with lock order attempt → enrollment → a
 result. Proof: `apps/api/test/attempts-api.test.ts` — the exact deadline, the paper once, no key
 in any pre-end response, a simultaneous start giving one attempt, one submit and its retry, two
 parallel submits giving one result, the grace window, a late submit discarded, parallel reads
-finalising once, a submit racing a read, and the result refused until the end.
+finalising once, a submit racing a read, and the result refused until the end. — Verified in both
+nine-job runs of `2c543788972b905952e2277cb1ee72f416d9b1b9`: [run 43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061) and [run 43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073), eighteen green check results. Each `unit` job logs `✓ src/attempts/attempts.projection.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside `Test Files 30 passed (30)` / `Tests 231 passed (231)`; `typecheck` is green with the `AttemptState` interface fixed; the `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-api.test.ts` and its fourteen cases ran and passed after the decimal fix (their readable slices are Postgres output, so the vitest summary is not re-quotable); the `e2e` jobs are green, so every existing spec still passed.
 
 [ ] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds that finds
 `IN_PROGRESS` attempts past `deadline_at + attempt_submit_grace_seconds` and calls the API's own

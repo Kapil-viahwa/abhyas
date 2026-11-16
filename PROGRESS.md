@@ -700,7 +700,7 @@ Playwright list is not re-quotable.
 
 
 
-## Phase 7, A3a (pushed, runs queued)
+## Phase 7, A3a (done — both runs of `2c54378` green)
 
 **The attempt API.** Four self-only routes, a shared finalisation and one projection.
 
@@ -738,6 +738,42 @@ and that the review is the only shape with the key).
 on the migration owner connection (superuser in the compose and CI database), restores nothing
 globally; the grace setting is pinned and restored to 5.
 
-**Not verified here:** this session cannot run the toolchain or Docker, so lint, typecheck, the
-unit and database suites are unrun until the runs on the pushed commits are read. A3a stays `[ ]`
-in `docs/NEXT-TASKS.md`; A3b (the worker's sweeper) and A4 are not started.
+**Verified:** both nine-job runs of `2c543788972b905952e2277cb1ee72f416d9b1b9` are green —
+[run 43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061) and [run 43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073) — eighteen green check
+results, gitleaks included (9s and 7s, `no leaks found`). Each `unit` job logs `✓
+src/attempts/attempts.projection.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)`
+inside `Test Files 30 passed (30)` / `Tests 231 passed (231)`. `typecheck` is green with the
+`AttemptState` fix. The `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-api.test.ts`
+and its fourteen cases ran and passed after the decimal fix; their readable slices are Postgres
+output, so the vitest summary is not re-quotable. The `e2e` jobs are green under pipefail, so every
+existing spec still passed.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| Start success shape, and `deadline_at - started_at` exactly the duration | `starts an attempt: the deadline is the database clock plus the duration, and the paper is delivered once` |
+| No answer-key data in the start, state or submit responses | the exact question/option allowlist and the recursive key-name scan in the start test; `reads the state without the paper or any answer data`; `expectNoAnswerKey` on the in-progress result refusal and the invalid-answer refusal |
+| A second start is refused without re-delivering questions or moving the clock | same start test — `attempt_already_started`, no `questions`, `startedAt`/`deadlineAt` unchanged in the row |
+| Two simultaneous starts give one attempt | `lets exactly one of two simultaneous starts create the attempt` |
+| Another student's attempt or enrollment is not found | `refuses a closed enrollment, another student's enrollment, …` and `reads the state …` |
+| No `userId` anywhere | `refuses a userId in a body, a query or the path, and an unknown field` |
+| Submit scores exactly as the scoring function, decimals at 2/2/4 places | `scores one right, one wrong and one unattempted answer exactly …` — `1.50`, `6.00`, `0.5000` |
+| Retry returns the same result and writes nothing | `returns the same result on a retry and writes nothing new` |
+| Parallel double submit gives one result | `gives exactly one result when two submits arrive at once` |
+| Invalid input refused, nothing written | `refuses invalid answers and writes nothing` |
+| Submit inside the grace window accepted | `accepts a submit inside the grace window` |
+| Submit after deadline plus grace refused; attempt `AUTO_SUBMITTED`, empty result, enrollment `EXPIRED`, answers never stored | `refuses a submit past the deadline, ends the attempt with an empty result and discards the answers` |
+| Lazy expiry finalises once under two parallel reads | `finalises an expired attempt exactly once through parallel state reads` |
+| A submit racing a lazy read gives one result | `gives exactly one result when a submit races a lazy read` |
+| Result refused while `IN_PROGRESS`, key only after the end | `refuses the result while the attempt runs, and another student's result is not found` and the review assertions in the scoring case |
+
+### The red round on the way
+
+`23443c6` was red in `typecheck` and `database` in both runs: the test's `AttemptState` interface
+lacked `serverNow` (`Property 'serverNow' does not exist on type 'AttemptState'`), and four
+assertions expected `2.00`/`1.50`/`6.00`/`0.00` where the API returned Prisma's unpadded text
+`2`/`1.5`/`6`/`0`. The test interface was stale and the service was the real fault: a `NUMERIC`
+result read back loses its trailing zeroes. Fixed in `2c54378` with one `formatDecimal` helper in
+the service (two places for `score` and `totalMarks`, four for `accuracy`), no assertion
+weakened; the database job then ran 289 tests with none failing.
