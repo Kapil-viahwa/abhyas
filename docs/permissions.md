@@ -339,3 +339,22 @@ The deadline and the grace window are the server's alone: `attempt_submit_grace_
 5, bounds 0–60) is read inside the submitting transaction, and no route reads a timestamp from the
 client. An attempt past `deadline_at + grace` is finalised — by a submit, by a read, or by A3b's
 sweeper — exactly once, with an empty answer set and an `EXPIRED` enrollment.
+
+
+
+## Phase 7, A3b: the internal expiry route
+
+One route, for the worker and nothing else. It is `@Public()` so no user session reaches it by
+being signed in, and it is guarded by the same `assertInternalRequest` as the bulk-coin drain:
+`INTERNAL_API_SECRET`, the `INTERNAL_ALLOWED_ADDRESSES` allowlist, and a per-address failure
+counter. Every refusal is **404**, so the route does not confirm that it exists. It never appears
+on a student route and is not in the OpenAPI document's student surface.
+
+| Route | What it does | Refusals |
+| --- | --- | --- |
+| `POST /v1/internal/attempts/expire-expired` | claims up to `batchSize` (default and maximum 50) expired attempts with `FOR UPDATE SKIP LOCKED`, finalises each through `finalizeExpiredAttempt(id, 'SWEEPER')` in its own transaction, and answers `{ finalized, skipped, failed }` | **404** for a missing or wrong secret, an address outside the allowlist, or an address over the failure limit; 400 for a malformed body |
+
+The route's own response carries counts only — no attempt id, question, option, answer or
+student. The service's log lines name an attempt id and the counts, never an answer. A student
+session or an anonymous caller without the secret is refused with the same 404 as any other
+wrong caller.

@@ -777,3 +777,42 @@ assertions expected `2.00`/`1.50`/`6.00`/`0.00` where the API returned Prisma's 
 result read back loses its trailing zeroes. Fixed in `2c54378` with one `formatDecimal` helper in
 the service (two places for `score` and `totalMarks`, four for `accuracy`), no assertion
 weakened; the database job then ran 289 tests with none failing.
+
+
+
+## Phase 7, A3b (pushed, runs queued)
+
+**The deadline sweeper.** The worker no longer leaves an abandoned attempt for the next reader:
+a repeatable job ends it, through the API's own finalisation.
+
+- `apps/api/src/attempts/attempts-internal.controller.ts` — `POST /v1/internal/attempts/expire-expired`,
+  guarded by the same `assertInternalRequest` as the bulk-coin drain (secret, address allowlist,
+  failure counter, 404 on any refusal), answering counts only.
+- `AttemptsService.expireExpiredAttempts(batchSize)` — one short transaction reads the grace and
+  claims up to 50 expired ids with `FOR UPDATE SKIP LOCKED`, then each attempt is finalised in its
+  own transaction through the existing `finalizeExpiredAttempt(id, 'SWEEPER')`. No second
+  finalisation path, no setting added, no model change.
+- `apps/worker/src/jobs/attempt-sweeper.ts` — calls the route with the secret and a 15 s timeout,
+  treats an error or a timeout as a failed tick (logged, retried next tick), and runs up to five
+  immediate rounds while a full batch comes back.
+- `apps/worker/src/queues/schedule.ts` — `attempt-expiry-sweep` every 30 seconds
+  (`ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS`), registered as a BullMQ repeatable declaration beside the
+  coin drain, so a restart does not double it.
+
+Proof: `apps/api/test/attempts-sweeper.test.ts` (finalise once with source `SWEEPER`, an empty
+result, score 0, every question unattempted and an `EXPIRED` enrollment, no answers; an attempt
+not due, one inside the grace window and one already submitted untouched; two simultaneous sweeps
+finalising once between them; a sweep racing a submit giving one result; capped batches; an
+injected failure not stopping the others; anonymous, student-session, wrong-secret and
+non-allowlisted callers all 404 with nothing changed), `apps/worker/src/jobs/attempt-sweeper.spec.ts`
+and the schedule spec (the loop, the cap, an unreachable API not throwing, the 30-second
+registration), and `e2e/attempt-sweeper.spec.ts` with `e2e/attempts-fixture.ts`, which pins the
+grace to 0, seeds an expired attempt in SQL, and polls the database — never a student route — for
+`AUTO_SUBMITTED|SWEEPER`, then checks `EXPIRED`, score 0 and no answers.
+
+**Deploy note:** `INTERNAL_ALLOWED_ADDRESSES` must include the worker's address in production, or
+every sweep answers 404 and only lazy reads end an expired attempt.
+
+**Not verified here:** this session cannot run the toolchain or Docker, so lint, typecheck, the
+unit, database and e2e suites are unrun until the runs on the pushed commits are read. A3b stays
+`[ ]` in `docs/NEXT-TASKS.md`; A4 is not started.

@@ -2305,3 +2305,61 @@ assumptions and this unit implements them as decided: the 5-second grace window 
 expiry on any read or submit, one attempt per enrollment and one result per attempt. They stay
 marked owner-to-confirm: if the owner wants a different grace, a no-grace rule, or a different
 late-submit message, the setting and one message change and no data changes.
+
+
+
+## 0079 — Phase 7, A3b: the sweeper is a poller on the API's own finalisation
+
+**Decided while adding the deadline sweeper.** The worker does not finalise attempts itself: it
+calls the API's internal route, which runs the same `finalizeExpiredAttempt` the lazy reads use.
+The attempt engine keeps one writer and one finalisation path (A3a's decision 0078), and the
+worker stays a poller over database state exactly like the bulk-coin drain.
+
+**Batch size 50, claimed with `FOR UPDATE SKIP LOCKED`, finalised per attempt.** One short
+transaction reads the grace setting and selects up to the batch (default and hard maximum **50**)
+of `IN_PROGRESS` attempts whose `deadline_at + grace < now()`, ordered by `deadline_at`, with
+`FOR UPDATE SKIP LOCKED`; it commits and releases the locks before any finalisation. Each id is
+then finalised in its **own** transaction, so one failing attempt cannot roll back or block the
+others and a slow finalisation does not hold the whole batch. A sweeper call never selects
+thousands of rows into memory at once, and a backlog drains in capped rounds.
+
+**It uses the database clock only.** The expiry predicate and the grace arithmetic run in SQL
+(`deadline_at + (grace::int * interval '1 second') < now()`), and the per-attempt finalisation
+re-reads the clock under its row lock. No timestamp is accepted from the caller, and a batch size
+is the only input.
+
+**The response and the log are counts and ids only.** The route answers
+`{ finalized, skipped, failed }` — no attempt id, question, option, chosen answer, email or name.
+The service logs `attempt <id> auto-submitted by the sweeper`, a warning naming an attempt id and
+the error's *name* on a failure, and one summary line with the counts. Nothing in the sweeper can
+print an answer or a key.
+
+**Any caller finalises, and the status guard decides.** A submit, a lazy read, the result read and
+the sweeper all go through `finalizeLocked`; the row lock plus "only an `IN_PROGRESS` attempt is
+ended" means the second caller finalises nothing (`skipped`), and two results are impossible
+because `results_attempt_key` is unique. A submit racing the sweeper gives either the student's
+`SUBMITTED` result or the empty `AUTO_SUBMITTED` one, never both.
+
+**Every 30 seconds, as one constant.** `ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS` lives beside the other
+intervals in `queues/schedule.ts`; no setting was added for it. It is a BullMQ repeatable
+declaration kept in Redis, so a restarted or duplicated worker does not create a second schedule.
+The worker's loop makes at most **5** immediate rounds of 50 while a full batch keeps coming back,
+so a backlog drains quickly without one tick holding the queue forever.
+
+**An unreachable API is a failed tick, not a crash.** A network error, a timeout (15 s per call),
+a non-200 answer or a body that is not JSON is logged and returns; the next tick is the retry.
+There is no tight retry loop, and the worker never starts before the API is reachable — the job
+only calls it, so the first tick after a restart simply fails and the next one succeeds, the same
+way the coin drain behaves.
+
+**Deploy note.** Production must list the worker's address (or its /24) in
+`INTERNAL_ALLOWED_ADDRESSES`, or every sweep answers 404 and expired attempts are only finalised
+when a student next reads or submits one. The development and CI compose network is pinned to
+`10.213.0.0/24` for exactly this reason (decision 0066).
+
+**Tests move time; production does not gain a clock override.** The database test backdates
+`started_at`/`deadline_at` in one transaction with `session_replication_role = replica` on the
+owner connection (superuser), pins the grace setting and restores it. The e2e spec pins the grace
+to 0, seeds an already-expired attempt in SQL, and waits for the real worker by polling the
+database — never a student-facing read, which would finalise it lazily and make the test pass for
+the wrong reason.

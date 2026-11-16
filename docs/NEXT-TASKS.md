@@ -112,13 +112,21 @@ parallel submits giving one result, the grace window, a late submit discarded, p
 finalising once, a submit racing a read, and the result refused until the end. — Verified in both
 nine-job runs of `2c543788972b905952e2277cb1ee72f416d9b1b9`: [run 43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061) and [run 43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073), eighteen green check results. Each `unit` job logs `✓ src/attempts/attempts.projection.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside `Test Files 30 passed (30)` / `Tests 231 passed (231)`; `typecheck` is green with the `AttemptState` interface fixed; the `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-api.test.ts` and its fourteen cases ran and passed after the decimal fix (their readable slices are Postgres output, so the vitest summary is not re-quotable); the `e2e` jobs are green, so every existing spec still passed.
 
-[ ] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds that finds
-`IN_PROGRESS` attempts past `deadline_at + attempt_submit_grace_seconds` and calls the API's own
-`finalizeExpiredAttempt(id, 'SWEEPER')` — the same function A3a's lazy paths use, with
-`FOR UPDATE SKIP LOCKED` — so a submit racing the sweeper still produces exactly one result.
-Proof: a worker/database test that the sweeper ends an expired attempt by itself, that two
-sweepers racing give one result and one `AUTO_SUBMITTED` attempt, and that the worker's repeatable
-registration is declared like the existing jobs.
+[ ] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds (one constant)
+that calls the API's internal `POST /v1/internal/attempts/expire-expired` — guarded by
+`INTERNAL_API_SECRET` and `INTERNAL_ALLOWED_ADDRESSES` through the same `assertInternalRequest`
+as the coin drain, and answering 404 to every wrong caller. The route claims up to 50 expired
+attempts with `FOR UPDATE SKIP LOCKED` in a short transaction, then finalises each in its own
+transaction through the same `finalizeExpiredAttempt(id, 'SWEEPER')` the lazy reads use, and
+returns counts only. The worker treats an HTTP error or a timeout as a failed tick that is logged
+and retried on the next one, and runs again immediately (bounded) while a full batch comes back.
+Proof: `apps/api/test/attempts-sweeper.test.ts` (finalise once with `SWEEPER`, an empty result
+and an `EXPIRED` enrollment; not-due, inside-grace and already-submitted attempts untouched; two
+simultaneous sweeps finalising once between them; a sweep racing a submit giving one result;
+capped batches; one injected failure not stopping the others; every refusal 404 with nothing
+changed), `apps/worker/src/jobs/attempt-sweeper.spec.ts` (the loop, the cap, and an unreachable
+API not throwing), and `e2e/attempt-sweeper.spec.ts` proving the REAL worker sweeps a seeded
+expired attempt with source `SWEEPER`.
 
 [ ] A4 The taking page. `/attempts/<id>`: the paper in the version's order, a countdown from the
 server's remaining seconds that re-syncs on every read and never decides expiry, answer selection
