@@ -112,7 +112,7 @@ parallel submits giving one result, the grace window, a late submit discarded, p
 finalising once, a submit racing a read, and the result refused until the end. — Verified in both
 nine-job runs of `2c543788972b905952e2277cb1ee72f416d9b1b9`: [run 43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061) and [run 43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073), eighteen green check results. Each `unit` job logs `✓ src/attempts/attempts.projection.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside `Test Files 30 passed (30)` / `Tests 231 passed (231)`; `typecheck` is green with the `AttemptState` interface fixed; the `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-api.test.ts` and its fourteen cases ran and passed after the decimal fix (their readable slices are Postgres output, so the vitest summary is not re-quotable); the `e2e` jobs are green, so every existing spec still passed.
 
-[ ] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds (one constant)
+[x] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds (one constant)
 that calls the API's internal `POST /v1/internal/attempts/expire-expired` — guarded by
 `INTERNAL_API_SECRET` and `INTERNAL_ALLOWED_ADDRESSES` through the same `assertInternalRequest`
 as the coin drain, and answering 404 to every wrong caller. The route claims up to 50 expired
@@ -126,7 +126,8 @@ simultaneous sweeps finalising once between them; a sweep racing a submit giving
 capped batches; one injected failure not stopping the others; every refusal 404 with nothing
 changed), `apps/worker/src/jobs/attempt-sweeper.spec.ts` (the loop, the cap, and an unreachable
 API not throwing), and `e2e/attempt-sweeper.spec.ts` proving the REAL worker sweeps a seeded
-expired attempt with source `SWEEPER`.
+expired attempt with source `SWEEPER`. — Verified in both nine-job runs of
+`6f5579a96179378d4ffb58b0ff3475533b103227`: [run 43814445045](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814445045) and [run 43814450079](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814450079), eighteen green check results, gitleaks 8s and 15s. Each `unit` job logs `✓ src/jobs/attempt-sweeper.spec.ts (7 tests)`, `✓ src/queues/schedule.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside `Test Files 6 passed (6)` / `Tests 25 passed (25)` for the worker and `Tests 231 passed (231)` for the API. The `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-sweeper.test.ts` and the existing coin and bulk tests ran and passed; their readable slices are Postgres output, so the vitest summary is not re-quotable. The `e2e` jobs are green, so `e2e/attempt-sweeper.spec.ts` ran and passed (the run before, `1f07d3d`, reports `43 passed` with this spec the only failure); their readable slices show the worker's `repeatable jobs registered: …, attempt-expiry-sweep` line and only its early `0 expired swept` ticks — the later `1 expired swept` line is in the elided portion, so the spec's `AUTO_SUBMITTED|SWEEPER` assertion, not a quoted log line, is the proof. The red round on the way: `1f07d3d` was red in `e2e` in both runs with `Expected: "0" / Received: "0.00"` at `e2e/attempt-sweeper.spec.ts:60` — the spec compared `NUMERIC(8,2)` text, the test was wrong, and it was fixed in `6f5579a` without touching product code.
 
 [ ] A4 The taking page. `/attempts/<id>`: the paper in the version's order, a countdown from the
 server's remaining seconds that re-syncs on every read and never decides expiry, answer selection

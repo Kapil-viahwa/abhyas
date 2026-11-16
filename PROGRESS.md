@@ -780,7 +780,7 @@ weakened; the database job then ran 289 tests with none failing.
 
 
 
-## Phase 7, A3b (pushed, runs queued)
+## Phase 7, A3b (done — both runs of `6f5579a` green)
 
 **The deadline sweeper.** The worker no longer leaves an abandoned attempt for the next reader:
 a repeatable job ends it, through the API's own finalisation.
@@ -813,6 +813,39 @@ grace to 0, seeds an expired attempt in SQL, and polls the database — never a 
 **Deploy note:** `INTERNAL_ALLOWED_ADDRESSES` must include the worker's address in production, or
 every sweep answers 404 and only lazy reads end an expired attempt.
 
-**Not verified here:** this session cannot run the toolchain or Docker, so lint, typecheck, the
-unit, database and e2e suites are unrun until the runs on the pushed commits are read. A3b stays
-`[ ]` in `docs/NEXT-TASKS.md`; A4 is not started.
+**Verified:** both nine-job runs of `6f5579a96179378d4ffb58b0ff3475533b103227` are green —
+[run 43814445045](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814445045) and [run 43814450079](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814450079) — eighteen green check
+results, gitleaks 8s and 15s. Each `unit` job logs `✓ src/jobs/attempt-sweeper.spec.ts (7 tests)`,
+`✓ src/queues/schedule.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside
+`Test Files 6 passed (6)` / `Tests 25 passed (25)` for the worker and `Tests 231 passed (231)` for
+the API. The `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-sweeper.test.ts`
+and the existing coin and bulk tests ran and passed; their readable slices are Postgres output,
+so the vitest summary is not re-quotable. The `e2e` jobs are green, so `e2e/attempt-sweeper.spec.ts`
+ran and passed; their readable slices show the worker's `repeatable jobs registered: …, attempt-expiry-sweep`
+line and only its early `0 expired swept` ticks — the later `1 expired swept` line is in the
+elided portion, so the spec's own `AUTO_SUBMITTED|SWEEPER` assertion is the proof, not a quoted
+log line.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| An expired attempt is finalised once as `AUTO_SUBMITTED` by `SWEEPER`, with an empty result and the enrollment `EXPIRED` | `finalises an expired attempt once: SWEEPER, an empty result, an EXPIRED enrollment, no answers` also `finalises an expired attempt with source SWEEPER, not LAZY` (e2e) |
+| An attempt inside the grace window or before its deadline is not touched | `leaves an attempt that is not due, one inside the grace window and one already submitted alone` |
+| An already ended attempt is not touched | same test — the `SUBMITTED` attempt keeps its one result |
+| Two simultaneous sweeper calls finalise each attempt exactly once in total | `finalises each attempt exactly once when two sweeps run at the same time` |
+| A sweeper racing a student's submit gives one result | `gives one result when the sweeper races a student’s submit` |
+| Capped batches | `works a batch larger than the cap in capped batches`, and the worker spec’s full-batch rounds |
+| One failing attempt does not stop the others | `does not let one failing attempt stop the others` (injected failure, retried by the next sweep) |
+| Counts-only response and logs | `Object.keys(body).sort()` equals `failed, finalized, skipped`; the service logs ids and counts only |
+| The route refuses anonymous, student, editor, wrong secret and non-allowlisted address | `refuses an anonymous caller, a student session, a wrong secret and a non-allowlisted address` |
+| The real worker finalises an expired attempt with no student-facing read, source `SWEEPER` | `e2e/attempt-sweeper.spec.ts` — polls the database only, pins the grace to 0, restores it |
+| The coin drain behaves unchanged after the shared guard | the unchanged `coins-admin.test.ts` and `coin-reconciliation.test.ts`, green in the same `database` jobs |
+
+### The red round on the way
+
+`1f07d3d` was red in `e2e` in both runs: `Expected: "0" / Received: "0.00"` at
+`e2e/attempt-sweeper.spec.ts:60`. The worker had done its job — its log read `attempts: 1 expired
+swept` and Playwright reported `43 passed` with this spec the only failure — but the spec compared
+the `NUMERIC(8,2)` `score` as text, and Postgres renders that as `0.00`. The test was wrong; it was
+fixed in `6f5579a` to assert the value as a number, with no product code touched.
