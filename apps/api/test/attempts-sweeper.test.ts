@@ -478,7 +478,7 @@ describe('the attempt expiry sweeper', () => {
   });
 
   it('gives one result when the sweeper races a student’s submit', async () => {
-    const { attemptId } = await newStartedAttempt();
+    const { attemptId, enrollmentId } = await newStartedAttempt();
     await backdate(attemptId, 10);
 
     const [swept, submitted] = await Promise.all([
@@ -492,13 +492,31 @@ describe('the attempt expiry sweeper', () => {
     ]);
 
     expect(swept.statusCode, swept.body).toBe(200);
-    // The submit either arrived before the sweep — and is the one result — or after it ended.
+    // The submit either reached the attempt first — and ended it through the same finalisation,
+    // with source LAZY — or arrived after the sweep had ended it, and is answered from the result.
     expect([200, 409]).toContain(submitted.statusCode);
 
     const attempt = await attemptRow(attemptId);
-    expect(['SUBMITTED', 'AUTO_SUBMITTED']).toContain(attempt.status);
-    expect(attempt.submitSource).toBe(attempt.status === 'SUBMITTED' ? 'STUDENT' : 'SWEEPER');
+    // Both orders end an expired attempt with an empty auto-submission. Only the source differs,
+    // and both are the documented ones: any caller may finalise (decision 0078), so the submit's
+    // own expiry path writes LAZY and the sweeper writes SWEEPER. The late answers are scored in
+    // neither case, which is what this test is about.
+    expect(attempt.status).toBe('AUTO_SUBMITTED');
+    expect(['SWEEPER', 'LAZY']).toContain(attempt.submitSource);
+
+    // Whatever the order, exactly one result exists, it is the empty one, and the enrollment ended.
     expect(await db.client.result.count({ where: { attemptId } })).toBe(1);
+    const result = await db.client.result.findUniqueOrThrow({ where: { attemptId } });
+    expect(result.score.toString()).toBe('0');
+    expect(result.attemptedCount).toBe(0);
+    expect(result.unattemptedCount).toBe(3);
+    expect(await db.client.attemptAnswer.count({ where: { attemptId } })).toBe(0);
+
+    const enrollment = await db.client.enrollment.findUniqueOrThrow({
+      where: { id: enrollmentId },
+      select: { status: true },
+    });
+    expect(enrollment.status).toBe('EXPIRED');
   });
 
   it('works a batch larger than the cap in capped batches', async () => {
