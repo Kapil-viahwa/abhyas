@@ -13,7 +13,8 @@ export type CoinSetting =
   | 'daily_reward_coins'
   | 'coin_max_bulk_users'
   | 'coin_max_bulk_coins'
-  | 'default_enrollment_cost';
+  | 'default_enrollment_cost'
+  | 'attempt_submit_grace_seconds';
 
 export function setCoinSetting(key: CoinSetting, value: number): void {
   const sql = [
