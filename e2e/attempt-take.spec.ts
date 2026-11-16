@@ -13,9 +13,12 @@ import { publishSeededPaper, seedAuthor, seedBuilderFixture } from './tests-fixt
  * The paper is seeded in SQL beside its bank (`./tests-fixture`) and the students are registered
  * through the real form, so the coin grant, the enrollment and the attempt are the stack's own.
  * The e2e run is one worker on one shared database: every setting this file reads is pinned with
- * the upsert-and-verify fixture and restored afterwards, every email and title carries a marker
- * unique to the run, and no test leaves an expired `IN_PROGRESS` attempt behind — the worker's
- * sweeper finalises any it finds.
+ * the upsert-and-verify fixture and restored in `afterAll`, which runs even when a test fails;
+ * every email and title carries a marker unique to the run, and no test leaves an expired
+ * `IN_PROGRESS` attempt behind — the worker's sweeper finalises any it finds.
+ *
+ * Every locator action is bounded by `actionTimeout`, so an element that never appears is a
+ * fifteen-second failure that names it, rather than a step that quietly eats the test's budget.
  *
  * The paper has two questions, so every expected number below is arithmetic anyone can check:
  * each question is worth 2.00 and a wrong answer costs 0.50.
@@ -24,7 +27,11 @@ import { publishSeededPaper, seedAuthor, seedBuilderFixture } from './tests-fixt
 const PASSWORD = 'correct-horse-9battery';
 const CLIENT_IP = '198.18.0.51';
 
-test.use({ extraHTTPHeaders: { 'x-forwarded-for': CLIENT_IP } });
+test.use({
+  extraHTTPHeaders: { 'x-forwarded-for': CLIENT_IP },
+  // A locator action that never finds its element fails with its name, not with the test timeout.
+  actionTimeout: 15_000,
+});
 
 const marker = randomUUID().slice(0, 8);
 
@@ -85,7 +92,7 @@ async function signIn(page: Page, email: string): Promise<void> {
   await page.fill('input[name="email"]', email);
   await page.fill('input[name="password"]', PASSWORD);
   await page.click('button[type="submit"]');
-  await page.waitForURL(/\/account/);
+  await expect(page).toHaveURL(/\/account/);
 }
 
 /**
@@ -98,21 +105,28 @@ async function enrollAndOpen(
   fullName: string,
   paper: { readonly testId: string; readonly title: string },
 ): Promise<string> {
-  await registerStudent(page, email, fullName);
-  await signIn(page, email);
+  await test.step('register and verify', async () => {
+    await registerStudent(page, email, fullName);
+  });
+  await test.step('sign in', async () => {
+    await signIn(page, email);
+  });
+  await test.step('enroll', async () => {
+    await page.goto(`/tests/${paper.testId}`);
+    await expect(page.getByTestId('enroll-button'), 'the enroll form for a fresh student').toBeVisible();
+    await page.getByTestId('enroll-button').click();
+    await expect(page).toHaveURL(new RegExp(`/tests/${paper.testId}\\?enrolled=1`));
+  });
+  await test.step('open the attempt from the enrollment list', async () => {
+    await page.goto('/tests');
+    const row = page.getByTestId('enrollment-row').filter({ hasText: paper.title });
+    await expect(row).toBeVisible();
 
-  await page.goto(`/tests/${paper.testId}`);
-  await page.getByTestId('enroll-button').click();
-  await expect(page).toHaveURL(new RegExp(`/tests/${paper.testId}\\?enrolled=1`));
-
-  await page.goto('/tests');
-  const row = page.getByTestId('enrollment-row').filter({ hasText: paper.title });
-  await expect(row).toBeVisible();
-
-  const link = row.getByTestId('enrollment-open-attempt');
-  await expect(link).toBeVisible();
-  await link.click();
-  await expect(page).toHaveURL(/\/attempt\/[0-9a-f-]{36}$/);
+    const link = row.getByTestId('enrollment-open-attempt');
+    await expect(link).toBeVisible();
+    await link.click();
+    await expect(page).toHaveURL(/\/attempt\/[0-9a-f-]{36}$/);
+  });
 
   return new URL(page.url()).pathname.split('/').at(-1) ?? '';
 }
@@ -159,6 +173,8 @@ test.describe.serial('taking an attempt', () => {
   });
 
   test('a student starts once, answers and submits, and the result is exact', async ({ page }) => {
+    test.setTimeout(120_000);
+
     const email = `e2e-attempt-take-${marker}@example.com`;
     enrollmentA = await enrollAndOpen(page, email, 'Attempt E2E Student', {
       testId: longTest,
@@ -170,22 +186,27 @@ test.describe.serial('taking an attempt', () => {
     await expect(page.getByTestId('attempt-instructions')).toContainText('45 minutes');
     await expect(page.getByTestId('attempt-instructions')).toContainText('4.00 in total');
 
-    // Every call this screen makes is kept, so its body can be checked for an answer key.
+    // Every call this screen makes is kept — registered before the click that makes them — so
+    // the bodies can be checked for an answer key and the calls proved to have happened.
+    const seen: string[] = [];
     const bodies: Array<Promise<string>> = [];
     page.on('response', (response) => {
       const path = new URL(response.url()).pathname;
       if (path.startsWith('/api/attempts/') || path.startsWith('/api/enrollments/')) {
+        seen.push(`${path} ${String(response.status())}`);
         bodies.push(response.text().catch(() => ''));
       }
     });
 
     // Two clicks in the same task: the first sets the ref guard, the second must do nothing.
+    await expect(page.getByTestId('start-attempt')).toBeVisible();
     await page.getByTestId('start-attempt').evaluate((button: HTMLElement) => {
       button.click();
       button.click();
     });
 
     await expect(page.getByTestId('attempt-question')).toBeVisible();
+    await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
     expect(readAttemptsForEnrollment(enrollmentA)).toBe(1);
 
     // The paper is on screen and no answer key or explanation came with it.
@@ -193,14 +214,18 @@ test.describe.serial('taking an attempt', () => {
     expect(await page.content()).not.toContain('Alpha has no divisors');
 
     // Question 1: the second option is the right one ("7"). Question 2 stays unanswered.
+    await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
     await page.getByTestId('attempt-option').nth(1).click();
     await expect(page.getByTestId('answered-count')).toContainText('1 answered');
 
+    await expect(page.getByTestId('next-question')).toBeEnabled();
     await page.getByTestId('next-question').click();
     await expect(page.getByTestId('attempt-question')).toHaveText('Question 2');
+    await expect(page.getByTestId('previous-question')).toBeEnabled();
     await page.getByTestId('previous-question').click();
     await expect(page.getByTestId('attempt-question')).toHaveText('Question 1');
 
+    await expect(page.getByTestId('submit-attempt')).toBeVisible();
     await page.getByTestId('submit-attempt').click();
     await expect(page.getByTestId('submit-confirm')).toContainText('left 1 question unanswered');
     await page.getByTestId('confirm-submit').click();
@@ -224,6 +249,12 @@ test.describe.serial('taking an attempt', () => {
     attemptA = new URL(page.url()).pathname.split('/').at(-1) ?? '';
     expect(attemptA).not.toBe('');
 
+    // The capture is real: the start, the state re-sync and the submit were all seen.
+    expect(seen.some((entry) => entry.startsWith('/api/attempts/start 201'))).toBe(true);
+    expect(seen.some((entry) => entry.endsWith('/state 200'))).toBe(true);
+    expect(seen.some((entry) => entry.includes('/submit 200'))).toBe(true);
+    expect(bodies.length).toBeGreaterThanOrEqual(3);
+
     for (const body of bodies) {
       const text = await body;
       expect(text).not.toMatch(/isCorrect|is_correct|correctOptionId|explanation|solution/i);
@@ -232,6 +263,8 @@ test.describe.serial('taking an attempt', () => {
   });
 
   test('a reload cannot show the paper again and says so, with a countdown', async ({ page }) => {
+    test.setTimeout(120_000);
+
     const email = `e2e-attempt-resume-${marker}@example.com`;
     const enrollmentId = await enrollAndOpen(page, email, 'Attempt Resume Student', {
       testId: longTest,
@@ -239,13 +272,17 @@ test.describe.serial('taking an attempt', () => {
     });
     expect(enrollmentId).not.toBe('');
 
+    await expect(page.getByTestId('start-attempt')).toBeVisible();
     await page.getByTestId('start-attempt').click();
     await expect(page.getByTestId('attempt-question')).toBeVisible();
     await expect(page.locator('body')).toContainText(alphaText);
 
     await page.reload();
 
+    // The cannot-resume screen is present — so this is not an empty or error page — and it
+    // carries none of the paper.
     await expect(page.getByTestId('attempt-cannot-resume')).toBeVisible();
+    await expect(page.getByTestId('attempt-cannot-resume')).toContainText('cannot be resumed');
     await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
     await expect(page.getByTestId('start-attempt')).toHaveCount(0);
     await expect(page.getByTestId('attempt-question')).toHaveCount(0);
@@ -266,13 +303,17 @@ test.describe.serial('taking an attempt', () => {
     const email = `e2e-attempt-deadline-${marker}@example.com`;
     await enrollAndOpen(page, email, 'Attempt Deadline Student', { testId: shortTest, title: shortTitle });
 
+    await expect(page.getByTestId('start-attempt')).toBeVisible();
     await page.getByTestId('start-attempt').click();
     await expect(page.getByTestId('attempt-question')).toBeVisible();
-    await expect(page.getByTestId('attempt-countdown')).toBeVisible();
+    await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
 
     // Question 1: the first option is wrong ("4"). Question 2: the second option is right ("6").
+    await expect(page.getByTestId('attempt-option').nth(0)).toBeVisible();
     await page.getByTestId('attempt-option').nth(0).click();
+    await expect(page.getByTestId('next-question')).toBeEnabled();
     await page.getByTestId('next-question').click();
+    await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
     await page.getByTestId('attempt-option').nth(1).click();
     await expect(page.getByTestId('answered-count')).toContainText('2 answered');
 
@@ -288,16 +329,22 @@ test.describe.serial('taking an attempt', () => {
   });
 
   test('a submit that arrives after the deadline is refused and the result says so', async ({ page }) => {
+    test.setTimeout(120_000);
+
     const email = `e2e-attempt-late-${marker}@example.com`;
     await enrollAndOpen(page, email, 'Attempt Late Student', { testId: longTest, title: longTitle });
 
+    await expect(page.getByTestId('start-attempt')).toBeVisible();
     await page.getByTestId('start-attempt').click();
     await expect(page.getByTestId('attempt-question')).toBeVisible();
+    await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
     await page.getByTestId('attempt-option').nth(1).click();
 
     // The request is held until the server's own clock has passed the deadline, then released.
     // The window in which the worker's sweeper could finalise the attempt first is the gap
-    // between the commit below and the request reaching the API: a few milliseconds.
+    // between the commit below and the request reaching the API: a few milliseconds. If the
+    // sweeper did win, the student's late answers are still never scored — but the page would
+    // then land on the plain result, so the spec asserts the message it must show.
     await page.route('**/api/attempts/*/submit', async (route) => {
       const match = /\/api\/attempts\/([0-9a-f-]{36})\/submit$/.exec(new URL(route.request().url()).pathname);
       const id = match?.[1] ?? '';
@@ -307,7 +354,9 @@ test.describe.serial('taking an attempt', () => {
       await route.continue();
     });
 
+    await expect(page.getByTestId('submit-attempt')).toBeVisible();
     await page.getByTestId('submit-attempt').click();
+    await expect(page.getByTestId('confirm-submit')).toBeVisible();
     await page.getByTestId('confirm-submit').click();
 
     await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 30_000 });
@@ -318,6 +367,8 @@ test.describe.serial('taking an attempt', () => {
   });
 
   test('another student’s attempt, an unknown one and a closed one are all not available', async ({ page, browser }) => {
+    test.setTimeout(90_000);
+
     // A second student, so the ids below are somebody else's and must answer like unknown ones.
     const email = `e2e-attempt-access-${marker}@example.com`;
     await registerStudent(page, email, 'Attempt Access Student');
@@ -337,6 +388,7 @@ test.describe.serial('taking an attempt', () => {
 
     // The same student enrolls, and the enrollment is closed before it is ever started.
     await page.goto(`/tests/${longTest}`);
+    await expect(page.getByTestId('enroll-button'), 'the enroll form for a fresh student').toBeVisible();
     await page.getByTestId('enroll-button').click();
     await expect(page).toHaveURL(new RegExp(`/tests/${longTest}\\?enrolled=1`));
 
