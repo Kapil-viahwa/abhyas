@@ -87,7 +87,7 @@ nine-job runs of `04f7fabd4cd7d64fde45c65295f8e9e00d9e33c7`: [run 42440488533](h
 `✓ src/attempts/scoring.spec.ts (23 tests)` and `Tests 220 passed (220)`, so all 23 scoring cases,
 the property test included, passed; `lint` and `typecheck` were green in both runs too.
 
-[ ] A2b The builder refuses numerical questions (owner's decision, 0077). `apps/api/src/questions/single-correct.ts`
+[x] A2b The builder refuses numerical questions (owner's decision, 0077). `apps/api/src/questions/single-correct.ts`
 is the one definition of "single-correct" — the option-based single-answer type, at least two
 options, exactly one marked correct — used when a paper's question list is set, on submit and
 inside the publish transaction; a refusal carries `question_not_single_correct`, the question id
@@ -95,7 +95,7 @@ and a sentence that never names the key. The builder's picker offers only such q
 says so. Proof: `apps/api/test/tests-builder.test.ts` (a numerical question refused on set,
 submit and publish, with the previous list and the status left intact, and a valid paper still
 building and publishing), `apps/api/src/questions/single-correct.spec.ts` for the four reasons,
-and one Playwright check that the picker does not offer the fixture's numerical question.
+and one Playwright check that the picker does not offer the fixture's numerical question. — Verified in both nine-job runs of `3fcbe4eb3756b48c197812f10552a7c0e54ebc43`: [run 43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670) and [run 43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751), eighteen green check results. Each `unit` job logs `✓ src/questions/single-correct.spec.ts (7 tests)` inside `Test Files 29 passed (29)` / `Tests 227 passed (227)`. The `database` jobs (2m25s and 1m53s) are green under `set -o pipefail`, which proves the whole `test/` suite, `apps/api/test/tests-builder.test.ts` included, ran and passed; their readable log slices are Postgres output, so the vitest summary is not re-quotable. The `e2e` jobs (4m01s and 4m02s) are green under pipefail, so the new picker check and every existing spec passed; their readable slices are container output, so the Playwright list is not re-quotable.
 
 [ ] A3 Attempt API and expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
 anywhere, an `OPEN` enrollment required, one start only, the deadline computed on the server,

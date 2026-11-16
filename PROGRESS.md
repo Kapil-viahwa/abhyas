@@ -643,7 +643,7 @@ tests will prove the output against the `results` table; A2 has no database code
 
 
 
-## Phase 7, A2b (pushed, runs queued)
+## Phase 7, A2b (done — both runs of `3fcbe4e` green)
 
 **The builder refuses what a paper cannot score.** The owner's decision (0077): a test holds
 single-correct option questions only; the bank keeps its numerical questions for practice.
@@ -675,6 +675,25 @@ building, submitting and publishing), and one Playwright check in `e2e/test-buil
 the picker does not offer the fixture's numerical question while it does offer a single-correct
 one.
 
-**Not verified here:** this session cannot run the toolchain or Docker, so lint, typecheck, the
-unit and database suites and the e2e spec are unrun until the runs on the pushed commits are read;
-A2b stays `[ ]` in `docs/NEXT-TASKS.md`.
+**Verified:** both nine-job runs of `3fcbe4eb3756b48c197812f10552a7c0e54ebc43` are green —
+[run 43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670) and [run 43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751) — eighteen green check
+results. Each `unit` job logs `✓ src/questions/single-correct.spec.ts (7 tests)` within `Test
+Files 29 passed (29)` / `Tests 227 passed (227)`. The `database` jobs (2m25s, 1m53s) are green
+under `set -o pipefail`, so the whole `test/` suite, `apps/api/test/tests-builder.test.ts`
+included, ran and passed; their readable slices are Postgres output, so the vitest summary is
+not re-quotable. The `e2e` jobs (4m01s, 4m02s) are green under pipefail, so the new picker
+check and every existing spec passed; their readable slices are container output, so the
+Playwright list is not re-quotable.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| A numerical question is refused when the list is set, and the previous list stays intact | `refuses a numerical question when the list is set, and writes nothing` |
+| An MCQ with no correct option, several correct options or fewer than two options is refused | `refuses an option-based question with no correct option`, `… with several correct options`, `… with fewer than two options` (the helper's unit spec; these states cannot be published past the database's deferred trigger) |
+| Replacing the list with one bad question refuses the whole replacement | `refuses a numerical question when the list is set, and writes nothing` |
+| Submit refuses after a placed question is edited into a bad state | `refuses to submit a paper whose placed question was edited into a numerical one` |
+| Publish re-validates and leaves status and versions untouched | `refuses to publish and leaves the status and the version alone` |
+| A valid single-correct paper still builds, submits and publishes | `still builds, submits and publishes a paper of single-correct questions` |
+| The refusal never contains the correct option | asserted in both refusal cases with `expect(refused.body).not.toContain('isCorrect')` |
+| The picker does not offer the numerical fixture question | `the test builder` — the picker note is visible, the numerical text is not offered, and a single-correct one is |
