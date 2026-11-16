@@ -41,7 +41,8 @@ export function seedBuilderFixture(input: {
   readonly marker: string;
   readonly alphaText: string;
   readonly betaText: string;
-  readonly numericalText: string;
+  /** Optional: the bank's numerical question, unique per run by its default. */
+  readonly numericalText?: string;
 }): BuilderFixture {
   const category = randomUUID();
   const exam = randomUUID();
@@ -49,6 +50,7 @@ export function seedBuilderFixture(input: {
   const alpha = randomUUID();
   const beta = randomUUID();
   const numerical = randomUUID();
+  const numericalText = input.numericalText ?? `Numerical bank question ${input.marker}`;
 
   const sql = [
     'DO $$',
@@ -61,7 +63,7 @@ export function seedBuilderFixture(input: {
     `  INSERT INTO questions (id, exam_id, subject_id, created_by, status, current_version) VALUES (${sqlLiteral(numerical)}::uuid, ${sqlLiteral(exam)}::uuid, ${sqlLiteral(subject)}::uuid, ${sqlLiteral(input.editorId)}::uuid, 'PUBLISHED', 1);`,
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by) VALUES (${sqlLiteral(alpha)}::uuid, 1, 'MCQ', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.alphaText}</p>`)}, '<p>Alpha has no divisors.</p>', 2, 0.5, ${sqlLiteral(input.editorId)}::uuid);`,
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by) VALUES (${sqlLiteral(beta)}::uuid, 1, 'MCQ', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.betaText}</p>`)}, '<p>Beta is even.</p>', 2, 0.5, ${sqlLiteral(input.editorId)}::uuid);`,
-    `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, numerical_answer, marks, negative_marks, created_by) VALUES (${sqlLiteral(numerical)}::uuid, 1, 'NUMERICAL', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.numericalText}</p>`)}, '<p>Seven.</p>', '7', 2, 0, ${sqlLiteral(input.editorId)}::uuid);`,
+    `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, numerical_answer, marks, negative_marks, created_by) VALUES (${sqlLiteral(numerical)}::uuid, 1, 'NUMERICAL', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${numericalText}</p>`)}, '<p>Seven.</p>', '7', 2, 0, ${sqlLiteral(input.editorId)}::uuid);`,
     `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 1, '<p>4</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
     `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 2, '<p>7</p>', true FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
     `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 3, '<p>9</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
