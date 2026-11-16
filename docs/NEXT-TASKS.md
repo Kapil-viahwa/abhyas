@@ -138,10 +138,26 @@ a student starts, answers, submits and sees the result; a slow page does not mov
 message. — Verified in both nine-job runs of `e2f88959cb555610ed6a6d47f952de9d99d3d60c`:
 [run 43841325606](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841325606) (push, `e2e` 5m38s, `gitleaks` 10s) and [run 43841317370](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841317370) (pull_request, `e2e` 5m35s, `gitleaks` 8s), eighteen green check results. The `e2e` jobs are green under `set -o pipefail`, so the whole `playwright test` run exited 0 and the five `attempt-take` tests ran and passed — no test in that file is skipped and the `describe.serial` suite stops at the first failure, so a passing run is all five. Their readable slices are container and Postgres output, so the Playwright summary line is not re-quotable; the green job is the proof. The claim table, the four defects found in the old tree and the red rounds on the way are in `PROGRESS.md`.
 
-[ ] A5 The result and review pages, with Playwright: score, accuracy, correct, wrong, unattempted,
+[x] A5 The result and review pages, with Playwright: score, accuracy, correct, wrong, unattempted,
 and the per-question review (the student's answer, the correct answer, the explanation) only
 after the attempt has ended; another student cannot open either page. The enrollment page stops
-promising "taking it is the next phase" and links to the start.
+promising "taking it is the next phase" and links to the start. — Verified in both nine-job runs
+of `0637d1477d612074af56a0a9994d5e5c57d6dbf7`: [run 43857637203](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857637203)
+(push, `e2e` 6m00s, `gitleaks` 10s) and [run 43857648539](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857648539)
+(pull_request, GitHub's merge of `0637d14` into `1133d76`, `e2e` 6m08s, `gitleaks` 11s), eighteen
+green check results between them. Each `unit` job logs `✓ src/lib/security-headers.spec.ts (8 tests)`
+inside `Test Files 9 passed (9)` / `Tests 57 passed (57)` for `apps/web`, so the new no-store rule for
+`/attempt/result/:path*` passed. The `database` jobs are green under `set -o pipefail`, so the whole
+`pnpm test:db` suite ran and passed, `apps/api/test/attempts-api.test.ts` and its five new review
+cases (the frozen version, the auto-submitted review, the scan that finds a key only in the result, the
+malformed id, the two parallel result reads) included; their readable slices are Postgres output, so the
+vitest summary is not re-quotable. The `e2e` jobs are green under pipefail, so the whole
+`playwright test` run exited 0 and the five `describe.serial` tests in `e2e/attempt-review.spec.ts` ran
+and passed — none is skipped and a serial block stops at the first failure, so a passing run is all
+five; their readable slices are container and Postgres output, so the Playwright list is not re-quotable.
+The claim table and the red rounds are in `PROGRESS.md`. The review's question **content** is still read
+from each question's current version, so it is not yet immutable beside the frozen result (decision
+0082); A5b pins the question version and is queued **before** the merge.
 
 [ ] A5b Question versioning in attempts (decision 0082, open, owner to decide). Recommended: pin the
 question version at publish — `test_questions` gains `question_version_id`, backfilled from each

@@ -1003,7 +1003,7 @@ Five red rounds, each a different cause, none of them the page's behaviour:
 
 
 
-## Phase 7, A5 (built — runs queued, not read)
+## Phase 7, A5 (done — both runs of `0637d14` green)
 
 **The result and the review.** The page a student sees the answer key on, and the only one.
 
@@ -1039,14 +1039,47 @@ another student, an anonymous visitor and a malformed id.
 
 **Known limitation.** The review's question list, order and marks are the attempt's frozen
 `test_version_id`, but each question's *content* is resolved from that question's current version —
-the same source the start response and scoring use. Freezing content per attempt needs a
-`question_version` column on `test_questions`, a backfill and a builder change; recorded in decision
-0081 rather than half-built here.
+the same source the start response and scoring use. A published paper or a live attempt can therefore
+still have a question edited under it (decision 0082): a live submit is then refused `400
+unknown_option` rather than mis-scored, and an ended attempt's review would show new content beside an
+immutable result. The fix is to pin `test_questions.question_version_id` at publish, with the start
+response, the scoring function and the review all reading the pinned version; it is queued as **A5b,
+before the merge**, and was not half-built here.
 
-**Not yet verified.** Nothing in A5 has been compiled or run: no `pnpm lint`, `pnpm typecheck`,
-`pnpm test:unit`, `pnpm test:db` or `pnpm test:e2e`, and no Docker. The claim above is what the code
-and the specs say; the CI runs on the pushed commit decide, and the queue item stays `[ ]` until
-those runs are read.
+**Verified** in both nine-job runs of `0637d1477d612074af56a0a9994d5e5c57d6dbf7`:
+[run 43857637203](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857637203) (push, `e2e` 6m00s,
+`gitleaks` 10s) and [run 43857648539](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857648539)
+(pull_request, GitHub's merge of that head into `1133d76`, `e2e` 6m08s, `gitleaks` 11s): eighteen green
+check results, none of the nine jobs red in either run. Each `unit` job logs
+`✓ src/lib/security-headers.spec.ts (8 tests)` inside `Test Files 9 passed (9)` / `Tests 57 passed (57)`
+for `apps/web` (48 for `packages/shared`, 25 for the worker, 231 for the API in the same job), and the
+whole `pnpm test:unit` step exited 0. The `database` jobs are green under `set -o pipefail`, so the entire
+`pnpm test:db` suite ran and passed, `apps/api/test/attempts-api.test.ts` and its five new review cases
+included; their readable log slices are Postgres and service-container output, so the vitest summary is
+not re-quotable. The `e2e` jobs are green under `set -o pipefail`, so the whole `playwright test` run
+exited 0: every spec passed, `e2e/attempt-review.spec.ts` included, and because its five tests are one
+`describe.serial` block that stops at the first failure, a passing run is all five; their readable slices
+are the container logs collected after the run, so the Playwright list is not re-quotable either.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| The summary is exact: `1.50 of 6.00`, `50.00%`, 1 correct, 1 wrong, 1 unattempted, `2 of 3`, "Submitted by you" | `a submitted attempt shows the exact summary and the full review` (e2e) |
+| Each question carries its markers — correct `+2` with your answer and the correct answer, wrong `−0.5` with all three, unattempted `0` with the label and the key — and its explanation | same test |
+| The Wrong and Unattempted filters show only what they name, and All restores it, through a validated `?show=` | same test — 1, 1 and 3 cards, each with its `data-outcome` |
+| While the attempt runs, the result page says so and its text and HTML carry no stem, no key name and no explanation | `before the end the result page shows in-progress and none of the paper` (e2e) |
+| An auto-submitted attempt shows `0.00 of 6.00`, 0/0/3, the plain "no answers were received" note, and every question unattempted with its key | `an auto-submitted attempt shows 0.00 and every question unattempted` (e2e) |
+| The back button does not bring the paper back, and the entry URL of an ended attempt redirects to the result | `the back button after the result does not show the paper again` (e2e) |
+| Another student sees not-available with none of the review, an anonymous visitor is sent to sign-in, and a malformed id is not available | `another student, an anonymous visitor and a malformed id` (e2e) — the second student in its own browser context and client address |
+| The start and state bodies carry no key, and the web submit handler's body is non-empty and exactly `{ ok: true }` | the first test — the submit body captured through `page.route` + `route.fetch()`, the planted `isCorrect` found by the same scan |
+| The review is the attempt's own frozen version, in its order, with an unattempted question marked | `returns the review of the attempt’s own frozen version, with an unattempted question marked` (database) |
+| An auto-submitted attempt's review shows the key and the explanations for every question | `shows the key and the explanation for an auto-submitted attempt, with every question unattempted` (database) |
+| The paper responses carry no key, and the same recursive scan finds one in the ended result | `carries no key in the paper responses, and the same scan finds one in the result` (database) |
+| A malformed attempt id answers 400 | `answers a malformed attempt id on the result as a bad request` (database) |
+| Two parallel result reads of an expired attempt give one row and one result | `gives one result and one row when two result reads arrive on an expired attempt` (database) |
+| The submit body is the summary only, with its exact keys and no answer key | `scores one right, one wrong and one unattempted answer exactly, and completes the enrollment` (database) — `expectNoAnswerKey` on the submit body |
+| The result and review route is never cached | `never caches the result and review page` — `apps/web/src/lib/security-headers.spec.ts`, 8 tests, in the `unit` log |
 
 
 
@@ -1063,3 +1096,13 @@ client address. The back-button test now goes back and asserts only what the rul
 and its stems are gone — and then visits the entry URL and asserts it redirects to the result; each
 test in `e2e/attempt-review.spec.ts` sets its own `x-forwarded-for`, so a per-IP registration limit
 is never shared.
+
+
+`3ade1fa` — the docs commit on top of `7fe9f0b` — was red in `e2e` in both runs, `53 passed` and one
+failure: `e2e/attempt-review.spec.ts:583 › another student, an anonymous visitor and a malformed id`,
+`TimeoutError: page.fill: Timeout 15000ms exceeded`, waiting for `locator('input[name="fullName"]')` in
+`registerStudent`. The second student was being registered on a page that was still signed in as the
+first, and middleware sends a signed-in visitor from `/register` to `/account`, so the form never
+rendered. Fixed in `0637d14`: the second student gets a browser context of its own, with its own client
+address, closed in a `finally`. No assertion was loosened — the not-available screen, the anonymous
+redirect and the malformed id are checked exactly as before.
