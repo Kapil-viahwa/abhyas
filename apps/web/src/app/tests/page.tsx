@@ -107,9 +107,19 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
                 >
                   {enrollment.status.toLowerCase()}
                 </span>
-                <Link href={`/tests/${enrollment.testId}`} className="text-sm text-sky-400 hover:text-sky-300">
-                  Open
-                </Link>
+                {enrollment.status === 'OPEN' ? (
+                  <Link
+                    href={`/attempt/${enrollment.id}`}
+                    className="text-sm text-sky-400 hover:text-sky-300"
+                    data-testid="enrollment-open-attempt"
+                  >
+                    Open attempt
+                  </Link>
+                ) : (
+                  <Link href={`/tests/${enrollment.testId}`} className="text-sm text-sky-400 hover:text-sky-300">
+                    Open
+                  </Link>
+                )}
               </div>
             </li>
           ))}

@@ -40,6 +40,9 @@ export default async function StudentTestPage({ params, searchParams }: PageProp
 
   const errorCode = refusalCode({ code: one(query.error) });
   const key = one(query.key) === '' ? randomUUID() : one(query.key);
+  // Phase 7, A4: where an open attempt is taken. Only the owner's own enrollment id, from the session.
+  const openEnrollmentId =
+    test !== null && test.enrollment.status === 'OPEN' ? test.enrollment.enrollmentId : null;
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
@@ -131,11 +134,19 @@ export default async function StudentTestPage({ params, searchParams }: PageProp
           <section className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">Your attempt</h2>
 
-            {test.enrollment.status === 'OPEN' ? (
-              <p className="text-sm text-sky-200" data-testid="open-enrollment">
-                You have an open attempt at this test (attempt {String(test.enrollment.attemptNumber ?? 1)}). Taking it is
-                the next phase; it will appear here when it starts.
-              </p>
+            {openEnrollmentId !== null ? (
+              <div className="space-y-2" data-testid="open-enrollment">
+                <p className="text-sm text-sky-200">
+                  You have an open attempt at this test (attempt {String(test.enrollment.attemptNumber ?? 1)}).
+                </p>
+                <Link href={`/attempt/${openEnrollmentId}`} className={buttonClass} data-testid="open-attempt-link">
+                  Open attempt
+                </Link>
+                <p className="text-xs text-slate-500">
+                  The clock starts when you open the paper and it runs on the server. A started attempt cannot be
+                  resumed, so keep this tab open; the fee is not refunded.
+                </p>
+              </div>
             ) : test.maxAttempts !== null && test.enrollment.attemptsUsed >= test.maxAttempts ? (
               <p className="text-sm text-slate-300" data-testid="attempts-used">
                 You have used every attempt this test allows ({String(test.maxAttempts)}).
