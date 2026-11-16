@@ -114,6 +114,16 @@ function attemptAlreadyStarted(error: unknown): boolean {
   return message.includes('23505') || message.includes('attempts_enrollment_key');
 }
 
+/** Formats a decimal at the column's scale, so `2` reads as `2.00` and `1.5` as `1.50`. */
+function formatDecimal(value: { toString(): string }, decimals: number): string {
+  const text = value.toString();
+  const negative = text.startsWith('-');
+  const unsigned = negative ? text.slice(1) : text;
+  const [whole = '0', fraction = ''] = unsigned.split('.');
+  const padded = fraction.padEnd(decimals, '0').slice(0, decimals);
+  return `${negative ? '-' : ''}${whole}${decimals > 0 ? `.${padded}` : ''}`;
+}
+
 function scoringQuestions(paper: readonly PaperRow[]): ScoringQuestion[] {
   return paper.map((question) => ({
     id: question.questionId,
@@ -477,14 +487,14 @@ export class AttemptsService {
       status: attempt.status as AttemptStatus,
       submitSource: attempt.submit_source,
       submittedAt: attempt.submitted_at?.toISOString() ?? null,
-      score: result.score.toString(),
+      score: formatDecimal(result.score, 2),
       correctCount: result.correctCount,
       wrongCount: result.wrongCount,
       unattemptedCount: result.unattemptedCount,
       attemptedCount: result.attemptedCount,
       totalQuestions: result.totalQuestions,
-      totalMarks: result.totalMarks.toString(),
-      accuracy: result.accuracy.toString(),
+      totalMarks: formatDecimal(result.totalMarks, 2),
+      accuracy: formatDecimal(result.accuracy, 4),
       review: paper.map((question) =>
         reviewQuestion(
           question.position,

@@ -88,6 +88,7 @@ interface AttemptState {
   readonly attemptId: string;
   readonly status: string;
   readonly remainingSeconds: number;
+  readonly serverNow: string;
   readonly submitSource: string | null;
   readonly submittedAt: string | null;
 }
