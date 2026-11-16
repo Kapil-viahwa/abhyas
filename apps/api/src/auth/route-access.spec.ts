@@ -2,6 +2,7 @@ import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { describe, expect, it } from 'vitest';
 
 import { AdminController } from '../admin/admin.controller';
+import { AttemptsController } from '../attempts/attempts.controller';
 import { CatalogController } from '../catalog/catalog.controller';
 import { PublicCatalogController } from '../catalog/public.controller';
 import { HealthController } from '../health/health.controller';
@@ -32,6 +33,7 @@ export const HTTP_CONTROLLERS = [
   AdminTestsController,
   StudentTestsController,
   EnrollmentsController,
+  AttemptsController,
   OtpController,
 ];
 
