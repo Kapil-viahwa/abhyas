@@ -442,33 +442,52 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.getByTestId('attempt-question')).toHaveText('Question 1');
     });
 
-    // The page re-syncs the state right before it submits, so both waits are created before the
-    // confirm click that lets them happen, and both bodies are read immediately after.
+    // The page re-syncs the state right before it submits, so this wait is created before the
+    // confirm click that lets it happen, and its body is read immediately after.
     const stateWait = page.waitForResponse(
       (response) => new URL(response.url()).pathname.endsWith('/state'),
       { timeout: 30_000 },
     );
-    const submitWait = page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname.endsWith('/submit') && response.request().method() === 'POST',
-      { timeout: 30_000 },
-    );
     void stateWait.catch(() => undefined);
-    void submitWait.catch(() => undefined);
 
-    await step('submit through the confirm step', async () => {
-      await expect(page.getByTestId('submit-attempt')).toBeVisible();
-      await page.getByTestId('submit-attempt').click();
-      await expect(page.getByTestId('submit-confirm')).toContainText('left 1 question unanswered');
-      await page.getByTestId('confirm-submit').click();
-      await expect(page.getByTestId('attempt-result')).toBeVisible();
-      await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}$/);
+    // The submit's body cannot be read after the page has received it: the runner reads only
+    // `response.ok` and pushes to the result page at once, so Chromium discards that body and a
+    // waitForResponse-then-text() never settles. The route handler fetches the real response,
+    // reads its body while it is available, and hands the page exactly the same status, headers
+    // and body — what the browser actually receives, and what is scanned below.
+    let submitStatus = 0;
+    let submitBody = '';
+
+    await step('capture the submit response', async () => {
+      await page.route('**/api/attempts/*/submit', async (route) => {
+        try {
+          const response = await route.fetch();
+          submitStatus = response.status();
+          submitBody = await response.text();
+
+          await route.fulfill({ response, body: submitBody });
+        } catch {
+          // A request is never left held: anything that failed goes through untouched.
+          await route.continue().catch(() => undefined);
+        }
+      });
     });
+
+    try {
+      await step('submit through the confirm step', async () => {
+        await expect(page.getByTestId('submit-attempt')).toBeVisible();
+        await page.getByTestId('submit-attempt').click();
+        await expect(page.getByTestId('submit-confirm')).toContainText('left 1 question unanswered');
+        await page.getByTestId('confirm-submit').click();
+        await expect(page.getByTestId('attempt-result')).toBeVisible();
+        await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}$/);
+      });
+    } finally {
+      await page.unroute('**/api/attempts/*/submit');
+    }
 
     const stateResponse = await step('read the state response', async () => stateWait, 30_000);
     const stateBody = await step('read the state body', async () => stateResponse.text(), 15_000);
-    const submitResponse = await step('read the submit response', async () => submitWait, 30_000);
-    const submitBody = await step('read the submit body', async () => submitResponse.text(), 15_000);
 
     await step('result is exact', async () => {
       // 2.00 of 4.00 marks, one right, none wrong, one unattempted, 1 ÷ 1 accuracy.
@@ -496,10 +515,13 @@ test.describe.serial('taking an attempt', () => {
     expect(attemptA).not.toBe('');
 
     await step('the capture is real and carries no key', async () => {
-      // An empty or unexpected capture must never pass: every endpoint is asserted by its status.
+      // An empty or unexpected capture must never pass: every endpoint is asserted by its status,
+      // and the submit body must be the handler's minimal shape.
       expect([200, 201]).toContain(startResponse.status());
       expect(stateResponse.status()).toBe(200);
-      expect(submitResponse.status()).toBe(200);
+      expect(submitStatus).toBe(200);
+      expect(submitBody).not.toBe('');
+      expect(JSON.parse(submitBody) as unknown).toEqual({ ok: true });
 
       const captured = [
         { endpoint: 'POST /api/attempts/start', body: startBody },
@@ -668,11 +690,19 @@ test.describe.serial('taking an attempt', () => {
         await expect(page.getByTestId('confirm-submit')).toBeVisible();
         await page.getByTestId('confirm-submit').click();
         await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 30_000 });
-        await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}\?late=1$/);
+        // Usually the server refuses the late submit and the page carries `?late=1`. The worker's
+        // sweeper runs every 30 s and could end the attempt in the few milliseconds between the
+        // expiry commit and the request reaching the API; the submit then replays that result.
+        await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}(\?late=1)?$/);
       });
 
       await step('result says the time ran out and nothing was scored', async () => {
-        await expect(page.getByTestId('result-late')).toContainText('Time ran out before your answers arrived');
+        // The "time ran out" message belongs to the refused path. Both orders are correct server
+        // behaviour and in both the late answers are never scored, which the score and status
+        // assert either way.
+        if (new URL(page.url()).searchParams.get('late') === '1') {
+          await expect(page.getByTestId('result-late')).toContainText('Time ran out before your answers arrived');
+        }
         await expect(page.getByTestId('result-score')).toHaveText('0.00 of 4.00');
         await expect(page.getByTestId('result-status')).toContainText('Ended automatically at the deadline');
       });
