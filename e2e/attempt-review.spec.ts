@@ -21,12 +21,15 @@ import { publishSeededPaper, seedAuthor, seedBuilderFixture } from './tests-fixt
  */
 
 const PASSWORD = 'correct-horse-9battery';
-const CLIENT_IP = '198.18.0.61';
 
 test.use({
-  extraHTTPHeaders: { 'x-forwarded-for': CLIENT_IP },
   actionTimeout: 15_000,
 });
+
+/** Each test registers from its own address, so a per-IP registration limit is never shared. */
+async function useClientIp(page: Page, lastOctet: number): Promise<void> {
+  await page.context().setExtraHTTPHeaders({ 'x-forwarded-for': `198.18.0.${String(lastOctet)}` });
+}
 
 const marker = randomUUID().slice(0, 8);
 
@@ -347,6 +350,7 @@ test.describe.serial('the result and the review', () => {
 
   test('a submitted attempt shows the exact summary and the full review', async ({ page }) => {
     test.setTimeout(180_000);
+    await useClientIp(page, 61);
 
     const email = `e2e-review-submitted-${marker}@example.com`;
     await step('enroll and open the entry page', async () =>
@@ -473,6 +477,7 @@ test.describe.serial('the result and the review', () => {
 
   test('before the end the result page shows in-progress and none of the paper', async ({ page }) => {
     test.setTimeout(120_000);
+    await useClientIp(page, 62);
 
     const email = `e2e-review-progress-${marker}@example.com`;
     await step('enroll and open the entry page', async () =>
@@ -497,6 +502,7 @@ test.describe.serial('the result and the review', () => {
 
   test('an auto-submitted attempt shows 0.00 and every question unattempted', async ({ page }) => {
     test.setTimeout(120_000);
+    await useClientIp(page, 63);
 
     const email = `e2e-review-auto-${marker}@example.com`;
     await step('enroll and open the entry page', async () =>
@@ -534,6 +540,7 @@ test.describe.serial('the result and the review', () => {
 
   test('the back button after the result does not show the paper again', async ({ page }) => {
     test.setTimeout(180_000);
+    await useClientIp(page, 64);
 
     const email = `e2e-review-back-${marker}@example.com`;
     const enrollmentId = await step('enroll and open the entry page', async () =>
@@ -551,19 +558,31 @@ test.describe.serial('the result and the review', () => {
       await expect(page.getByTestId('attempt-result')).toBeVisible();
     });
 
-    await step('going back lands on the result, not the paper', async () => {
+    await step('going back never shows the paper', async () => {
       await page.goBack();
-      await expect(page.getByTestId('attempt-result')).toBeVisible();
+
+      // Whatever the browser restores, the paper must not be on screen and no stem may be in it.
+      await expect(page.getByTestId('attempt-question')).toHaveCount(0);
+
+      const view = await readPage(page);
+      expect(view.text).not.toContain(alphaText);
+      expect(view.text).not.toContain(betaText);
+    });
+
+    await step('the entry URL of an ended attempt sends the student to its result', async () => {
+      await page.goto(`/attempt/${enrollmentId}`);
+
       await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}/);
+      await expect(page.getByTestId('attempt-result')).toBeVisible();
 
       const view = await readPage(page);
       expect(view.html).toContain('attempt-result');
-      expect(page.url()).not.toContain(`/attempt/${enrollmentId}`);
     });
   });
 
   test('another student, an anonymous visitor and a malformed id', async ({ page, browser }) => {
     test.setTimeout(120_000);
+    await useClientIp(page, 65);
 
     // A first student with an ended attempt on the short paper, for the ids someone else will use.
     const ownerEmail = `e2e-review-owner-${marker}@example.com`;
