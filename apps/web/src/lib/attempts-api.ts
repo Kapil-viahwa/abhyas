@@ -43,6 +43,53 @@ export interface AttemptStart extends AttemptState {
 
 export interface AttemptResult {
   readonly attemptId: string;
+  /** The paper the attempt was taken on; null only if the enrollment row is gone. */
+  readonly testId: string | null;
+  readonly testTitle: string | null;
+  readonly status: string;
+  readonly submitSource: string | null;
+  readonly submittedAt: string | null;
+  readonly score: string;
+  readonly correctCount: number;
+  readonly wrongCount: number;
+  readonly unattemptedCount: number;
+  readonly attemptedCount: number;
+  readonly totalQuestions: number;
+  readonly totalMarks: string;
+  readonly accuracy: string;
+  readonly review: readonly ReviewQuestion[];
+}
+
+/** One question of the ended attempt's review. The API sanitises the HTML before it is sent. */
+export interface ReviewQuestion {
+  readonly questionId: string;
+  readonly position: number;
+  readonly questionType: string;
+  readonly contentHtml: string;
+  readonly explanationHtml: string | null;
+  readonly latex: string | null;
+  readonly marks: string;
+  readonly negativeMarks: string;
+  readonly chosenOptionId: string | null;
+  readonly correctOptionId: string | null;
+  readonly options: readonly ReviewOption[];
+}
+
+export interface ReviewOption {
+  readonly id: string;
+  readonly position: number;
+  readonly optionHtml: string;
+  readonly latex: string | null;
+  readonly isCorrect: boolean;
+  readonly isChosen: boolean;
+}
+
+/**
+ * The submit response: the result's summary and never the review. The key leaves the API only
+ * through `GET /attempts/:id/result`, so a submit cannot be the place it reaches a client.
+ */
+export interface AttemptSubmit {
+  readonly attemptId: string;
   readonly status: string;
   readonly submitSource: string | null;
   readonly submittedAt: string | null;
@@ -129,8 +176,8 @@ export function submitAttempt(
   accessToken: string,
   attemptId: string,
   answers: readonly SubmittedAnswer[],
-): Promise<ApiResult<AttemptResult>> {
-  return apiCall<AttemptResult>(`/v1/attempts/${encodeURIComponent(attemptId)}/submit`, {
+): Promise<ApiResult<AttemptSubmit>> {
+  return apiCall<AttemptSubmit>(`/v1/attempts/${encodeURIComponent(attemptId)}/submit`, {
     method: 'POST',
     accessToken,
     body: { answers },
