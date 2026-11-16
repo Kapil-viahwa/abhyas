@@ -199,8 +199,17 @@ test.describe.serial('taking an attempt', () => {
     });
 
     // Two clicks in the same task: the first sets the ref guard, the second must do nothing.
+    //
+    // This is a plain page evaluation, not a locator evaluation: the Start button is replaced by
+    // the paper as soon as the start response lands, and `locator.evaluate` retries while its
+    // element is detached — so it waits forever for a button that can never come back, which is
+    // a hang until the test timeout, not an assertion error.
     await expect(page.getByTestId('start-attempt')).toBeVisible();
-    await page.getByTestId('start-attempt').evaluate((button: HTMLElement) => {
+    await page.evaluate(() => {
+      const button = document.querySelector('[data-testid="start-attempt"]');
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error('the Start button is not on screen');
+      }
       button.click();
       button.click();
     });
