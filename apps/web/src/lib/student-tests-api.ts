@@ -78,8 +78,12 @@ export async function getStudentTest(accessToken: string, id: string): Promise<S
 }
 
 /** The caller's own enrollments, newest first. */
-export async function listMyEnrollments(accessToken: string, page = 1): Promise<EnrollmentPage | null> {
-  const result = await apiCall<EnrollmentPage>(`/v1/enrollments/me?page=${String(page)}`, { method: 'GET', accessToken });
+export async function listMyEnrollments(accessToken: string, page = 1, pageSize?: number): Promise<EnrollmentPage | null> {
+  const size = pageSize === undefined ? '' : `&pageSize=${String(pageSize)}`;
+  const result = await apiCall<EnrollmentPage>(`/v1/enrollments/me?page=${String(page)}${size}`, {
+    method: 'GET',
+    accessToken,
+  });
 
   return result.status === 200 && result.body !== null ? result.body : null;
 }
