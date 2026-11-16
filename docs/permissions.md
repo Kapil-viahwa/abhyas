@@ -410,3 +410,44 @@ attempt that has passed its deadline is finalised by this read through the same 
 enrollment — and the response is still state only. `apps/api/test/attempts-api.test.ts` proves
 both halves: the not-started read changes nothing, and an expired one is ended with source `LAZY`
 without a question, a key or a score in the body.
+
+
+
+## Phase 7, A5: the result and review screen
+
+The screen is server-rendered and holds no rule of its own: it reads the session, calls the API's
+result route with the server-side access token, and renders the review the API returns. This is the
+**only** screen a student ever sees an answer key or an explanation on, and it renders none of them
+until the attempt has ended.
+
+| Screen | Server check | What it calls |
+| --- | --- | --- |
+| `/attempt/result/<attemptId>` | `loadSession` — anonymous to `/login?next=%2Fattempt%2Fresult%2F<id>` | `GET /v1/attempts/<id>/result`, and `GET /v1/attempts/<id>` while the result answers 409 |
+
+- **Ended attempts only.** A `SUBMITTED` or `AUTO_SUBMITTED` attempt renders the summary and the
+  review. While the attempt is `IN_PROGRESS` the API answers **409** and the page shows the
+  in-progress message and the countdown — no summary, no question, no key.
+- **Own attempts only.** Another student's attempt and an unknown id are **404** and a malformed id
+  is **400**; the page shows the same not-available screen for all three, and prints nothing from
+  the review. A suspended account's session no longer authenticates, so `loadSession` sends it to
+  sign-in.
+- **No cache.** `apps/web/src/lib/security-headers.ts` adds `Cache-Control: no-store, max-age=0` and
+  `Referrer-Policy: no-referrer` to `/attempt/result/:path*` in `next.config.ts`, so a shared cache
+  does not keep the page and the back/forward cache does not serve it after a sign-out on the same
+  device.
+- **Server-side filtering.** `?show=all|wrong|unattempted` is validated against that allowlist; any
+  other value is `all`. The whole review stays server-rendered, so no review data is passed to a
+  client component, put in a URL beyond the filter name, logged or stored.
+- **Rich content.** The API sanitises `contentHtml`, `optionHtml` and `explanationHtml` with
+  `sanitizeStoredContent` before sending them, and the page puts only those sanitised strings into
+  HTML; LaTeX goes through `renderLatex` (KaTeX with `trust: false`). Nothing else is injected as
+  markup.
+- **Retake.** The API's result view carries the attempt's `test_id` and the test's title (added in
+  this unit, ended attempts only) so the page can link to `/tests/<testId>`, where a retake means a
+  new enrollment and a new fee. The enrollments list on `/tests` now shows a **Result** link for a
+  `COMPLETED` or `EXPIRED` enrollment, which goes through `/attempt/<enrollmentId>` and redirects to
+  the result.
+
+The submit route handler still answers `{ ok: true }` and never the API's result body; the API's
+`POST /v1/attempts/:id/submit` answers the result **summary** only — `GET /v1/attempts/:id/result`
+is the single response that carries the review, the correct option and the explanation.

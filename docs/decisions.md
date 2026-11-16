@@ -2446,3 +2446,69 @@ and deliberately leaves no expired `IN_PROGRESS` attempt behind: the worker's sw
 it finds in the shared database. The late-submit spec expires the attempt from inside the route
 handler that is holding the request, immediately before releasing it, so the handful of
 milliseconds in which the sweeper could claim it first is the whole race.
+
+
+
+## 0081 — Phase 7, A5: the review is server-rendered, and the key leaves through one route
+
+**Decided while building the result and review page.** This is the only unit in which a correct
+option and an explanation reach a student, so the shape of that delivery is the decision.
+
+**The review is rendered on the server, and only the page's HTML leaves the server.** The result
+page is a server component: it calls `GET /v1/attempts/:id/result` with the session's token through
+`callWithSession`, and renders the summary and every question's stem, options, markers, marks and
+explanation as HTML. No review array is passed to a client component, so the key never enters a
+bundle, a hydration payload, `localStorage`, a URL or the console. The filter is a validated query
+parameter (`?show=all|wrong|unattempted`) resolved on the server, which is why the whole review can
+stay server-rendered and still be filterable.
+
+**The submit response no longer carries the review.** Until this unit `POST /v1/attempts/:id/submit`
+answered the full `AttemptResultView`, review included — a second place the key left the server.
+It now answers an `AttemptSubmitView`: the same summary the page shows (score, total marks, counts,
+accuracy, status, submit source, submitted time) and no review, built from the result row without
+loading the paper, so the key cannot reach a submit response even by accident. A replay returns that
+same summary. `GET /v1/attempts/:id/result` is now the single response carrying the key, and it is
+refused with `attempt_in_progress` before the end, for another student's attempt with 404 and for a
+malformed id with 400.
+
+**No cache, at the route level.** `next.config.ts` already owns the security headers, so the same
+module adds a `no-store` rule for `/attempt/result/:path*` (plus `Referrer-Policy: no-referrer`,
+since the URL names an attempt). A shared cache must not keep a page with a paper's key, and the
+back/forward cache must not serve it after a sign-out on a shared device. A server component cannot
+set a response header on its own, which is why the rule lives in the config rather than in the page.
+
+**The review is the attempt's own frozen paper.** The question list, its order and the marks come
+from the attempt's `test_version_id` and its `test_questions`, never from the live paper, so editing
+or republishing a test cannot change what a finished attempt reviews. The question *content* is
+resolved from each question's current version — the same source the start response and scoring use
+— so the review shows the same questions the student was given, but an editor who edits a question
+after an attempt would change what that attempt's review displays. That is a known limitation of the
+phase 6 data model (`test_questions` references a question, not a question version); freezing
+content per attempt needs a `question_version` column on `test_questions`, a backfill and a builder
+change, and it is recorded here rather than half-done in this unit.
+
+**What an auto-submitted attempt shows.** Because answers are saved only on submit, an attempt the
+server ends at the deadline has an empty answer set: every question is unattempted and the score is
+zero. The page says so in plain words — "no answers were received, so every question is marked
+unattempted — that is the deadline, not a mistake you made" — and the review still shows the key and
+the explanations, because the attempt has ended.
+
+**A retake is a new purchase, and the page says so.** The result view gained `testId` and
+`testTitle` (ended attempts only) so the page can link back to `/tests/<testId>` with the sentence
+that a retake needs a new enrollment and a new fee. The enrollments list shows a **Result** link for
+a `COMPLETED` or `EXPIRED` enrollment, pointing at `/attempt/<enrollmentId>`, which redirects to the
+result once the attempt has ended.
+
+**Markers are text as well as colour.** Each option carries "Your answer", "Correct answer" and,
+when the chosen option is not the correct one, "Your answer was wrong"; each question carries a
+Correct ✓ / Wrong ✗ / Not attempted — label and the marks it earned or lost, printed from the
+API's own decimal strings (`+2`, `−0.5`, `0`) rather than computed with floating point.
+
+**Tested, not asserted.** `apps/api/test/attempts-api.test.ts` gains the review of the attempt's own
+frozen version (its question ids and positions equal that version's `test_questions`), an
+unattempted question with no chosen option, an auto-submitted attempt with the key and every
+question unattempted, the scan finding a key in the ended result while start, state and submit
+carry none, a malformed id, and two parallel result reads of an expired attempt giving one row.
+`e2e/attempt-review.spec.ts` proves the page: the exact summary and markers, the filters, no paper
+content before the end, the auto submission, the retake path, the back button, and access for
+another student, an anonymous visitor and a malformed id.

@@ -1000,3 +1000,50 @@ Five red rounds, each a different cause, none of them the page's behaviour:
   through a `page.route` handler that fetches and fulfils the real response.
 - `fbc6bde`, one run — `e2e/catalog.spec.ts:237` flaked and passed on retry; recorded above as a known
   flake, not fixed.
+
+
+
+## Phase 7, A5 (built — runs queued, not read)
+
+**The result and the review.** The page a student sees the answer key on, and the only one.
+
+- `apps/web/src/app/attempt/result/[attemptId]/page.tsx` — server-rendered summary (test title,
+  score of total marks, accuracy as a percentage by moving the decimal point, correct, wrong,
+  unattempted, attempted, status, and a plain note for an auto-submitted attempt) plus the
+  per-question review: number, sanitised stem and options with "Your answer" / "Correct answer" /
+  "Your answer was wrong" markers, an unattempted label, the marks earned or lost printed from the
+  API's decimal strings, and the sanitised explanation. Filters through a validated
+  `?show=all|wrong|unattempted`, a jump list, and a retake link that says a retake needs a new
+  enrollment and a new fee.
+- `apps/web/src/lib/attempts-api.ts` — the review types and the result's `testId`/`testTitle`; the
+  submit type is now the summary only.
+- `apps/web/src/lib/security-headers.ts` (+ its spec) — `Cache-Control: no-store, max-age=0` and
+  `Referrer-Policy: no-referrer` for `/attempt/result/:path*` through `next.config.ts`.
+- `apps/web/src/app/tests/page.tsx` — a **Result** link for a `COMPLETED` or `EXPIRED` enrollment
+  (it goes through `/attempt/<enrollmentId>`, which redirects to the result).
+- `apps/api/src/attempts/attempts.service.ts` and `attempts.controller.ts` — the result view carries
+  `testId` and `testTitle`; `POST /v1/attempts/:id/submit` now answers `AttemptSubmitView`, the
+  summary without the review, so the result read is the single response carrying the key.
+
+**Proof.** `apps/api/test/attempts-api.test.ts` — the review of the attempt's own frozen version
+(its question ids and positions equal that version's `test_questions`), an unattempted question with
+no chosen option, an auto-submitted attempt with score `0.00`, total `6.00`, every question
+unattempted and the key and explanations still shown, the recursive scan finding a key in the ended
+result while start, state and submit carry none, a malformed id as 400, and two parallel result
+reads of an expired attempt giving one row and one `AUTO_SUBMITTED` result. The submit tests now
+assert the summary's exact keys and `expectNoAnswerKey` on the submit body.
+`e2e/attempt-review.spec.ts` — the exact summary (`1.50 of 6.00`, `50.00%`, 1/1/1, `2 of 3`), every
+question's markers and explanation, the three filters, in-progress showing no paper content, the
+auto-submitted page, the back button returning to the result and not the paper, and access checks for
+another student, an anonymous visitor and a malformed id.
+
+**Known limitation.** The review's question list, order and marks are the attempt's frozen
+`test_version_id`, but each question's *content* is resolved from that question's current version —
+the same source the start response and scoring use. Freezing content per attempt needs a
+`question_version` column on `test_questions`, a backfill and a builder change; recorded in decision
+0081 rather than half-built here.
+
+**Not yet verified.** Nothing in A5 has been compiled or run: no `pnpm lint`, `pnpm typecheck`,
+`pnpm test:unit`, `pnpm test:db` or `pnpm test:e2e`, and no Docker. The claim above is what the code
+and the specs say; the CI runs on the pushed commit decide, and the queue item stays `[ ]` until
+those runs are read.
