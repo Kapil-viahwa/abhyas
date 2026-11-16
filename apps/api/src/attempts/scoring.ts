@@ -10,10 +10,12 @@
  * without drift once a paper is long enough (decision 0076). Values leave the function as
  * strings in the form Prisma's `Decimal` columns take, so inserting the output cannot trip a
  * CHECK on the way in.
+ *
+ * A paper should never contain anything but an option-based single-answer question — the builder
+ * refuses the rest (decision 0077) — and this function refuses one too, as defence in depth.
  */
 
-/** The only question type this function scores. A `NUMERICAL` question is refused (0075/0076). */
-const SINGLE_CORRECT_TYPE = 'MCQ';
+import { SINGLE_CORRECT_QUESTION_TYPE } from '../questions/single-correct';
 
 /** A non-negative decimal with at most two places, in Prisma's decimal string form. */
 const MARKS_PATTERN = /^\d{1,4}(?:\.\d{1,2})?$/;
@@ -144,7 +146,7 @@ export function scoreAttempt(
     if (byId.has(question.id)) {
       throw new ScoringError('INVALID_QUESTION', `question ${question.id} appears twice in the version`);
     }
-    if (question.questionType !== SINGLE_CORRECT_TYPE) {
+    if (question.questionType !== SINGLE_CORRECT_QUESTION_TYPE) {
       throw new ScoringError(
         'NOT_SINGLE_CORRECT',
         `question ${question.id} is not single-correct and cannot be scored`,

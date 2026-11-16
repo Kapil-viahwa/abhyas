@@ -7,6 +7,11 @@ import type { RequestMetadata } from '../auth/request';
 import { DatabaseService } from '../infra/database.service';
 import { DATABASE_PROBE } from '../infra/tokens';
 import { sanitizeStoredContent } from '../questions/sanitize';
+import {
+  notSingleCorrectMessage,
+  notSingleCorrectReason,
+  SINGLE_CORRECT_ERROR_CODE,
+} from '../questions/single-correct';
 import type { CreateTestInput, TestListQuery, UpdateTestInput } from './validation';
 
 const PAGE_SIZE = 20;
@@ -453,6 +458,17 @@ export class TestsService {
         if (question.status !== 'PUBLISHED' || version.publishedAt === null) {
           throw new BadRequestException(`${label} is not published`);
         }
+
+        // A paper may hold only what the attempt engine can score (decision 0077). The bank's
+        // numerical questions stay valid for practice and never reach a test.
+        const reason = notSingleCorrectReason({ questionType: version.questionType, options: version.options });
+        if (reason !== null) {
+          throw new BadRequestException({
+            code: SINGLE_CORRECT_ERROR_CODE,
+            message: notSingleCorrectMessage(index + 1, question.id, reason),
+            questionId: question.id,
+          });
+        }
       }
 
       await tx.testQuestion.deleteMany({ where: { testVersionId: working.id } });
@@ -497,6 +513,9 @@ export class TestsService {
       if (count === 0) {
         throw new BadRequestException('A test needs at least one question before it can be submitted');
       }
+
+      // Questions can be edited after they are placed, so the whole paper is checked again.
+      await this.assertScorablePaper(tx, current.id);
 
       if (locked.status === 'DRAFT') {
         const moved = await tx.test.updateMany({
@@ -546,6 +565,9 @@ export class TestsService {
       if (count === 0) {
         throw new BadRequestException('A test needs at least one question before it can be published');
       }
+
+      // Inside the publishing transaction: nothing unscorable is ever frozen into a version.
+      await this.assertScorablePaper(tx, current.id);
 
       const stamped = await tx.testVersion.updateMany({
         where: { id: current.id, publishedAt: null },
@@ -603,6 +625,42 @@ export class TestsService {
     });
 
     return this.get(actor, id);
+  }
+
+  /**
+   * Every question on the paper must still be scorable — an option-based question with exactly
+   * one correct option — read from each question's *current* version, because a question can be
+   * edited after it was placed (decision 0077). Runs inside the caller's transaction, so a
+   * refusal leaves the paper exactly as it was.
+   */
+  private async assertScorablePaper(tx: Prisma.TransactionClient, testVersionId: string): Promise<void> {
+    const placed = await tx.testQuestion.findMany({
+      where: { testVersionId },
+      orderBy: { position: 'asc' },
+      select: { position: true, question: { select: { id: true, currentVersion: true } } },
+    });
+
+    for (const row of placed) {
+      const version = await tx.questionVersion.findUnique({
+        where: {
+          questionId_version: { questionId: row.question.id, version: row.question.currentVersion },
+        },
+        select: { questionType: true, options: { select: { isCorrect: true } } },
+      });
+
+      if (version === null) {
+        throw new ConflictException(`Question ${String(row.position)} has no current version`);
+      }
+
+      const reason = notSingleCorrectReason(version);
+      if (reason !== null) {
+        throw new BadRequestException({
+          code: SINGLE_CORRECT_ERROR_CODE,
+          message: notSingleCorrectMessage(row.position, row.question.id, reason),
+          questionId: row.question.id,
+        });
+      }
+    }
   }
 
   private toView(test: TestRow, versions: readonly VersionRowWithCount[]): TestView {
