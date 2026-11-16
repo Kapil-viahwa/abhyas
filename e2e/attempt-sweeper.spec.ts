@@ -57,7 +57,9 @@ test.describe('the attempt expiry sweeper in the worker', () => {
 
       const counts = readAttemptCounts(attempt.attemptId);
       expect(counts.enrollmentStatus).toBe('EXPIRED');
-      expect(counts.resultScore).toBe('0');
+      // `score` is NUMERIC(8,2), so Postgres reads it back as "0.00"; the value is the zero.
+      expect(counts.resultScore).not.toBeNull();
+      expect(Number(counts.resultScore)).toBe(0);
       expect(counts.answers).toBe('0');
     } finally {
       setCoinSetting(GRACE_SETTING, 5);
