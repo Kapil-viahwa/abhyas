@@ -313,3 +313,29 @@ Nothing on these screens reads a question, an option, an answer key, an explanat
 `created_by`: the API's projection has none of them, and the pages render its summary fields
 only. `/wallet` already lists the `ENROLLMENT` row (its history includes the type) and its type
 filter offers it; the Tests link is added to the account and wallet navigation beside Wallet.
+
+
+
+## Phase 7, A3a: the attempt API
+
+Every route is `@Authenticated()`: a signed-in account, and nothing more. **There is no `userId`
+on any of them** — the account is the session's — and a `userId` in a body or a query is refused
+with **400**, named, exactly as the enrollment routes do. A suspended account's session no longer
+authenticates (401) before any handler runs.
+
+| Route | What it does | Refusals |
+| --- | --- | --- |
+| `POST /v1/enrollments/:id/attempt` | starts the one attempt the enrollment bought, in one transaction, and returns the attempt plus the paper **once**; `deadline_at` is the database's `now()` plus the version's duration | 400 for a body, a field, a query value or a `userId`; 401; 404 for an unknown enrollment or another student's; **409** for an enrollment that is not `OPEN`, a paper that is not published, or a second start (`attempt_already_started`, which re-delivers nothing) |
+| `GET /v1/attempts/:id` | the caller's own attempt: status, `started_at`, `deadline_at`, the server's `now`, the remaining seconds and, once ended, the submit source and time — **never the paper** | 400 for a query value or `userId`; 401; 404 unknown or another student's |
+| `POST /v1/attempts/:id/submit` | validates every answer against the frozen paper, inserts the answers, ends the attempt (`SUBMITTED`, source `STUDENT`), scores it and completes the enrollment, in one transaction; a replay returns the first result unchanged | 400 for a malformed body, a duplicate question (`duplicate_answer`), a question not on the paper (`unknown_question`) or an option that is not that question's (`unknown_option`); 401; 404; **409** `attempt_expired` when the grace window has passed — the attempt is then ended with an empty result and the answers are discarded |
+| `GET /v1/attempts/:id/result` | the caller's own result and per-question review, once the attempt has ended; this is the **only** response that carries `isCorrect`, the correct option and the explanation | 400; 401; 404; **409** `attempt_in_progress` before the end, with no data |
+
+The start response is a whitelist and carries no answer data: question id, position, type, stem,
+LaTeX, marks and negative marks, and each option's id, position, text and LaTeX — never
+`isCorrect`, `numerical_answer`, an explanation, a creator or a status. The state response carries
+no questions at all, so a page can re-sync its countdown without receiving the paper again.
+
+The deadline and the grace window are the server's alone: `attempt_submit_grace_seconds` (default
+5, bounds 0–60) is read inside the submitting transaction, and no route reads a timestamp from the
+client. An attempt past `deadline_at + grace` is finalised — by a submit, by a read, or by A3b's
+sweeper — exactly once, with an empty answer set and an `EXPIRED` enrollment.

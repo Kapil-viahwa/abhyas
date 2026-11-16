@@ -2244,3 +2244,64 @@ there.
 **If production does have such a paper:** archive it and rebuild it. Archiving is the
 non-destructive path (its enrollments stay), a published version cannot be rewritten, and a
 revision published from the builder cannot carry the question any more.
+
+
+
+## 0078 — Phase 7, A3a: the attempt API's clock, window and lock order
+
+**Decided while writing the attempt routes.** The attempt is the student's one sitting of the
+paper the enrollment bought; this unit builds the four routes and the lazy expiry, and A3b adds
+the worker's sweeper on the same finalisation.
+
+**The submission window closes at `deadline_at + attempt_submit_grace_seconds`.** The grace
+setting is read inside the submitting transaction (default 5, bounds 0–60), and no route reads a
+clock from the client: the start's `deadline_at` is the database's `now()` plus the version's
+duration in the same statement, and the state's `server_now` and remaining seconds come from the
+database too. A submit at or before the close is accepted; after it the attempt is over.
+
+**Any caller may finalise an expired attempt, and finalising is idempotent.** A submit, a state
+read, a result read and A3b's sweeper all go through one `finalizeLocked`: under the attempt row
+lock it re-reads the clock and the grace, ends an `IN_PROGRESS` attempt as `AUTO_SUBMITTED` with
+source `LAZY` or `SWEEPER`, writes the empty-answer result and moves the enrollment to `EXPIRED`.
+The status guard and the `results_attempt_key` unique index make the second caller a no-op, so two
+readers, or a submit racing a read, produce exactly one result. `finalizeExpiredAttempt` is
+exported for the sweeper, which asks for `FOR UPDATE SKIP LOCKED`; the lazy callers use
+`FOR UPDATE`.
+
+**Lock order: attempt, then enrollment, then answers, then the status, then the result.** The
+start locks the enrollment (there is no attempt yet); every other path locks the attempt first so
+one student's two requests cannot deadlock. Answers are inserted before the status changes because
+the A1 guard refuses an answer once the attempt has ended.
+
+**A second start never re-delivers the paper and never moves the clock.** It is refused `409`
+`attempt_already_started`, the unique index on `enrollment_id` is the backstop under two
+simultaneous starts, and the refusal carries no question. The start response is the only pre-end
+response that carries the paper, and it is an allowlist: the stem, LaTeX, marks, type and options
+— never `is_correct`, `numerical_answer`, an explanation, a creator or a status.
+
+**The late submit is discarded.** Past the close the attempt is ended with an empty answer set,
+the enrollment becomes `EXPIRED`, and the request is refused `409` `attempt_expired`; the answers
+it carried are never stored and never scored. That is the same behaviour as an auto-submitted
+attempt, stated by the owner's rule that answers are saved only on submit.
+
+**Another student's attempt or enrollment is "not found".** Every read and write resolves a row
+that is not the caller's to `404`, never `403`, so the routes cannot be used to discover which
+attempts exist. No route anywhere accepts a `userId`.
+
+**The result is the only response that carries the key.** `GET /v1/attempts/:id/result` returns
+the score, counts, accuracy, total marks, the submit source and the per-question review with the
+chosen option, the correct option and the explanation — and only for the caller's own ended
+attempt. The state response has no questions and the submit response is the same result shape.
+
+**Time moves in tests, not in production code.** The tests backdate `started_at` and `deadline_at`
+inside one interactive transaction with `SET LOCAL session_replication_role = replica`, which
+disables the A1 `attempts_one_way` trigger for that transaction only; the connection is the
+migration owner, which is a superuser in the compose and CI database. The grace setting is pinned
+with an upsert-and-verify helper and restored to 5 afterwards. No clock override was added to the
+application.
+
+**Assumed, owner to confirm — still open, now implemented.** These were recorded in 0074 as
+assumptions and this unit implements them as decided: the 5-second grace window (a setting), lazy
+expiry on any read or submit, one attempt per enrollment and one result per attempt. They stay
+marked owner-to-confirm: if the owner wants a different grace, a no-grace rule, or a different
+late-submit message, the setting and one message change and no data changes.

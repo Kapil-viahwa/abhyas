@@ -697,3 +697,47 @@ Playwright list is not re-quotable.
 | A valid single-correct paper still builds, submits and publishes | `still builds, submits and publishes a paper of single-correct questions` |
 | The refusal never contains the correct option | asserted in both refusal cases with `expect(refused.body).not.toContain('isCorrect')` |
 | The picker does not offer the numerical fixture question | `the test builder` — the picker note is visible, the numerical text is not offered, and a single-correct one is |
+
+
+
+## Phase 7, A3a (pushed, runs queued)
+
+**The attempt API.** Four self-only routes, a shared finalisation and one projection.
+
+- `POST /v1/enrollments/:id/attempt` locks the enrollment, refuses anything but `OPEN` and a
+  published version, and inserts the attempt in one statement whose `deadline_at` is
+  `now() + duration * interval '1 minute'` — the same transaction timestamp the A1 trigger puts
+  in `started_at`, so the difference is exactly the version's duration. The paper is returned
+  once, in order, through the whitelist. A second start is `409 attempt_already_started` and
+  carries nothing; two simultaneous starts give one attempt via the unique index.
+- `GET /v1/attempts/:id` returns the state and the server's remaining seconds, never the paper.
+- `POST /v1/attempts/:id/submit` locks the attempt, then the enrollment, checks the close
+  (`deadline_at + attempt_submit_grace_seconds`), inserts the answers, ends the attempt as
+  `SUBMITTED`/`STUDENT`, scores with `scoreAttempt`, writes the result and completes the
+  enrollment — one transaction. A replay returns the first result; a late submit ends the
+  attempt with an empty result and is refused `409 attempt_expired`.
+- `GET /v1/attempts/:id/result` finalises an expired attempt first, refuses while it runs, and is
+  the only response carrying the key and the explanations.
+
+`finalizeExpiredAttempt` is exported for A3b's sweeper and shares `finalizeLocked` with the lazy
+paths, so two callers produce one result. Lock order everywhere: attempt → enrollment → answers →
+status → result. The start and the end are audited (`ATTEMPT_STARTED`, `ATTEMPT_SUBMITTED`,
+`ATTEMPT_AUTO_SUBMITTED`).
+
+Proof: `apps/api/test/attempts-api.test.ts` in the database job (fourteen cases: the exact deadline, the paper in
+order with an exact key-allowlist and a recursive key-name scan, no key in state or the submit
+refusal, a simultaneous start, another student's enrollment and attempt as 404, suspended 401,
+`userId` refused in a body and a query, three answers scoring `1.50` exactly with the enrollment
+`COMPLETED`, a retry and a parallel submit giving one result, five invalid submissions writing
+nothing, a late submit discarded, a submit inside a pinned grace window, parallel reads finalising
+with source `LAZY`, a submit racing a read, and the result refused until the end), and
+`apps/api/src/attempts/attempts.projection.spec.ts` in the unit job (the allowlist, the sanitising,
+and that the review is the only shape with the key).
+
+**Time in tests:** `SET LOCAL session_replication_role = replica` in one interactive transaction,
+on the migration owner connection (superuser in the compose and CI database), restores nothing
+globally; the grace setting is pinned and restored to 5.
+
+**Not verified here:** this session cannot run the toolchain or Docker, so lint, typecheck, the
+unit and database suites are unrun until the runs on the pushed commits are read. A3a stays `[ ]`
+in `docs/NEXT-TASKS.md`; A3b (the worker's sweeper) and A4 are not started.
