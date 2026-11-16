@@ -109,6 +109,9 @@ interface AttemptResult {
   readonly accuracy: string;
   readonly review: Array<{
     readonly questionId: string;
+    readonly position: number;
+    readonly marks: string;
+    readonly negativeMarks: string;
     readonly chosenOptionId: string | null;
     readonly correctOptionId: string | null;
     readonly explanationHtml: string | null;

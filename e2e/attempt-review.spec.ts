@@ -407,7 +407,7 @@ test.describe.serial('the result and the review', () => {
       expect(leakedText(stateBody)).toEqual([]);
 
       expect(submitStatus).toBe(200);
-      expect(submitBody).toBe('');
+      expect(submitBody).not.toBe('');
       expect(leakedKeys(submitBody)).toEqual([]);
       expect(leakedText(submitBody)).toEqual([]);
       expect(JSON.parse(submitBody) as unknown).toEqual({ ok: true });
