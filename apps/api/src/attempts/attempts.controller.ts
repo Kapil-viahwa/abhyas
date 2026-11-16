@@ -63,6 +63,20 @@ export class AttemptsController {
   }
 
   @Authenticated()
+  @Get('enrollments/:id/attempt')
+  @ApiOperation({ summary: 'The attempt my enrollment has, or null before it starts' })
+  @ApiOkResponse({ description: 'The attempt state, or null; never the paper' })
+  @ApiNotFoundResponse({ description: 'No such enrollment, or it belongs to another student' })
+  async byEnrollment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+  ): Promise<{ readonly attempt: AttemptStateView | null }> {
+    parseAttemptQuery(query);
+    return this.attempts.attemptForEnrollment(user, parseUuid(id, 'enrollment id'));
+  }
+
+  @Authenticated()
   @Post('attempts/:id/submit')
   @HttpCode(200)
   @ApiOperation({ summary: 'Submit the answers once; a replay returns the first result unchanged' })

@@ -232,6 +232,31 @@ export class AttemptsService {
     });
   }
 
+  /**
+   * The attempt an enrollment has, for the entry page: `{ attempt: null }` before a start, the
+   * state afterwards. Deliberately server-rendered state and never the paper — a reload has to
+   * know an attempt exists to say it cannot be resumed.
+   */
+  async attemptForEnrollment(
+    actor: AuthenticatedUser,
+    enrollmentId: string,
+  ): Promise<{ readonly attempt: AttemptStateView | null }> {
+    const enrollment = await this.prisma.enrollment.findUnique({
+      where: { id: enrollmentId },
+      select: { userId: true },
+    });
+    if (enrollment === null || enrollment.userId !== actor.id) {
+      throw new NotFoundException('Unknown enrollment');
+    }
+
+    const attempt = await this.prisma.attempt.findUnique({ where: { enrollmentId }, select: { id: true } });
+    if (attempt === null) {
+      return { attempt: null };
+    }
+
+    return { attempt: await this.state(actor, attempt.id) };
+  }
+
   async submit(
     actor: AuthenticatedUser,
     attemptId: string,

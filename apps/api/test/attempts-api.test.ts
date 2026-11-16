@@ -601,6 +601,99 @@ describe('the attempt API over HTTP', () => {
   });
 
   // -------------------------------------------------------------------------
+  // For enrollment: the entry page's state read
+  // -------------------------------------------------------------------------
+
+  it('answers the enrollment’s attempt as null before a start and its state after, without the paper', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+
+    const before = await call('GET', `/v1/enrollments/${enrollmentId}/attempt`, student.token);
+    expect(before.statusCode, before.body).toBe(200);
+    expect(before.json()).toEqual({ attempt: null });
+
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+
+    const after = await call('GET', `/v1/enrollments/${enrollmentId}/attempt`, student.token);
+    expect(after.statusCode, after.body).toBe(200);
+
+    const body = after.json() as { attempt: AttemptState };
+    expect(Object.keys(body)).toEqual(['attempt']);
+    expect(body.attempt.attemptId).toBe(attemptId);
+    expect(Object.keys(body.attempt).sort()).toEqual(
+      ['attemptId', 'deadlineAt', 'remainingSeconds', 'serverNow', 'startedAt', 'status', 'submitSource', 'submittedAt'].sort(),
+    );
+    expect(body.attempt.status).toBe('IN_PROGRESS');
+    expect(body.attempt.remainingSeconds).toBeGreaterThan(0);
+    expectNoAnswerKey(body);
+    expect(after.body).not.toContain('questions');
+    expect(after.body).not.toContain('Seven has no divisors');
+  });
+
+  it('reads an ended attempt as ended, and carries no result data', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+    const first = paper.questions[0];
+
+    const submitted = await submit(attemptId, [
+      { questionId: first?.id ?? '', chosenOptionId: first?.correctOptionId ?? '' },
+    ]);
+    expect(submitted.statusCode, submitted.body).toBe(200);
+
+    const read = await call('GET', `/v1/enrollments/${enrollmentId}/attempt`, student.token);
+    expect(read.statusCode, read.body).toBe(200);
+
+    const body = read.json() as { attempt: AttemptState };
+    expect(body.attempt.attemptId).toBe(attemptId);
+    expect(body.attempt.status).toBe('SUBMITTED');
+    expect(body.attempt.submitSource).toBe('STUDENT');
+    expectNoAnswerKey(body);
+    expect(read.body).not.toContain('score');
+    expect(read.body).not.toContain('questions');
+  });
+
+  it('answers not found for another student’s enrollment, an unknown one and a suspended account', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+
+    const theirs = await call('GET', `/v1/enrollments/${enrollmentId}/attempt`, otherStudent.token);
+    expect(theirs.statusCode).toBe(404);
+    expect(theirs.json().message).toMatch(/Unknown enrollment/);
+
+    const unknown = await call('GET', `/v1/enrollments/${randomUUID()}/attempt`, student.token);
+    expect(unknown.statusCode).toBe(404);
+    expect(unknown.json().message).toMatch(/Unknown enrollment/);
+
+    const anonymous = await call('GET', `/v1/enrollments/${enrollmentId}/attempt`, null);
+    expect(anonymous.statusCode).toBe(401);
+
+    const suspended = await makePerson('USER', [], null);
+    const suspendedEnrollment = await newEnrollment(paper, suspended);
+    await db.client.user.update({ where: { id: suspended.id }, data: { status: 'SUSPENDED' } });
+    const onSuspended = await call('GET', `/v1/enrollments/${suspendedEnrollment}/attempt`, suspended.token);
+    expect(onSuspended.statusCode).toBe(401);
+
+    const withUserId = await call(
+      'GET',
+      `/v1/enrollments/${enrollmentId}/attempt?userId=${student.id}`,
+      student.token,
+    );
+    expect(withUserId.statusCode).toBe(400);
+    expect(withUserId.json().message).toMatch(/userId is never accepted/);
+
+    const badId = await call('GET', '/v1/enrollments/not-a-uuid/attempt', student.token);
+    expect(badId.statusCode).toBe(400);
+
+    // No refusal created an attempt or moved the enrollment.
+    expect(await db.client.attempt.count({ where: { enrollmentId } })).toBe(0);
+    const row = await db.client.enrollment.findUniqueOrThrow({ where: { id: enrollmentId }, select: { status: true } });
+    expect(row.status).toBe('OPEN');
+  });
+
+  // -------------------------------------------------------------------------
   // Submit
   // -------------------------------------------------------------------------
 
