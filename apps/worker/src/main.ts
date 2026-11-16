@@ -3,6 +3,7 @@ import { PrismaClient } from '@prisma/client';
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
 
+import { sweepExpiredAttempts } from './jobs/attempt-sweeper';
 import { drainCoinBulkJobs } from './jobs/coin-bulk';
 import { reconcileCoinWallets } from './jobs/coin-reconciliation';
 import { runMaintenanceJob } from './queues/dispatch';
@@ -80,6 +81,19 @@ async function main(): Promise<void> {
           coinReconciliation: {
             run: () =>
               reconcileCoinWallets({
+                apiUrl: process.env.INTERNAL_API_URL ?? 'http://api:3001',
+                secret: config.INTERNAL_API_SECRET,
+                log: (message, meta) => {
+                  // eslint-disable-next-line no-console
+                  console.log(message, meta ?? {});
+                },
+              }),
+          },
+          // Every 30 seconds: the API finalises each expired attempt through the same code the
+          // lazy reads use, so the sweeper never has a second finalisation path.
+          attemptSweeper: {
+            run: () =>
+              sweepExpiredAttempts({
                 apiUrl: process.env.INTERNAL_API_URL ?? 'http://api:3001',
                 secret: config.INTERNAL_API_SECRET,
                 log: (message, meta) => {
