@@ -640,3 +640,41 @@ tests will prove the output against the `results` table; A2 has no database code
 | Deterministic | `is deterministic` |
 | Output satisfies every A1 invariant | `produces a result that satisfies every results-table invariant` |
 | Property test against independent integer arithmetic | `agrees with exact integer arithmetic over generated versions` (60 generated versions, mulberry32 written in the spec, reordering changes nothing, a duplicate answer is refused) |
+
+
+
+## Phase 7, A2b (pushed, runs queued)
+
+**The builder refuses what a paper cannot score.** The owner's decision (0077): a test holds
+single-correct option questions only; the bank keeps its numerical questions for practice.
+
+- `apps/api/src/questions/single-correct.ts` — the one definition: `MCQ`, at least two options,
+  exactly one marked correct. Called at all three points that can place a question: `setQuestions`,
+  `submit` (which re-reads each question's *current* version, because a question can be edited
+  after it was placed) and inside the `publish` transaction, so nothing unscorable is ever frozen.
+- A refusal is **400** with `code: "question_not_single_correct"`, the `questionId`, and
+  `Question N (<id>) cannot be scored: <reason>` — never which option is correct and never the
+  numerical answer. It runs in the caller's transaction, so the previous list and the status are
+  untouched.
+- `apps/web/src/app/editor/tests/[id]/page.tsx` filters the picker to the same shape and says so;
+  the API stays the authority.
+- `scoreAttempt` still refuses a non-`MCQ` paper — defence in depth, not the guard.
+
+**What this session could find about existing data:** nothing, from the code and the fixtures.
+The bank's validation and the deferred `question_options_answer_key` trigger make an MCQ with
+fewer than two, none or several correct options unpublishable, so the only affected rows would be
+papers holding a `NUMERICAL` question; every repository fixture builds MCQ papers only. The
+read-only query that would find them is in decision 0077, and it has not been run against a
+production database from this session. If one exists, archive the paper and rebuild it.
+
+Proof: `apps/api/src/questions/single-correct.spec.ts` (the four reasons, and no message names an
+option), `apps/api/test/tests-builder.test.ts` (a published numerical question refused when the
+list is set with the previous list intact; submit and publish refusing after a placed question is
+edited into a numerical one, with status and published versions untouched; a valid paper still
+building, submitting and publishing), and one Playwright check in `e2e/test-builder.spec.ts` that
+the picker does not offer the fixture's numerical question while it does offer a single-correct
+one.
+
+**Not verified here:** this session cannot run the toolchain or Docker, so lint, typecheck, the
+unit and database suites and the e2e spec are unrun until the runs on the pushed commits are read;
+A2b stays `[ ]` in `docs/NEXT-TASKS.md`.

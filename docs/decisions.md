@@ -2166,3 +2166,81 @@ the output itself.
 The tests are `apps/api/src/attempts/scoring.spec.ts`, in the unit job. No database-job test is
 added in this unit, because the insert this output feeds is A3's transaction; A3's tests will
 prove it against the table.
+
+
+
+## 0077 — Phase 7, A2b: a test paper holds only single-correct questions
+
+**Decided by the owner: tests contain single-correct (option) questions only, and the builder
+must refuse numerical-answer questions.** This closes the open item recorded in 0075 and 0076.
+The question bank is unchanged: a `NUMERICAL` question stays valid there for practice, and only
+a *test* refuses one.
+
+**One definition, in one place.** `apps/api/src/questions/single-correct.ts` defines
+"single-correct": the option-based single-answer type (`MCQ`), at least two options, and exactly
+one option marked correct. The builder calls it at the three points that can put a question on a
+paper — setting the list, submitting the draft, and publishing inside the publishing
+transaction — so no path can carry an unscorable question into a frozen version. The reason the
+last two exist as well as the first is that a question can be edited after it is placed: an
+editor's `PATCH /v1/questions/:id` opens a new draft version of that question, and the paper
+still points at the question.
+
+**The refusal is a code, an id and a reason, never a key.** It answers **400** with
+`code: "question_not_single_correct"`, the `questionId`, and a message of the form
+`Question 3 (<id>) cannot be scored: it is not a single-answer option question` (or "fewer than
+two options", "no correct option", "more than one correct option"). It never says which option is
+correct, and it never repeats the numerical answer. A refusal happens inside the caller's
+transaction, so the previous question list and the test's status are left exactly as they were.
+
+**Why the other three states are unreachable in practice.** The database's deferred
+`question_options_answer_key` trigger already refuses to commit an MCQ that has fewer than two
+options, no correct option or several, and `questions/service` refuses the same on publish. So
+the only non-single-correct question that can exist as a published question is a `NUMERICAL`
+one; the other three reasons are still checked, by the same helper, so the builder cannot be the
+weak link if that database rule ever changes. They are proven by
+`apps/api/src/questions/single-correct.spec.ts`.
+
+**The picker agrees with the API.** The builder page filters the candidates to the same shape,
+using the `questionType` and option flags its list already returns (no new API field, and no
+option body beyond the flags), and says on the page that only single-correct option questions
+can be added. This is a convenience, not the guarantee: the API is the authority.
+
+**Scoring still refuses them, as defence in depth.** `scoreAttempt` refuses a version containing
+a non-`MCQ` question and every other shape the helper refuses (0076), so a paper that somehow
+escaped the builder cannot be scored wrongly.
+
+### The read-only check for papers that already exist
+
+No migration is added; nothing existing is mutated. Run this against a copy of production to
+find any draft, submitted or published paper whose current question versions are not
+single-correct:
+
+```sql
+SELECT DISTINCT
+    t.id AS test_id, t.status AS test_status, tv.version AS test_version,
+    tv.published_at, q.id AS question_id, q.current_version AS question_version,
+    qv.question_type
+FROM tests t
+JOIN test_versions tv ON tv.test_id = t.id
+JOIN test_questions tq ON tq.test_version_id = tv.id
+JOIN questions q ON q.id = tq.question_id
+JOIN question_versions qv ON qv.question_id = q.id AND qv.version = q.current_version
+LEFT JOIN question_options qo ON qo.question_version_id = qv.id
+WHERE t.status IN ('DRAFT', 'SUBMITTED', 'PUBLISHED')
+GROUP BY t.id, t.status, tv.version, tv.published_at, q.id, q.current_version, qv.question_type
+HAVING qv.question_type <> 'MCQ'
+    OR count(qo.id) < 2
+    OR count(*) FILTER (WHERE qo.is_correct) <> 1;
+```
+
+**What this session could find:** from the code and its fixtures, nothing. The question bank's
+own validation and the deferred trigger make an MCQ with fewer than two, none or several
+correct options impossible to publish, so the only rows this can return are papers holding a
+`NUMERICAL` question; the repository's fixtures (`apps/api/test/tests-builder.test.ts`,
+`apps/api/test/attempts-model.test.ts`, `e2e/tests-fixture.ts`) build only MCQ papers and would
+return none. This session has no access to a production database, so the query has not been run
+there.
+
+**If production does have such a paper:** archive it and rebuild it. Archiving is the
+non-destructive path (its enrollments stay), a published version cannot be rewritten, and a
+revision published from the builder cannot carry the question any more.
