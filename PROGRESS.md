@@ -928,3 +928,16 @@ Nothing in A4 has been compiled or run in this session: no `pnpm lint`, `pnpm ty
 `pnpm test:unit`, `pnpm test:db` or `pnpm test:e2e`, and no Docker for the database and browser
 suites. The claim above is what the code and the specs say, not a green run; the CI jobs on the
 pushed commit are what will decide, and the queue item stays `[ ]` until those runs are read.
+
+
+
+### Known flake, not A4
+
+`e2e/catalog.spec.ts:237` (`an editor can author in their own catalog but not reach the admin ones`)
+failed once on `fbc6bde373f8caf67723616b56ed221ff42a1079` and passed on retry: `page.fill:
+Test timeout of 30000ms exceeded`, waiting for `locator('input[name="fullName"]')` after
+`page.goto('/admin/users/new')` (job 133204755164). The page is a plain server-rendered form
+(`apps/web/src/app/admin/users/new/page.tsx:22-48`) and that test has no timeout of its own while it
+registers an admin, signs in and navigates, so the cause is not visible by reading. It is recorded
+here, not fixed, because a fix would be a guess; the next session can give it an explicit bounded
+timeout if the trace shows the budget being eaten by the setup rather than by a missing form.
