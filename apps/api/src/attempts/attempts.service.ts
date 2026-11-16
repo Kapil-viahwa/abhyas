@@ -35,6 +35,9 @@ export interface AttemptStartView extends AttemptStateView {
 
 export interface AttemptResultView {
   readonly attemptId: string;
+  /** The paper the attempt was taken on, so the result page can offer a retake. */
+  readonly testId: string | null;
+  readonly testTitle: string | null;
   readonly status: AttemptStatus;
   readonly submitSource: string | null;
   readonly submittedAt: string | null;
@@ -47,6 +50,25 @@ export interface AttemptResultView {
   readonly totalMarks: string;
   readonly accuracy: string;
   readonly review: readonly ReviewQuestionView[];
+}
+
+/**
+ * The submit response: the result's summary without the review. A submit is not a place the
+ * answer key leaves the server — `GET /v1/attempts/:id/result` is the only one (decision 0081).
+ */
+export interface AttemptSubmitView {
+  readonly attemptId: string;
+  readonly status: AttemptStatus;
+  readonly submitSource: string | null;
+  readonly submittedAt: string | null;
+  readonly score: string;
+  readonly correctCount: number;
+  readonly wrongCount: number;
+  readonly unattemptedCount: number;
+  readonly attemptedCount: number;
+  readonly totalQuestions: number;
+  readonly totalMarks: string;
+  readonly accuracy: string;
 }
 
 export interface AttemptSweepResult {
@@ -262,12 +284,12 @@ export class AttemptsService {
     attemptId: string,
     answers: readonly SubmitAnswerInput[],
     meta: RequestMetadata = {},
-  ): Promise<AttemptResultView> {
+  ): Promise<AttemptSubmitView> {
     const outcome = await this.runScoringTransaction(async (tx) => {
       const attempt = await this.lockAttempt(tx, actor, attemptId);
 
       if (attempt.status !== 'IN_PROGRESS') {
-        return { kind: 'replayed' as const, view: await this.resultView(tx, attempt) };
+        return { kind: 'replayed' as const, view: await this.submitView(tx, attempt) };
       }
 
       await this.lockEnrollmentRow(tx, attempt.enrollment_id);
@@ -322,7 +344,7 @@ export class AttemptsService {
       });
 
       const ended_attempt = await this.reloadAttempt(tx, attemptId);
-      return { kind: 'submitted' as const, view: await this.resultView(tx, ended_attempt) };
+      return { kind: 'submitted' as const, view: await this.submitView(tx, ended_attempt) };
     });
 
     if (outcome.kind === 'expired') {
@@ -551,6 +573,36 @@ export class AttemptsService {
     });
   }
 
+  /**
+   * The submit response's shape: the summary the result page shows, and no review. Reading the
+   * result row directly means the paper is never loaded for a submit, so the key cannot reach a
+   * submit response even by accident (decision 0081).
+   */
+  private async submitView(tx: Prisma.TransactionClient, attempt: LockedAttemptRow): Promise<AttemptSubmitView> {
+    const result = await tx.result.findUnique({ where: { attemptId: attempt.id } });
+    if (result === null) {
+      throw new ConflictException({
+        code: 'attempt_in_progress',
+        message: 'This attempt has not ended yet',
+      });
+    }
+
+    return {
+      attemptId: attempt.id,
+      status: attempt.status as AttemptStatus,
+      submitSource: attempt.submit_source,
+      submittedAt: attempt.submitted_at?.toISOString() ?? null,
+      score: formatDecimal(result.score, 2),
+      correctCount: result.correctCount,
+      wrongCount: result.wrongCount,
+      unattemptedCount: result.unattemptedCount,
+      attemptedCount: result.attemptedCount,
+      totalQuestions: result.totalQuestions,
+      totalMarks: formatDecimal(result.totalMarks, 2),
+      accuracy: formatDecimal(result.accuracy, 4),
+    };
+  }
+
   private async resultView(tx: Prisma.TransactionClient, attempt: LockedAttemptRow): Promise<AttemptResultView> {
     const result = await tx.result.findUnique({ where: { attemptId: attempt.id } });
     if (result === null) {
@@ -568,8 +620,18 @@ export class AttemptsService {
 
     const paper = await this.loadPaper(tx, attempt.test_version_id);
 
+    // The paper the attempt was taken on, for the result page's retake link. The review's
+    // question list and marks are the attempt's own frozen version; a later edit to a question
+    // opens a new version and never changes this paper's list.
+    const enrollment = await tx.enrollment.findUnique({
+      where: { id: attempt.enrollment_id },
+      select: { testId: true, test: { select: { title: true } } },
+    });
+
     return {
       attemptId: attempt.id,
+      testId: enrollment?.testId ?? null,
+      testTitle: enrollment?.test.title ?? null,
       status: attempt.status as AttemptStatus,
       submitSource: attempt.submit_source,
       submittedAt: attempt.submitted_at?.toISOString() ?? null,

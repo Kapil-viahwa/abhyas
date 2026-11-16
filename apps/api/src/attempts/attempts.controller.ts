@@ -11,7 +11,7 @@ import {
 import { Authenticated, CurrentUser, type AuthenticatedUser } from '../auth/access';
 import { requestMeta, type RequestLike } from '../auth/request';
 import { parseUuid } from '../auth/validation';
-import { AttemptsService, type AttemptResultView, type AttemptStartView, type AttemptStateView } from './attempts.service';
+import { AttemptsService, type AttemptResultView, type AttemptStartView, type AttemptStateView, type AttemptSubmitView } from './attempts.service';
 import { parseAttemptQuery, parseAttemptStartBody, parseSubmitBody } from './attempts.validation';
 
 /**
@@ -79,8 +79,8 @@ export class AttemptsController {
   @Authenticated()
   @Post('attempts/:id/submit')
   @HttpCode(200)
-  @ApiOperation({ summary: 'Submit the answers once; a replay returns the first result unchanged' })
-  @ApiOkResponse({ description: 'The result of the attempt' })
+  @ApiOperation({ summary: 'Submit the answers once; a replay returns the first summary unchanged' })
+  @ApiOkResponse({ description: 'The result summary — never the review, which only the result read carries' })
   @ApiBadRequestResponse({ description: 'An answer, a question or an option that is not this paper’s' })
   @ApiNotFoundResponse({ description: 'No such attempt, or it belongs to another student' })
   async submit(
@@ -89,7 +89,7 @@ export class AttemptsController {
     @Body() body: unknown,
     @Query() query: Record<string, string | string[] | undefined>,
     @Req() request: RequestLike,
-  ): Promise<AttemptResultView> {
+  ): Promise<AttemptSubmitView> {
     const attemptId = parseUuid(id, 'attempt id');
     parseAttemptQuery(query);
     const answers = parseSubmitBody(body);

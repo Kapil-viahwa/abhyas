@@ -95,6 +95,8 @@ interface AttemptState {
 
 interface AttemptResult {
   readonly attemptId: string;
+  readonly testId: string | null;
+  readonly testTitle: string | null;
   readonly status: string;
   readonly submitSource: string | null;
   readonly score: string;
@@ -112,6 +114,21 @@ interface AttemptResult {
     readonly explanationHtml: string | null;
     readonly options: Array<{ readonly id: string; readonly isCorrect: boolean; readonly isChosen: boolean }>;
   }>;
+}
+
+interface AttemptSubmit {
+  readonly attemptId: string;
+  readonly status: string;
+  readonly submitSource: string | null;
+  readonly submittedAt: string | null;
+  readonly score: string;
+  readonly correctCount: number;
+  readonly wrongCount: number;
+  readonly unattemptedCount: number;
+  readonly attemptedCount: number;
+  readonly totalQuestions: number;
+  readonly totalMarks: string;
+  readonly accuracy: string;
 }
 
 const KEY_NAMES = new Set(['iscorrect', 'is_correct', 'correct', 'numericalanswer', 'explanation', 'solution']);
@@ -745,7 +762,7 @@ describe('the attempt API over HTTP', () => {
     ]);
 
     expect(submitted.statusCode, submitted.body).toBe(200);
-    const body = submitted.json() as AttemptResult;
+    const body = submitted.json() as AttemptSubmit;
     // 2 - 0.5 = 1.50; one of three attempted; accuracy 1 / 2.
     expect(body.score).toBe('1.50');
     expect(body.correctCount).toBe(1);
@@ -758,12 +775,34 @@ describe('the attempt API over HTTP', () => {
     expect(body.status).toBe('SUBMITTED');
     expect(body.submitSource).toBe('STUDENT');
 
+    // The submit response is the summary only: the key leaves the server through the result read.
+    expect(Object.keys(body).sort()).toEqual(
+      [
+        'accuracy',
+        'attemptId',
+        'attemptedCount',
+        'correctCount',
+        'score',
+        'status',
+        'submitSource',
+        'submittedAt',
+        'totalMarks',
+        'totalQuestions',
+        'unattemptedCount',
+        'wrongCount',
+      ].sort(),
+    );
+    expectNoAnswerKey(body);
+
     const counts = await countsOf(attemptId);
     expect(counts).toEqual({ attempts: 1, answers: 2, results: 1, status: 'SUBMITTED', enrollmentStatus: 'COMPLETED' });
 
-    // The result is the one response that carries the review, the key and the explanation.
-    expect(body.review).toHaveLength(3);
-    const right = body.review.find((question) => question.questionId === first?.id);
+    // The result read is the one response that carries the review, the key and the explanation.
+    const ended = await result(attemptId);
+    expect(ended.statusCode, ended.body).toBe(200);
+    const review = (ended.json() as AttemptResult).review;
+    expect(review).toHaveLength(3);
+    const right = review.find((question) => question.questionId === first?.id);
     expect(right?.chosenOptionId).toBe(first?.correctOptionId);
     expect(right?.correctOptionId).toBe(first?.correctOptionId);
     expect(right?.explanationHtml).toContain('Seven');
@@ -976,5 +1015,126 @@ describe('the attempt API over HTTP', () => {
 
     const counts = await countsOf(attemptId);
     expect(counts.results).toBe(0);
+  });
+
+  it('returns the review of the attempt’s own frozen version, with an unattempted question marked', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+    const first = paper.questions[0];
+    const third = paper.questions[2];
+
+    const submitted = await submit(attemptId, [
+      { questionId: first?.id ?? '', chosenOptionId: first?.correctOptionId ?? '' },
+    ]);
+    expect(submitted.statusCode, submitted.body).toBe(200);
+
+    const read = await result(attemptId);
+    expect(read.statusCode, read.body).toBe(200);
+    const body = read.json() as AttemptResult;
+
+    // The paper the attempt was taken on, so the result page can offer a retake.
+    expect(body.testId).toBe(paper.testId);
+    expect(typeof body.testTitle).toBe('string');
+    expect((body.testTitle ?? '').length).toBeGreaterThan(0);
+
+    // The review is the attempt's own frozen version's question list, in its order: every
+    // question it placed, and no other. (Each question's content is resolved from that
+    // question's current version — the same source the start response and scoring use.)
+    const placed = await db.client.testQuestion.findMany({
+      where: { testVersionId: paper.versionId },
+      orderBy: { position: 'asc' },
+      select: { questionId: true, position: true },
+    });
+    expect(body.review.map((question) => question.questionId)).toEqual(placed.map((row) => row.questionId));
+    expect(body.review.map((question) => question.position)).toEqual(placed.map((row) => row.position));
+
+    const unanswered = body.review.find((question) => question.questionId === third?.id);
+    expect(unanswered?.chosenOptionId).toBeNull();
+    expect(unanswered?.options.some((option) => option.isChosen)).toBe(false);
+    expect(unanswered?.correctOptionId).not.toBeNull();
+    expect(unanswered?.explanationHtml).toContain('Seven');
+    expect(unanswered?.marks).toBe(MARKS);
+    expect(unanswered?.negativeMarks).toBe(NEGATIVE);
+  });
+
+  it('shows the key and the explanation for an auto-submitted attempt, with every question unattempted', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+
+    await backdate(attemptId, 10);
+
+    const read = await result(attemptId);
+    expect(read.statusCode, read.body).toBe(200);
+    const body = read.json() as AttemptResult;
+
+    expect(body.status).toBe('AUTO_SUBMITTED');
+    expect(body.score).toBe('0.00');
+    expect(body.totalMarks).toBe('6.00');
+    expect(body.attemptedCount).toBe(0);
+    expect(body.unattemptedCount).toBe(3);
+    expect(body.accuracy).toBe('0.0000');
+
+    // It has ended, so the key and the explanations are readable — every question unattempted.
+    expect(body.review).toHaveLength(3);
+    for (const question of body.review) {
+      expect(question.chosenOptionId).toBeNull();
+      expect(question.correctOptionId).not.toBeNull();
+      expect(question.options.some((option) => option.isCorrect)).toBe(true);
+      expect(question.options.some((option) => option.isChosen)).toBe(false);
+      expect(question.explanationHtml).toContain('Seven');
+    }
+  });
+
+  it('carries no key in the paper responses, and the same scan finds one in the result', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+    const first = paper.questions[0];
+
+    expectNoAnswerKey(started.json());
+    expectNoAnswerKey((await state(attemptId)).json());
+
+    const submitted = await submit(attemptId, [
+      { questionId: first?.id ?? '', chosenOptionId: first?.correctOptionId ?? '' },
+    ]);
+    expect(submitted.statusCode, submitted.body).toBe(200);
+    expectNoAnswerKey(submitted.json());
+
+    // The same recursive scan finds the key in the ended result, so it is proven able to detect it.
+    const ended = await result(attemptId);
+    expect(ended.statusCode, ended.body).toBe(200);
+    const names = keyNames(ended.json());
+    expect(names.has('iscorrect')).toBe(true);
+    expect(names.has('explanationhtml')).toBe(true);
+  });
+
+  it('answers a malformed attempt id on the result as a bad request', async () => {
+    const malformed = await call('GET', '/v1/attempts/not-a-uuid/result', student.token);
+    expect(malformed.statusCode).toBe(400);
+  });
+
+  it('gives one result and one row when two result reads arrive on an expired attempt', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+
+    await backdate(attemptId, 10);
+
+    const [first, second] = await Promise.all([result(attemptId), result(attemptId)]);
+    expect(first.statusCode, first.body).toBe(200);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(first.json()).toEqual(second.json());
+    expect((first.json() as AttemptResult).status).toBe('AUTO_SUBMITTED');
+
+    const counts = await countsOf(attemptId);
+    expect(counts.results).toBe(1);
+    expect(counts.status).toBe('AUTO_SUBMITTED');
+    expect(counts.enrollmentStatus).toBe('EXPIRED');
   });
 });
