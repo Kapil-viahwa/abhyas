@@ -581,7 +581,7 @@ Nineteen cases, one file, all passing in both runs.
 
 
 
-## Phase 7, A2 (pushed, runs queued)
+## Phase 7, A2 (done — both runs of `04f7fab` green)
 
 **The scoring function.** `apps/api/src/attempts/scoring.ts` — one exported function,
 `scoreAttempt(questions, answers)`, pure: no database, no Prisma, no clock, no randomness, no
@@ -617,5 +617,26 @@ that reordering the answers changes nothing, and that a duplicate answer is refu
 **No database test in this unit.** The insert this output feeds is A3's transaction, so A3's
 tests will prove the output against the `results` table; A2 has no database code to prove.
 
-**Not verified here:** this session cannot run the toolchain. The function and its tests are
-unrun until the runs on the pushed commits are read; A2 stays `[ ]` in `docs/NEXT-TASKS.md`.
+**Verified:** both nine-job runs of `04f7fabd4cd7d64fde45c65295f8e9e00d9e33c7` are green —
+[run 42440488533](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440488533) (unit job 128608475364) and [run 42440491591](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440491591) (unit job 128608485097) — eighteen green check results. Each `unit` job's log carries `✓ src/attempts/scoring.spec.ts (23 tests)` and `Tests 220 passed (220)`, and `lint` and `typecheck` are green in both runs.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| All correct | `scores every correct answer` |
+| All wrong, with negative marking | `subtracts the negative marks of every wrong answer` |
+| All unattempted gives score 0 and accuracy 0 | `scores nothing when nothing was attempted` |
+| An empty version is zero | `scores an empty version as zero` |
+| Mixed | `scores a mixed paper` |
+| Zero attempted never divides | `never divides by zero` |
+| Fractional marks exact in hundredths | `adds fractional marks and fractional negatives without drift`, `keeps tenths exact where binary floats drift` |
+| Marks that differ per question | `uses each question's own marks and negative marks` |
+| One question | `scores a single-question version` |
+| Accuracy rounded half up at four places | `rounds half up at the fourth decimal` (1/3, 2/3, 1/2, 1/6, 5/6, 1) |
+| Each refusal code | `refuses an answer for a question that is not in the paper` (`UNKNOWN_QUESTION`), `refuses two answers for the same question` (`DUPLICATE_ANSWER`), `refuses an option of another question` (`UNKNOWN_OPTION`), `refuses a question that is not single-correct` and `refuses a question with no single correct option` (`NOT_SINGLE_CORRECT`), `refuses a question that lists an option twice` (`INVALID_QUESTION`), `refuses negative, non-finite or over-precise marks` (`INVALID_MARKS`) |
+| The message never names the key | `names the question or option but never the answer key` |
+| Inputs unchanged | `leaves its inputs untouched` |
+| Deterministic | `is deterministic` |
+| Output satisfies every A1 invariant | `produces a result that satisfies every results-table invariant` |
+| Property test against independent integer arithmetic | `agrees with exact integer arithmetic over generated versions` (60 generated versions, mulberry32 written in the spec, reordering changes nothing, a duplicate answer is refused) |

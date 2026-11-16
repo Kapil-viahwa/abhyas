@@ -73,14 +73,29 @@ unit, because the database job runs the API against the schema. Proof: a databas
 refused, a result immutable once written, and two simultaneous inserts of the same attempt
 leaving exactly one. — Verified in both nine-job runs of `9ab5f08db7f6bccac50b0256a5185cab0d386c11`: [run 42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709) and [run 42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335), eighteen green check results between them. The tool that lists them merges the two runs into one row per job name, so the job ids are what separates them: `database` 128599236097 (2m04s) and 128599247640 (2m22s), both green, with the other eight jobs green in each run. The green job's readable log slice is Postgres and container output, so the vitest summary line is not re-quotable; the green `database` job, which runs `pnpm test:db` under `set -o pipefail`, is the proof that `apps/api/test/attempts-model.test.ts` ran in full and passed, and the same step applies the migrations, so `20270201000000_attempts` applied. Two red rounds on the way: `46fcc34` (the answer guard's join named `o.version_id`; the column is `question_version_id`), fixed in `60781c0`, and `60781c0` (a test regex required a space that Prisma 5.22's unique-violation message does not print), fixed in `9ab5f08`. The claim-by-claim table and both rounds are recorded in `PROGRESS.md`.
 
-[ ] A2 The scoring function. A pure function of (version, submitted answers): correct ×
+[x] A2 The scoring function. A pure function of (version, submitted answers): correct ×
 marks per question − wrong × negative marks per question, unattempted zero, `accuracy =
 correct ÷ attempted` with zero attempted giving zero, carrying marks as the version's decimals
 rather than floats. Unit tests: all correct, all wrong with negative marking, all unattempted,
 mixed, zero attempted, fractional marks, a question not in the version ignored or refused
 (state which), duplicate answers refused, and a property-style check that score equals
 `marks × correct − negative × wrong` over generated answer sets. No HTTP, no database: this is
-the only place marks are computed.
+the only place marks are computed. — Implemented in `apps/api/src/attempts/scoring.ts` (a refusal
+is chosen over ignoring, and `NUMERICAL` questions are refused), proved by
+`apps/api/src/attempts/scoring.spec.ts`, and recorded in decision 0076. — Verified in both
+nine-job runs of `04f7fabd4cd7d64fde45c65295f8e9e00d9e33c7`: [run 42440488533](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440488533) and [run 42440491591](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440491591), eighteen green check results between them. The `unit` jobs read
+`✓ src/attempts/scoring.spec.ts (23 tests)` and `Tests 220 passed (220)`, so all 23 scoring cases,
+the property test included, passed; `lint` and `typecheck` were green in both runs too.
+
+[ ] A2b The builder refuses numerical questions (owner's decision, 0077). `apps/api/src/questions/single-correct.ts`
+is the one definition of "single-correct" — the option-based single-answer type, at least two
+options, exactly one marked correct — used when a paper's question list is set, on submit and
+inside the publish transaction; a refusal carries `question_not_single_correct`, the question id
+and a sentence that never names the key. The builder's picker offers only such questions and
+says so. Proof: `apps/api/test/tests-builder.test.ts` (a numerical question refused on set,
+submit and publish, with the previous list and the status left intact, and a valid paper still
+building and publishing), `apps/api/src/questions/single-correct.spec.ts` for the four reasons,
+and one Playwright check that the picker does not offer the fixture's numerical question.
 
 [ ] A3 Attempt API and expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
 anywhere, an `OPEN` enrollment required, one start only, the deadline computed on the server,
