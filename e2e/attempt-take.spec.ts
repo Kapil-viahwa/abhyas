@@ -135,6 +135,53 @@ function head(lines: readonly string[], count: number): readonly string[] {
   return lines.length <= count ? lines : [...lines.slice(0, count), `... ${String(lines.length - count)} more`];
 }
 
+/** The fixture's explanation text: only an answer key or the review would carry it. */
+const EXPLANATION_TEXT = 'Alpha has no divisors';
+
+/**
+ * The shapes of an answer key and of the review body.
+ *
+ * A response body is JSON, so a key name is a marker. The rendered page is prose, where the bare
+ * word "correct" appears legitimately ("for a correct answer", the "Correct" result label), so the
+ * page scan uses these shapes and the explanation text instead of that word; the body scan also
+ * refuses a bare `"correct"` key.
+ */
+const LEAK_MARKERS = [
+  'iscorrect',
+  'is_correct',
+  'correctoptionid',
+  'correct_option_id',
+  'numericalanswer',
+  'numerical_answer',
+  'explanationhtml',
+  'solution',
+];
+
+/** The markers a response body must not carry. */
+function leakedKeys(body: string): string[] {
+  const lower = body.toLowerCase();
+  const found = LEAK_MARKERS.filter((marker) => lower.includes(marker));
+
+  if (body.replace(/\s+/g, '').includes('"correct":')) {
+    found.push('a "correct" key');
+  }
+
+  return found;
+}
+
+/** The fixture texts that only an answer key or a review would carry. */
+function leakedText(body: string): string[] {
+  return body.includes(EXPLANATION_TEXT) ? ['the explanation text'] : [];
+}
+
+/** The page as it is right now, read page-scoped and bounded like every other step. */
+async function readPage(page: Page): Promise<{ readonly text: string; readonly html: string }> {
+  return step('read the page', async () => ({
+    text: await page.evaluate(() => document.body.innerText),
+    html: await page.content(),
+  }));
+}
+
 /** Prints what the page was doing when the test failed. Never a body, a cookie or a header. */
 async function dumpPage(page: Page): Promise<void> {
   console.log(`${STEP_LOG} --- FAILURE DUMP ---`);
@@ -316,17 +363,32 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.getByTestId('attempt-instructions')).toContainText('4.00 in total');
     });
 
-    // Every call this screen makes is kept — registered before the click that makes them — so
-    // the bodies can be checked for an answer key and the calls proved to have happened.
-    const seen: string[] = [];
-    const bodies: Array<Promise<string>> = [];
-    page.on('response', (response) => {
-      const path = new URL(response.url()).pathname;
-      if (path.startsWith('/api/attempts/') || path.startsWith('/api/enrollments/')) {
-        seen.push(`${path} ${String(response.status())}`);
-        bodies.push(response.text().catch(() => ''));
-      }
+    // The scan has to be capable of failing: plant a key name and the fixture's explanation and
+    // require the very scanners the checks below use to find them.
+    await step('the key scan can fail', async () => {
+      expect(leakedKeys('{"isCorrect":true}')).toContain('iscorrect');
+      expect(leakedKeys('{"correct":0}')).toContain('a "correct" key');
+      expect(leakedText(`<p>${EXPLANATION_TEXT}</p>`)).toContain('the explanation text');
     });
+
+    await step('the instructions carry no key', async () => {
+      const view = await readPage(page);
+      expect(leakedKeys(view.html)).toEqual([]);
+      expect(leakedText(view.html)).toEqual([]);
+    });
+
+    // The wait is created before the click that triggers it, and the body is read immediately
+    // after: a body read later, once the page has navigated away from that response, never
+    // settles — which is what made this spec hang silently for three rounds.
+    const startWait = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/attempts/start' &&
+        response.request().method() === 'POST',
+      { timeout: 30_000 },
+    );
+    // Handled even if the test fails before reaching the await, so its timeout cannot surface as
+    // an unhandled rejection in the worker.
+    void startWait.catch(() => undefined);
 
     // Two clicks in the same task: the first sets the ref guard, the second must do nothing.
     //
@@ -345,6 +407,9 @@ test.describe.serial('taking an attempt', () => {
       });
     });
 
+    const startResponse = await step('read the start response', async () => startWait, 30_000);
+    const startBody = await step('read the start body', async () => startResponse.text(), 15_000);
+
     await step('paper shown', async () => {
       await expect(page.getByTestId('attempt-question')).toBeVisible();
       await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
@@ -354,9 +419,11 @@ test.describe.serial('taking an attempt', () => {
       expect(await step('read the attempt count', async () => readAttemptsForEnrollment(enrollmentA))).toBe(1),
     );
 
-    await step('no answer key on the page', async () => {
-      await expect(page.locator('body')).not.toContainText('Alpha has no divisors');
-      expect(await page.content()).not.toContain('Alpha has no divisors');
+    // The stem is on the paper, as it must be, so this checks the key and the explanation only.
+    await step('the paper carries no key', async () => {
+      const view = await readPage(page);
+      expect(leakedKeys(view.html)).toEqual([]);
+      expect(leakedText(view.html)).toEqual([]);
     });
 
     await step('answer the first question', async () => {
@@ -375,6 +442,20 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.getByTestId('attempt-question')).toHaveText('Question 1');
     });
 
+    // The page re-syncs the state right before it submits, so both waits are created before the
+    // confirm click that lets them happen, and both bodies are read immediately after.
+    const stateWait = page.waitForResponse(
+      (response) => new URL(response.url()).pathname.endsWith('/state'),
+      { timeout: 30_000 },
+    );
+    const submitWait = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname.endsWith('/submit') && response.request().method() === 'POST',
+      { timeout: 30_000 },
+    );
+    void stateWait.catch(() => undefined);
+    void submitWait.catch(() => undefined);
+
     await step('submit through the confirm step', async () => {
       await expect(page.getByTestId('submit-attempt')).toBeVisible();
       await page.getByTestId('submit-attempt').click();
@@ -383,6 +464,11 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.getByTestId('attempt-result')).toBeVisible();
       await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}$/);
     });
+
+    const stateResponse = await step('read the state response', async () => stateWait, 30_000);
+    const stateBody = await step('read the state body', async () => stateResponse.text(), 15_000);
+    const submitResponse = await step('read the submit response', async () => submitWait, 30_000);
+    const submitBody = await step('read the submit body', async () => submitResponse.text(), 15_000);
 
     await step('result is exact', async () => {
       // 2.00 of 4.00 marks, one right, none wrong, one unattempted, 1 ÷ 1 accuracy.
@@ -395,25 +481,42 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.getByTestId('result-status')).toContainText('Submitted by you');
     });
 
+    // A4's result page is minimal: no question, no key, no explanation.
     await step('result page is minimal', async () => {
-      await expect(page.locator('body')).not.toContainText(alphaText);
-      await expect(page.locator('body')).not.toContainText('Alpha has no divisors');
+      const view = await readPage(page);
+      expect(view.text).not.toContain(alphaText);
+      expect(view.text).not.toContain(betaText);
+      expect(view.html).not.toContain(alphaText);
+      expect(view.html).not.toContain(betaText);
+      expect(leakedKeys(view.html)).toEqual([]);
+      expect(leakedText(view.html)).toEqual([]);
     });
 
     attemptA = new URL(page.url()).pathname.split('/').at(-1) ?? '';
     expect(attemptA).not.toBe('');
 
     await step('the capture is real and carries no key', async () => {
-      // The capture is real: the start, the state re-sync and the submit were all seen.
-      expect(seen.some((entry) => entry.startsWith('/api/attempts/start 201'))).toBe(true);
-      expect(seen.some((entry) => entry.endsWith('/state 200'))).toBe(true);
-      expect(seen.some((entry) => entry.includes('/submit 200'))).toBe(true);
-      expect(bodies.length).toBeGreaterThanOrEqual(3);
+      // An empty or unexpected capture must never pass: every endpoint is asserted by its status.
+      expect([200, 201]).toContain(startResponse.status());
+      expect(stateResponse.status()).toBe(200);
+      expect(submitResponse.status()).toBe(200);
 
-      for (const body of bodies) {
-        const text = await step('read a captured response', async () => body);
-        expect(text).not.toMatch(/isCorrect|is_correct|correctOptionId|explanation|solution/i);
-        expect(text).not.toContain('Alpha has no divisors');
+      const captured = [
+        { endpoint: 'POST /api/attempts/start', body: startBody },
+        { endpoint: 'GET /api/attempts/:id/state', body: stateBody },
+        { endpoint: 'POST /api/attempts/:id/submit', body: submitBody },
+      ];
+
+      for (const entry of captured) {
+        // Only the endpoint and the marker names are ever printed, never the body.
+        expect({ endpoint: entry.endpoint, leaked: leakedKeys(entry.body) }).toEqual({
+          endpoint: entry.endpoint,
+          leaked: [],
+        });
+        expect({ endpoint: entry.endpoint, leaked: leakedText(entry.body) }).toEqual({
+          endpoint: entry.endpoint,
+          leaked: [],
+        });
       }
     });
   });
@@ -457,10 +560,13 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.locator('body')).not.toContainText(alphaText);
       await expect(page.locator('body')).not.toContainText(betaText);
 
-      const html = await page.content();
-      expect(html).not.toContain(alphaText);
-      expect(html).not.toContain(betaText);
-      expect(html).not.toContain('Alpha has no divisors');
+      const view = await readPage(page);
+      expect(view.text).not.toContain(alphaText);
+      expect(view.text).not.toContain(betaText);
+      expect(view.html).not.toContain(alphaText);
+      expect(view.html).not.toContain(betaText);
+      expect(leakedKeys(view.html)).toEqual([]);
+      expect(leakedText(view.html)).toEqual([]);
     });
   });
 
@@ -493,9 +599,12 @@ test.describe.serial('taking an attempt', () => {
     await step(
       'the page auto-submits at the deadline',
       async () => {
-        await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 150_000 });
+        // The attempt lasts one minute; the page's own submit lands at the deadline and the grace
+        // window (5 s) is what keeps the sweeper out of it, so this must end as the student's own
+        // submission with the answers it held.
+        await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 85_000 });
       },
-      170_000,
+      90_000,
     );
 
     await step('result carries the auto-submitted answers', async () => {
@@ -513,51 +622,63 @@ test.describe.serial('taking an attempt', () => {
   test('a submit that arrives after the deadline is refused and the result says so', async ({ page }) => {
     test.setTimeout(120_000);
 
-    const email = `e2e-attempt-late-${marker}@example.com`;
-    await step('enroll and open the entry page', async () =>
-      enrollAndOpen(page, email, 'Attempt Late Student', { testId: longTest, title: longTitle }),
-    );
+    // Grace is pinned to zero for this test, and restored whatever happens, so a failure here
+    // cannot shorten another spec's window in the shared database.
+    setCoinSetting('attempt_submit_grace_seconds', 0);
 
-    await step('start and answer', async () => {
-      await expect(page.getByTestId('start-attempt')).toBeVisible();
-      await page.getByTestId('start-attempt').click();
-      await expect(page.getByTestId('attempt-question')).toBeVisible();
-      await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
-      await page.getByTestId('attempt-option').nth(1).click();
-    });
+    try {
+      const email = `e2e-attempt-late-${marker}@example.com`;
+      await step('enroll and open the entry page', async () =>
+        enrollAndOpen(page, email, 'Attempt Late Student', { testId: longTest, title: longTitle }),
+      );
 
-    // The request is held until the server's own clock has passed the deadline, then released.
-    // The window in which the worker's sweeper could finalise the attempt first is the gap
-    // between the commit below and the request reaching the API: a few milliseconds. If the
-    // sweeper did win, the student's late answers are still never scored — but the page would
-    // then land on the plain result, so the spec asserts the message it must show.
-    await step('hold the submit until the deadline has passed', async () => {
-      await page.route('**/api/attempts/*/submit', async (route) => {
-        const match = /\/api\/attempts\/([0-9a-f-]{36})\/submit$/.exec(new URL(route.request().url()).pathname);
-        const id = match?.[1] ?? '';
-        expect(id).not.toBe('');
-
-        await step('expire the attempt in the database', async () => {
-          expireAttempt(id);
-        });
-        await route.continue();
+      await step('start and answer', async () => {
+        await expect(page.getByTestId('start-attempt')).toBeVisible();
+        await page.getByTestId('start-attempt').click();
+        await expect(page.getByTestId('attempt-question')).toBeVisible();
+        await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
+        await page.getByTestId('attempt-option').nth(1).click();
       });
-    });
 
-    await step('submit after the deadline', async () => {
-      await expect(page.getByTestId('submit-attempt')).toBeVisible();
-      await page.getByTestId('submit-attempt').click();
-      await expect(page.getByTestId('confirm-submit')).toBeVisible();
-      await page.getByTestId('confirm-submit').click();
-      await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 30_000 });
-      await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}\?late=1$/);
-    });
+      // The request is held until the server's own clock has passed the deadline, then released.
+      // The window in which the worker's sweeper could finalise the attempt first is the gap
+      // between the commit below and the request reaching the API: a few milliseconds. If the
+      // sweeper did win, the student's late answers are still never scored — but the page would
+      // then land on the plain result, so the spec asserts the message it must show.
+      await step('hold the submit until the deadline has passed', async () => {
+        await page.route('**/api/attempts/*/submit', async (route) => {
+          try {
+            const match = /\/api\/attempts\/([0-9a-f-]{36})\/submit$/.exec(new URL(route.request().url()).pathname);
+            const id = match?.[1] ?? '';
+            expect(id).not.toBe('');
 
-    await step('result says the time ran out and nothing was scored', async () => {
-      await expect(page.getByTestId('result-late')).toContainText('Time ran out before your answers arrived');
-      await expect(page.getByTestId('result-score')).toHaveText('0.00 of 4.00');
-      await expect(page.getByTestId('result-status')).toContainText('Ended automatically at the deadline');
-    });
+            await step('expire the attempt in the database', async () => {
+              expireAttempt(id);
+            });
+          } finally {
+            // A held route that is never released hangs the page, so it is always released.
+            await route.continue();
+          }
+        });
+      });
+
+      await step('submit after the deadline', async () => {
+        await expect(page.getByTestId('submit-attempt')).toBeVisible();
+        await page.getByTestId('submit-attempt').click();
+        await expect(page.getByTestId('confirm-submit')).toBeVisible();
+        await page.getByTestId('confirm-submit').click();
+        await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 30_000 });
+        await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}\?late=1$/);
+      });
+
+      await step('result says the time ran out and nothing was scored', async () => {
+        await expect(page.getByTestId('result-late')).toContainText('Time ran out before your answers arrived');
+        await expect(page.getByTestId('result-score')).toHaveText('0.00 of 4.00');
+        await expect(page.getByTestId('result-status')).toContainText('Ended automatically at the deadline');
+      });
+    } finally {
+      setCoinSetting('attempt_submit_grace_seconds', 5);
+    }
   });
 
   test('another student’s attempt, an unknown one and a closed one are all not available', async ({ page, browser }) => {
