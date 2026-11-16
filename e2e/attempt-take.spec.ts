@@ -17,8 +17,12 @@ import { publishSeededPaper, seedAuthor, seedBuilderFixture } from './tests-fixt
  * every email and title carries a marker unique to the run, and no test leaves an expired
  * `IN_PROGRESS` attempt behind — the worker's sweeper finalises any it finds.
  *
- * Every locator action is bounded by `actionTimeout`, so an element that never appears is a
- * fifteen-second failure that names it, rather than a step that quietly eats the test's budget.
+ * Two rounds of guessing at a silent "Test timeout of 120000ms exceeded" did not fix anything, so
+ * every phase and every await that has no timeout of its own now runs through `step`, which logs
+ * when it starts, when it ends and how long it took, and fails with "STEP <name> exceeded <ms>"
+ * rather than leaving the test to time out with no message. On failure `afterEach` prints the URL,
+ * the visible text, the page errors, the console errors, the failed requests and every response
+ * it saw (method, path, status — never a body) into the job log.
  *
  * The paper has two questions, so every expected number below is arithmetic anyone can check:
  * each question is worth 2.00 and a wrong answer costs 0.50.
@@ -40,11 +44,127 @@ const shortTitle = `Taking minute paper ${marker}`;
 const alphaText = `Taking alpha question ${marker}`;
 const betaText = `Taking beta question ${marker}`;
 
+const STEP_LOG = '[attempt-take]';
+const DEFAULT_STEP_LIMIT_MS = 20_000;
+
 let longTest = '';
 let shortTest = '';
 
 let enrollmentA = '';
 let attemptA = '';
+
+type Timer = ReturnType<typeof setTimeout>;
+
+/**
+ * Runs one phase under a ceiling, and says so in the job log.
+ *
+ * A test timeout arrives with no assertion message, so a phase that never settles is invisible.
+ * This races the phase against a timer: the log names the phase that started and never finished
+ * even when Playwright's own timeout is what eventually ends the run.
+ */
+async function step<T>(name: string, run: () => Promise<T>, limitMs: number = DEFAULT_STEP_LIMIT_MS): Promise<T> {
+  const started = Date.now();
+  console.log(`${STEP_LOG} STEP ${name} start`);
+
+  let timer: Timer | undefined;
+  try {
+    const result = await Promise.race<T>([
+      run(),
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${STEP_LOG} STEP ${name} exceeded ${String(limitMs)}ms`));
+        }, limitMs);
+      }),
+    ]);
+
+    console.log(`${STEP_LOG} STEP ${name} done in ${String(Date.now() - started)}ms`);
+    return result;
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+interface PageCapture {
+  readonly pageErrors: string[];
+  readonly consoleErrors: string[];
+  readonly failedRequests: string[];
+  readonly responses: string[];
+}
+
+/** What the failure dump prints; filled per test, one worker so there is one at a time. */
+let capture: PageCapture = { pageErrors: [], consoleErrors: [], failedRequests: [], responses: [] };
+
+function pathOf(value: string): string {
+  try {
+    return new URL(value).pathname;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Collects what the browser did, without any body, cookie or header: page errors, console errors
+ * and warnings, failed requests, and each response's method, path and status.
+ */
+function capturePage(page: Page): PageCapture {
+  const seen: PageCapture = { pageErrors: [], consoleErrors: [], failedRequests: [], responses: [] };
+
+  page.on('pageerror', (error) => {
+    seen.pageErrors.push(error.message);
+  });
+  page.on('console', (message) => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      seen.consoleErrors.push(`${message.type()}: ${message.text()}`);
+    }
+  });
+  page.on('requestfailed', (request) => {
+    seen.failedRequests.push(
+      `${request.method()} ${pathOf(request.url())} ${request.failure()?.errorText ?? ''}`.trim(),
+    );
+  });
+  page.on('response', (response) => {
+    seen.responses.push(`${response.request().method()} ${pathOf(response.url())} ${String(response.status())}`);
+  });
+
+  return seen;
+}
+
+function head(lines: readonly string[], count: number): readonly string[] {
+  return lines.length <= count ? lines : [...lines.slice(0, count), `... ${String(lines.length - count)} more`];
+}
+
+/** Prints what the page was doing when the test failed. Never a body, a cookie or a header. */
+async function dumpPage(page: Page): Promise<void> {
+  console.log(`${STEP_LOG} --- FAILURE DUMP ---`);
+  console.log(`${STEP_LOG} url: ${page.url()}`);
+
+  let text = 'main thread unresponsive';
+  let timer: Timer | undefined;
+  try {
+    text = await Promise.race([
+      page.evaluate(() => document.body.innerText.slice(0, 1500)),
+      new Promise<string>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('main thread unresponsive'));
+        }, 5000);
+      }),
+    ]);
+  } catch {
+    text = 'main thread unresponsive';
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+  console.log(`${STEP_LOG} body: ${text}`);
+
+  console.log(`${STEP_LOG} page errors: ${JSON.stringify(head(capture.pageErrors, 20))}`);
+  console.log(`${STEP_LOG} console errors: ${JSON.stringify(head(capture.consoleErrors, 20))}`);
+  console.log(`${STEP_LOG} failed requests: ${JSON.stringify(head(capture.failedRequests, 40))}`);
+  console.log(`${STEP_LOG} responses: ${JSON.stringify(head(capture.responses, 80))}`);
+}
 
 function apiLogs(): string {
   return execFileSync('docker', ['compose', 'logs', '--no-color', 'api'], {
@@ -82,7 +202,7 @@ async function registerStudent(page: Page, email: string, fullName: string): Pro
   await page.click('button[type="submit"]');
   await expect(page).toHaveURL(/\/verify-email\?sent=1/);
 
-  const token = await waitForLink(before, /verify-email\?token=([A-Za-z0-9_-]+)/);
+  const token = await step('wait for the verification link', async () => waitForLink(before, /verify-email\?token=([A-Za-z0-9_-]+)/));
   await page.goto(`/verify-email?token=${encodeURIComponent(token)}`);
   await expect(page.getByRole('heading', { name: 'Email verified' })).toBeVisible();
 }
@@ -105,19 +225,17 @@ async function enrollAndOpen(
   fullName: string,
   paper: { readonly testId: string; readonly title: string },
 ): Promise<string> {
-  await test.step('register and verify', async () => {
-    await registerStudent(page, email, fullName);
-  });
-  await test.step('sign in', async () => {
-    await signIn(page, email);
-  });
-  await test.step('enroll', async () => {
+  await step('register and verify', async () => registerStudent(page, email, fullName));
+  await step('sign in', async () => signIn(page, email));
+
+  await step('enroll', async () => {
     await page.goto(`/tests/${paper.testId}`);
     await expect(page.getByTestId('enroll-button'), 'the enroll form for a fresh student').toBeVisible();
     await page.getByTestId('enroll-button').click();
     await expect(page).toHaveURL(new RegExp(`/tests/${paper.testId}\\?enrolled=1`));
   });
-  await test.step('open the attempt from the enrollment list', async () => {
+
+  await step('open the attempt from the enrollment list', async () => {
     await page.goto('/tests');
     const row = page.getByTestId('enrollment-row').filter({ hasText: paper.title });
     await expect(row).toBeVisible();
@@ -130,6 +248,17 @@ async function enrollAndOpen(
 
   return new URL(page.url()).pathname.split('/').at(-1) ?? '';
 }
+
+test.beforeEach(({ page }) => {
+  capture = capturePage(page);
+  console.log(`${STEP_LOG} --- test start ---`);
+});
+
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus) {
+    await dumpPage(page);
+  }
+});
 
 test.describe.serial('taking an attempt', () => {
   test.beforeAll(() => {
@@ -176,15 +305,16 @@ test.describe.serial('taking an attempt', () => {
     test.setTimeout(120_000);
 
     const email = `e2e-attempt-take-${marker}@example.com`;
-    enrollmentA = await enrollAndOpen(page, email, 'Attempt E2E Student', {
-      testId: longTest,
-      title: longTitle,
-    });
+    enrollmentA = await step('enroll and open the entry page', async () =>
+      enrollAndOpen(page, email, 'Attempt E2E Student', { testId: longTest, title: longTitle }),
+    );
     expect(enrollmentA).not.toBe('');
 
-    await expect(page.getByTestId('attempt-instructions')).toBeVisible();
-    await expect(page.getByTestId('attempt-instructions')).toContainText('45 minutes');
-    await expect(page.getByTestId('attempt-instructions')).toContainText('4.00 in total');
+    await step('instructions shown', async () => {
+      await expect(page.getByTestId('attempt-instructions')).toBeVisible();
+      await expect(page.getByTestId('attempt-instructions')).toContainText('45 minutes');
+      await expect(page.getByTestId('attempt-instructions')).toContainText('4.00 in total');
+    });
 
     // Every call this screen makes is kept — registered before the click that makes them — so
     // the bodies can be checked for an answer key and the calls proved to have happened.
@@ -202,177 +332,232 @@ test.describe.serial('taking an attempt', () => {
     //
     // This is a plain page evaluation, not a locator evaluation: the Start button is replaced by
     // the paper as soon as the start response lands, and `locator.evaluate` retries while its
-    // element is detached — so it waits forever for a button that can never come back, which is
-    // a hang until the test timeout, not an assertion error.
-    await expect(page.getByTestId('start-attempt')).toBeVisible();
-    await page.evaluate(() => {
-      const button = document.querySelector('[data-testid="start-attempt"]');
-      if (!(button instanceof HTMLButtonElement)) {
-        throw new Error('the Start button is not on screen');
-      }
-      button.click();
-      button.click();
+    // element is detached.
+    await step('press Start twice', async () => {
+      await expect(page.getByTestId('start-attempt')).toBeVisible();
+      await page.evaluate(() => {
+        const button = document.querySelector('[data-testid="start-attempt"]');
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error('the Start button is not on screen');
+        }
+        button.click();
+        button.click();
+      });
     });
 
-    await expect(page.getByTestId('attempt-question')).toBeVisible();
-    await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
-    expect(readAttemptsForEnrollment(enrollmentA)).toBe(1);
+    await step('paper shown', async () => {
+      await expect(page.getByTestId('attempt-question')).toBeVisible();
+      await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
+    });
 
-    // The paper is on screen and no answer key or explanation came with it.
-    await expect(page.locator('body')).not.toContainText('Alpha has no divisors');
-    expect(await page.content()).not.toContain('Alpha has no divisors');
+    await step('exactly one attempt exists', async () =>
+      expect(await step('read the attempt count', async () => readAttemptsForEnrollment(enrollmentA))).toBe(1),
+    );
 
-    // Question 1: the second option is the right one ("7"). Question 2 stays unanswered.
-    await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
-    await page.getByTestId('attempt-option').nth(1).click();
-    await expect(page.getByTestId('answered-count')).toContainText('1 answered');
+    await step('no answer key on the page', async () => {
+      await expect(page.locator('body')).not.toContainText('Alpha has no divisors');
+      expect(await page.content()).not.toContain('Alpha has no divisors');
+    });
 
-    await expect(page.getByTestId('next-question')).toBeEnabled();
-    await page.getByTestId('next-question').click();
-    await expect(page.getByTestId('attempt-question')).toHaveText('Question 2');
-    await expect(page.getByTestId('previous-question')).toBeEnabled();
-    await page.getByTestId('previous-question').click();
-    await expect(page.getByTestId('attempt-question')).toHaveText('Question 1');
+    await step('answer the first question', async () => {
+      // Question 1: the second option is the right one ("7"). Question 2 stays unanswered.
+      await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
+      await page.getByTestId('attempt-option').nth(1).click();
+      await expect(page.getByTestId('answered-count')).toContainText('1 answered');
+    });
 
-    await expect(page.getByTestId('submit-attempt')).toBeVisible();
-    await page.getByTestId('submit-attempt').click();
-    await expect(page.getByTestId('submit-confirm')).toContainText('left 1 question unanswered');
-    await page.getByTestId('confirm-submit').click();
+    await step('move between questions', async () => {
+      await expect(page.getByTestId('next-question')).toBeEnabled();
+      await page.getByTestId('next-question').click();
+      await expect(page.getByTestId('attempt-question')).toHaveText('Question 2');
+      await expect(page.getByTestId('previous-question')).toBeEnabled();
+      await page.getByTestId('previous-question').click();
+      await expect(page.getByTestId('attempt-question')).toHaveText('Question 1');
+    });
 
-    await expect(page.getByTestId('attempt-result')).toBeVisible();
-    await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}$/);
+    await step('submit through the confirm step', async () => {
+      await expect(page.getByTestId('submit-attempt')).toBeVisible();
+      await page.getByTestId('submit-attempt').click();
+      await expect(page.getByTestId('submit-confirm')).toContainText('left 1 question unanswered');
+      await page.getByTestId('confirm-submit').click();
+      await expect(page.getByTestId('attempt-result')).toBeVisible();
+      await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}$/);
+    });
 
-    // 2.00 of 4.00 marks, one right, none wrong, one unattempted, 1 ÷ 1 accuracy.
-    await expect(page.getByTestId('result-score')).toHaveText('2.00 of 4.00');
-    await expect(page.getByTestId('result-accuracy')).toHaveText('100.00%');
-    await expect(page.getByTestId('result-correct')).toHaveText('1');
-    await expect(page.getByTestId('result-wrong')).toHaveText('0');
-    await expect(page.getByTestId('result-unattempted')).toHaveText('1');
-    await expect(page.getByTestId('result-attempted')).toHaveText('1 of 2');
-    await expect(page.getByTestId('result-status')).toContainText('Submitted by you');
+    await step('result is exact', async () => {
+      // 2.00 of 4.00 marks, one right, none wrong, one unattempted, 1 ÷ 1 accuracy.
+      await expect(page.getByTestId('result-score')).toHaveText('2.00 of 4.00');
+      await expect(page.getByTestId('result-accuracy')).toHaveText('100.00%');
+      await expect(page.getByTestId('result-correct')).toHaveText('1');
+      await expect(page.getByTestId('result-wrong')).toHaveText('0');
+      await expect(page.getByTestId('result-unattempted')).toHaveText('1');
+      await expect(page.getByTestId('result-attempted')).toHaveText('1 of 2');
+      await expect(page.getByTestId('result-status')).toContainText('Submitted by you');
+    });
 
-    // A4's result page is minimal: no question, no key, no explanation.
-    await expect(page.locator('body')).not.toContainText(alphaText);
-    await expect(page.locator('body')).not.toContainText('Alpha has no divisors');
+    await step('result page is minimal', async () => {
+      await expect(page.locator('body')).not.toContainText(alphaText);
+      await expect(page.locator('body')).not.toContainText('Alpha has no divisors');
+    });
 
     attemptA = new URL(page.url()).pathname.split('/').at(-1) ?? '';
     expect(attemptA).not.toBe('');
 
-    // The capture is real: the start, the state re-sync and the submit were all seen.
-    expect(seen.some((entry) => entry.startsWith('/api/attempts/start 201'))).toBe(true);
-    expect(seen.some((entry) => entry.endsWith('/state 200'))).toBe(true);
-    expect(seen.some((entry) => entry.includes('/submit 200'))).toBe(true);
-    expect(bodies.length).toBeGreaterThanOrEqual(3);
+    await step('the capture is real and carries no key', async () => {
+      // The capture is real: the start, the state re-sync and the submit were all seen.
+      expect(seen.some((entry) => entry.startsWith('/api/attempts/start 201'))).toBe(true);
+      expect(seen.some((entry) => entry.endsWith('/state 200'))).toBe(true);
+      expect(seen.some((entry) => entry.includes('/submit 200'))).toBe(true);
+      expect(bodies.length).toBeGreaterThanOrEqual(3);
 
-    for (const body of bodies) {
-      const text = await body;
-      expect(text).not.toMatch(/isCorrect|is_correct|correctOptionId|explanation|solution/i);
-      expect(text).not.toContain('Alpha has no divisors');
-    }
+      for (const body of bodies) {
+        const text = await step('read a captured response', async () => body);
+        expect(text).not.toMatch(/isCorrect|is_correct|correctOptionId|explanation|solution/i);
+        expect(text).not.toContain('Alpha has no divisors');
+      }
+    });
   });
 
   test('a reload cannot show the paper again and says so, with a countdown', async ({ page }) => {
     test.setTimeout(120_000);
 
     const email = `e2e-attempt-resume-${marker}@example.com`;
-    const enrollmentId = await enrollAndOpen(page, email, 'Attempt Resume Student', {
-      testId: longTest,
-      title: longTitle,
-    });
+    const enrollmentId = await step('enroll and open the entry page', async () =>
+      enrollAndOpen(page, email, 'Attempt Resume Student', { testId: longTest, title: longTitle }),
+    );
     expect(enrollmentId).not.toBe('');
 
-    await expect(page.getByTestId('start-attempt')).toBeVisible();
-    await page.getByTestId('start-attempt').click();
-    await expect(page.getByTestId('attempt-question')).toBeVisible();
-    await expect(page.locator('body')).toContainText(alphaText);
+    await step('start the attempt', async () => {
+      await expect(page.getByTestId('start-attempt')).toBeVisible();
+      await page.getByTestId('start-attempt').click();
+      await expect(page.getByTestId('attempt-question')).toBeVisible();
+      await expect(page.locator('body')).toContainText(alphaText);
+    });
 
-    await page.reload();
+    // The runner arms a beforeunload warning while the paper is on screen. Accept the dialog
+    // explicitly, so a reload can never wait on a dialog nobody answers.
+    page.on('dialog', (dialog) => {
+      void dialog.accept();
+    });
 
-    // The cannot-resume screen is present — so this is not an empty or error page — and it
-    // carries none of the paper.
-    await expect(page.getByTestId('attempt-cannot-resume')).toBeVisible();
-    await expect(page.getByTestId('attempt-cannot-resume')).toContainText('cannot be resumed');
-    await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
-    await expect(page.getByTestId('start-attempt')).toHaveCount(0);
-    await expect(page.getByTestId('attempt-question')).toHaveCount(0);
-    await expect(page.getByRole('radio')).toHaveCount(0);
+    await step('reload', async () => {
+      await page.reload();
+    });
 
-    await expect(page.locator('body')).not.toContainText(alphaText);
-    await expect(page.locator('body')).not.toContainText(betaText);
+    await step('cannot resume, and none of the paper is on the page', async () => {
+      // The cannot-resume screen is present — so this is not an empty or error page — and it
+      // carries none of the paper.
+      await expect(page.getByTestId('attempt-cannot-resume')).toBeVisible();
+      await expect(page.getByTestId('attempt-cannot-resume')).toContainText('cannot be resumed');
+      await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
+      await expect(page.getByTestId('start-attempt')).toHaveCount(0);
+      await expect(page.getByTestId('attempt-question')).toHaveCount(0);
+      await expect(page.getByRole('radio')).toHaveCount(0);
 
-    const html = await page.content();
-    expect(html).not.toContain(alphaText);
-    expect(html).not.toContain(betaText);
-    expect(html).not.toContain('Alpha has no divisors');
+      await expect(page.locator('body')).not.toContainText(alphaText);
+      await expect(page.locator('body')).not.toContainText(betaText);
+
+      const html = await page.content();
+      expect(html).not.toContain(alphaText);
+      expect(html).not.toContain(betaText);
+      expect(html).not.toContain('Alpha has no divisors');
+    });
   });
 
   test('at the deadline the page auto-submits and lands on the result with its answers', async ({ page }) => {
     test.setTimeout(180_000);
 
     const email = `e2e-attempt-deadline-${marker}@example.com`;
-    await enrollAndOpen(page, email, 'Attempt Deadline Student', { testId: shortTest, title: shortTitle });
+    await step('enroll and open the entry page', async () =>
+      enrollAndOpen(page, email, 'Attempt Deadline Student', { testId: shortTest, title: shortTitle }),
+    );
 
-    await expect(page.getByTestId('start-attempt')).toBeVisible();
-    await page.getByTestId('start-attempt').click();
-    await expect(page.getByTestId('attempt-question')).toBeVisible();
-    await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
+    await step('start and show the paper', async () => {
+      await expect(page.getByTestId('start-attempt')).toBeVisible();
+      await page.getByTestId('start-attempt').click();
+      await expect(page.getByTestId('attempt-question')).toBeVisible();
+      await expect(page.getByTestId('attempt-countdown')).toHaveText(/^\d{2}:\d{2}$/);
+    });
 
-    // Question 1: the first option is wrong ("4"). Question 2: the second option is right ("6").
-    await expect(page.getByTestId('attempt-option').nth(0)).toBeVisible();
-    await page.getByTestId('attempt-option').nth(0).click();
-    await expect(page.getByTestId('next-question')).toBeEnabled();
-    await page.getByTestId('next-question').click();
-    await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
-    await page.getByTestId('attempt-option').nth(1).click();
-    await expect(page.getByTestId('answered-count')).toContainText('2 answered');
+    await step('answer both questions', async () => {
+      // Question 1: the first option is wrong ("4"). Question 2: the second option is right ("6").
+      await expect(page.getByTestId('attempt-option').nth(0)).toBeVisible();
+      await page.getByTestId('attempt-option').nth(0).click();
+      await expect(page.getByTestId('next-question')).toBeEnabled();
+      await page.getByTestId('next-question').click();
+      await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
+      await page.getByTestId('attempt-option').nth(1).click();
+      await expect(page.getByTestId('answered-count')).toContainText('2 answered');
+    });
 
-    // 2.00 for the right one − 0.50 for the wrong one = 1.50 of 4.00; accuracy 1 ÷ 2 = 0.5000.
-    await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 150_000 });
-    await expect(page.getByTestId('result-score')).toHaveText('1.50 of 4.00');
-    await expect(page.getByTestId('result-accuracy')).toHaveText('50.00%');
-    await expect(page.getByTestId('result-correct')).toHaveText('1');
-    await expect(page.getByTestId('result-wrong')).toHaveText('1');
-    await expect(page.getByTestId('result-unattempted')).toHaveText('0');
-    await expect(page.getByTestId('result-attempted')).toHaveText('2 of 2');
-    await expect(page.getByTestId('result-status')).toContainText('Submitted by you');
+    await step(
+      'the page auto-submits at the deadline',
+      async () => {
+        await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 150_000 });
+      },
+      170_000,
+    );
+
+    await step('result carries the auto-submitted answers', async () => {
+      // 2.00 for the right one − 0.50 for the wrong one = 1.50 of 4.00; accuracy 1 ÷ 2 = 0.5000.
+      await expect(page.getByTestId('result-score')).toHaveText('1.50 of 4.00');
+      await expect(page.getByTestId('result-accuracy')).toHaveText('50.00%');
+      await expect(page.getByTestId('result-correct')).toHaveText('1');
+      await expect(page.getByTestId('result-wrong')).toHaveText('1');
+      await expect(page.getByTestId('result-unattempted')).toHaveText('0');
+      await expect(page.getByTestId('result-attempted')).toHaveText('2 of 2');
+      await expect(page.getByTestId('result-status')).toContainText('Submitted by you');
+    });
   });
 
   test('a submit that arrives after the deadline is refused and the result says so', async ({ page }) => {
     test.setTimeout(120_000);
 
     const email = `e2e-attempt-late-${marker}@example.com`;
-    await enrollAndOpen(page, email, 'Attempt Late Student', { testId: longTest, title: longTitle });
+    await step('enroll and open the entry page', async () =>
+      enrollAndOpen(page, email, 'Attempt Late Student', { testId: longTest, title: longTitle }),
+    );
 
-    await expect(page.getByTestId('start-attempt')).toBeVisible();
-    await page.getByTestId('start-attempt').click();
-    await expect(page.getByTestId('attempt-question')).toBeVisible();
-    await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
-    await page.getByTestId('attempt-option').nth(1).click();
+    await step('start and answer', async () => {
+      await expect(page.getByTestId('start-attempt')).toBeVisible();
+      await page.getByTestId('start-attempt').click();
+      await expect(page.getByTestId('attempt-question')).toBeVisible();
+      await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
+      await page.getByTestId('attempt-option').nth(1).click();
+    });
 
     // The request is held until the server's own clock has passed the deadline, then released.
     // The window in which the worker's sweeper could finalise the attempt first is the gap
     // between the commit below and the request reaching the API: a few milliseconds. If the
     // sweeper did win, the student's late answers are still never scored — but the page would
     // then land on the plain result, so the spec asserts the message it must show.
-    await page.route('**/api/attempts/*/submit', async (route) => {
-      const match = /\/api\/attempts\/([0-9a-f-]{36})\/submit$/.exec(new URL(route.request().url()).pathname);
-      const id = match?.[1] ?? '';
-      expect(id).not.toBe('');
+    await step('hold the submit until the deadline has passed', async () => {
+      await page.route('**/api/attempts/*/submit', async (route) => {
+        const match = /\/api\/attempts\/([0-9a-f-]{36})\/submit$/.exec(new URL(route.request().url()).pathname);
+        const id = match?.[1] ?? '';
+        expect(id).not.toBe('');
 
-      expireAttempt(id);
-      await route.continue();
+        await step('expire the attempt in the database', async () => {
+          expireAttempt(id);
+        });
+        await route.continue();
+      });
     });
 
-    await expect(page.getByTestId('submit-attempt')).toBeVisible();
-    await page.getByTestId('submit-attempt').click();
-    await expect(page.getByTestId('confirm-submit')).toBeVisible();
-    await page.getByTestId('confirm-submit').click();
+    await step('submit after the deadline', async () => {
+      await expect(page.getByTestId('submit-attempt')).toBeVisible();
+      await page.getByTestId('submit-attempt').click();
+      await expect(page.getByTestId('confirm-submit')).toBeVisible();
+      await page.getByTestId('confirm-submit').click();
+      await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 30_000 });
+      await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}\?late=1$/);
+    });
 
-    await expect(page.getByTestId('attempt-result')).toBeVisible({ timeout: 30_000 });
-    await expect(page).toHaveURL(/\/attempt\/result\/[0-9a-f-]{36}\?late=1$/);
-    await expect(page.getByTestId('result-late')).toContainText('Time ran out before your answers arrived');
-    await expect(page.getByTestId('result-score')).toHaveText('0.00 of 4.00');
-    await expect(page.getByTestId('result-status')).toContainText('Ended automatically at the deadline');
+    await step('result says the time ran out and nothing was scored', async () => {
+      await expect(page.getByTestId('result-late')).toContainText('Time ran out before your answers arrived');
+      await expect(page.getByTestId('result-score')).toHaveText('0.00 of 4.00');
+      await expect(page.getByTestId('result-status')).toContainText('Ended automatically at the deadline');
+    });
   });
 
   test('another student’s attempt, an unknown one and a closed one are all not available', async ({ page, browser }) => {
@@ -380,49 +565,55 @@ test.describe.serial('taking an attempt', () => {
 
     // A second student, so the ids below are somebody else's and must answer like unknown ones.
     const email = `e2e-attempt-access-${marker}@example.com`;
-    await registerStudent(page, email, 'Attempt Access Student');
-    await signIn(page, email);
+    await step('register a second student', async () => registerStudent(page, email, 'Attempt Access Student'));
+    await step('sign in as the second student', async () => signIn(page, email));
 
-    await page.goto(`/attempt/${enrollmentA}`);
-    await expect(page.getByTestId('attempt-missing')).toBeVisible();
+    await step('another student’s ids are not available', async () => {
+      await page.goto(`/attempt/${enrollmentA}`);
+      await expect(page.getByTestId('attempt-missing')).toBeVisible();
 
-    await page.goto(`/attempt/result/${attemptA}`);
-    await expect(page.getByTestId('result-missing')).toBeVisible();
+      await page.goto(`/attempt/result/${attemptA}`);
+      await expect(page.getByTestId('result-missing')).toBeVisible();
 
-    await page.goto(`/attempt/${randomUUID()}`);
-    await expect(page.getByTestId('attempt-missing')).toBeVisible();
+      await page.goto(`/attempt/${randomUUID()}`);
+      await expect(page.getByTestId('attempt-missing')).toBeVisible();
 
-    await page.goto(`/attempt/result/${randomUUID()}`);
-    await expect(page.getByTestId('result-missing')).toBeVisible();
+      await page.goto(`/attempt/result/${randomUUID()}`);
+      await expect(page.getByTestId('result-missing')).toBeVisible();
+    });
 
-    // The same student enrolls, and the enrollment is closed before it is ever started.
-    await page.goto(`/tests/${longTest}`);
-    await expect(page.getByTestId('enroll-button'), 'the enroll form for a fresh student').toBeVisible();
-    await page.getByTestId('enroll-button').click();
-    await expect(page).toHaveURL(new RegExp(`/tests/${longTest}\\?enrolled=1`));
+    let closedEnrollment = '';
+    await step('a closed enrollment is not available', async () => {
+      // The same student enrolls, and the enrollment is closed before it is ever started.
+      await page.goto(`/tests/${longTest}`);
+      await expect(page.getByTestId('enroll-button'), 'the enroll form for a fresh student').toBeVisible();
+      await page.getByTestId('enroll-button').click();
+      await expect(page).toHaveURL(new RegExp(`/tests/${longTest}\\?enrolled=1`));
 
-    await page.goto('/tests');
-    const row = page.getByTestId('enrollment-row').filter({ hasText: longTitle });
-    await expect(row).toBeVisible();
-    const href = await row.getByTestId('enrollment-open-attempt').getAttribute('href');
-    const closedEnrollment = (href ?? '').split('/').at(-1) ?? '';
-    expect(closedEnrollment).not.toBe('');
+      await page.goto('/tests');
+      const row = page.getByTestId('enrollment-row').filter({ hasText: longTitle });
+      await expect(row).toBeVisible();
+      const href = await row.getByTestId('enrollment-open-attempt').getAttribute('href');
+      closedEnrollment = (href ?? '').split('/').at(-1) ?? '';
+      expect(closedEnrollment).not.toBe('');
 
-    closeEnrollment(closedEnrollment);
+      closeEnrollment(closedEnrollment);
 
-    await page.goto(`/attempt/${closedEnrollment}`);
-    await expect(page.getByTestId('attempt-missing')).toBeVisible();
+      await page.goto(`/attempt/${closedEnrollment}`);
+      await expect(page.getByTestId('attempt-missing')).toBeVisible();
+    });
 
-    // An anonymous visitor is sent to sign in, on the entry and on the result.
-    const anonymousContext = await browser.newContext();
-    const anonymous = await anonymousContext.newPage();
+    await step('an anonymous visitor is sent to sign in', async () => {
+      const anonymousContext = await browser.newContext();
+      const anonymous = await anonymousContext.newPage();
 
-    await anonymous.goto(`/attempt/${enrollmentA}`);
-    await expect(anonymous).toHaveURL(/\/login\?next=%2Fattempt%2F[0-9a-f-]{36}$/);
+      await anonymous.goto(`/attempt/${enrollmentA}`);
+      await expect(anonymous).toHaveURL(/\/login\?next=%2Fattempt%2F[0-9a-f-]{36}$/);
 
-    await anonymous.goto(`/attempt/result/${attemptA}`);
-    await expect(anonymous).toHaveURL(/\/login\?next=%2Fattempt%2Fresult%2F[0-9a-f-]{36}$/);
+      await anonymous.goto(`/attempt/result/${attemptA}`);
+      await expect(anonymous).toHaveURL(/\/login\?next=%2Fattempt%2Fresult%2F[0-9a-f-]{36}$/);
 
-    await anonymousContext.close();
+      await anonymousContext.close();
+    });
   });
 });
