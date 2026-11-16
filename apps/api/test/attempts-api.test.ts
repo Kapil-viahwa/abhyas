@@ -655,6 +655,38 @@ describe('the attempt API over HTTP', () => {
     expect(read.body).not.toContain('questions');
   });
 
+  it('ends an expired attempt on the enrollment read, lazily, and answers its state only', async () => {
+    const paper = await newPaper();
+    const enrollmentId = await newEnrollment(paper, student);
+    const started = await start(enrollmentId);
+    const attemptId = (started.json() as AttemptStart).attemptId;
+
+    await backdate(attemptId, 10);
+
+    // The route delegates to `state`, which finalises an expired attempt through the same
+    // `finalizeLocked` every read and the sweeper use — so this read, like `GET /v1/attempts/:id`,
+    // ends it with source LAZY. It still answers state only: no question, no key, no result.
+    const read = await call('GET', `/v1/enrollments/${enrollmentId}/attempt`, student.token);
+    expect(read.statusCode, read.body).toBe(200);
+
+    const body = read.json() as { attempt: AttemptState };
+    expect(body.attempt.attemptId).toBe(attemptId);
+    expect(body.attempt.status).toBe('AUTO_SUBMITTED');
+    expect(body.attempt.submitSource).toBe('LAZY');
+    expectNoAnswerKey(body);
+    expect(read.body).not.toContain('questions');
+    expect(read.body).not.toContain('score');
+
+    expect(await db.client.result.count({ where: { attemptId } })).toBe(1);
+    expect(await db.client.attemptAnswer.count({ where: { attemptId } })).toBe(0);
+
+    const enrollment = await db.client.enrollment.findUniqueOrThrow({
+      where: { id: enrollmentId },
+      select: { status: true },
+    });
+    expect(enrollment.status).toBe('EXPIRED');
+  });
+
   it('answers not found for another student’s enrollment, an unknown one and a suspended account', async () => {
     const paper = await newPaper();
     const enrollmentId = await newEnrollment(paper, student);

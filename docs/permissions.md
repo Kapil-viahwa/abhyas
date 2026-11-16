@@ -404,4 +404,9 @@ with `Unknown enrollment`, never 403.
 | `GET /v1/enrollments/:id/attempt` | `{ attempt }` — `null` before a start, the attempt's **state** afterwards: status, `started_at`, `deadline_at`, the server's `now`, the remaining seconds and, once ended, the submit source and time | 400 for a query value, a `userId` or a malformed id; 401 anonymous or suspended; 404 unknown or another student's |
 
 It never returns a question, an option, an answer, a score or an answer key, and it creates
-nothing: a read of an attempt called before a start leaves the database exactly as it was.
+nothing: a read of an attempt called before a start leaves the database exactly as it was. An
+attempt that has passed its deadline is finalised by this read through the same lazy path as
+`GET /v1/attempts/:id` — source `LAZY`, one result, the empty auto-submitted one and an `EXPIRED`
+enrollment — and the response is still state only. `apps/api/test/attempts-api.test.ts` proves
+both halves: the not-started read changes nothing, and an expired one is ended with source `LAZY`
+without a question, a key or a score in the body.
