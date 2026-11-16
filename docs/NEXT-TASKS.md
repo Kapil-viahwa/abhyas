@@ -143,6 +143,16 @@ and the per-question review (the student's answer, the correct answer, the expla
 after the attempt has ended; another student cannot open either page. The enrollment page stops
 promising "taking it is the next phase" and links to the start.
 
+[ ] A5b Question versioning in attempts (decision 0082, open, owner to decide). Recommended: pin the
+question version at publish — `test_questions` gains `question_version_id`, backfilled from each
+question's current version and frozen with the paper, and the start response, the scoring function
+and the review all read that pinned version instead of the question's `currentVersion` pointer.
+Stopgap if the merge cannot wait: refuse a new version of a question that is inside a published
+paper or a live attempt, with a stable `question_in_use` code, and point the editor at
+archive-and-replace. Tests: a published paper's content and key survive an edit; a live attempt
+still submits and is scored against the paper it was given; the review shows the pinned content.
+Not started.
+
 [ ] A6 Docs and merge: `docs/permissions.md` (the four routes and who may call them),
 `docs/decisions.md` (0074's assumptions confirmed or corrected), the known gaps (no autosave by
 decision, closing the browser scores zero, no resume, no refund), `docs/ROADMAP.md`, the README

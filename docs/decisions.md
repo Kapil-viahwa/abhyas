@@ -2512,3 +2512,68 @@ carry none, a malformed id, and two parallel result reads of an expired attempt 
 `e2e/attempt-review.spec.ts` proves the page: the exact summary and markers, the filters, no paper
 content before the end, the auto submission, the retake path, the back button, and access for
 another student, an anonymous visitor and a malformed id.
+
+
+
+## 0082 — Question versioning in attempts (open, owner to decide)
+
+**Why this exists.** A5 reads a review's question list, order and marks from the attempt's frozen
+test version, but each question's *content* — stem, options, the correct option and the explanation
+— is resolved from that question's **current** version. This records what that means today, because
+it is a real risk to scoring and the owner has to choose the fix.
+
+**(a) Can a question used by a published test, or by a live attempt, be edited today? Yes.**
+`QuestionsService.saveDraft` (`apps/api/src/questions/questions.service.ts:267-367`) creates a new
+`question_versions` row when the current version is published (`:284`, `:318-347`), then moves the
+pointer and demotes the question: `currentVersion = targetVersion, status = 'DRAFT'`
+(`:350-353`). `publish` then publishes that version. `test_questions` stores only `question_id`
+(`apps/api/prisma/migrations/20270101000000_tests_and_enrollments/migration.sql:128-143`), and the
+only freeze is on the paper's own rows — `test_questions_frozen` refuses inserts, updates and
+deletes once the paper's version is published (`:147-164`), and `test_versions_frozen` covers the
+version row — so nothing about the question's content is frozen. An editor who owns the question (or
+any administrator) can therefore edit the stem, the options or the correct option of a question
+that sits in a published paper, and nothing refuses, archives or warns. `loadPaper`
+(`apps/api/src/attempts/attempts.service.ts:498-533`) reads `question.currentVersion` at call time,
+so the start response, the scoring and the review all follow the pointer as it moves.
+
+**(b) Consequences today.**
+1. *A live attempt.* The student was given version 1's option ids. After the edit, `submit`
+   re-reads the paper as version 2, whose options have new ids, so `scoreAttempt` refuses the old
+   chosen option with `Unknown option` and the API answers **400** (`scoring.ts:191-196`) — a
+   legitimate in-flight submit becomes unsubmittable. If the attempt then expires, the sweeper
+   scores an empty answer set, which is correct for an abandoned attempt but hides what happened.
+   A scoring key different from the delivered paper's is therefore possible in the opposite
+   direction: the student cannot be scored against either version's key in that case, they are
+   refused.
+2. *An ended attempt.* The review renders version 2's stem, options, correct option and
+   explanation, not what the student saw or was scored on.
+3. *The page can contradict its summary.* `results` is immutable (A1's trigger), so the score and
+   counts stay as computed, while the review next to them shows a different key.
+
+**(c) The data model does not pin it.** There is no `question_version_id` on `test_questions` and
+none on `attempt_answers`. A migration would add `test_questions.question_version_id UUID NOT NULL
+REFERENCES question_versions(id)` (an index on it, and it is immutable once the paper version is
+published, which the existing `test_questions_frozen` trigger already enforces), backfilled with
+each question's current version — correct for every paper nobody has edited since publishing.
+
+**(d) Options, smallest first.**
+1. **Pin the question version at publish.** Migration above; `tests.service` writes the id when the
+   paper's question list is set; `loadPaper` joins `test_questions` to `question_versions` by that id
+   instead of the pointer; the start response, scoring and the review all read the pinned version.
+   Units: one migration (with backfill), one service read, the builder insert, database tests (a
+   published paper keeps its content after an edit) and one e2e. **Risk:** low; it is the structural
+   fix and it closes the scoring risk completely. It is the recommended option.
+2. **Interim guard: refuse the edit.** In `saveDraft`, refuse to create a new version of a question
+   that is inside any published test version or any non-ended attempt, with a stable code
+   (`question_in_use`), and tell the editor to archive the question and build a replacement. Units:
+   one service check, one query, database tests, one refusal message in the editor. **Risk:** low to
+   build, but it blocks legitimate typo fixes in a live paper and does not fix attempts already
+   running when it ships; it is a stopgap, not the model.
+3. **A pre-start re-check** in `start` that refuses a paper whose pinned content no longer matches
+   what the enrollment bought — narrower than (2) and leaves the review inconsistency of (b)(2).
+
+**Recommendation.** Do (1) before the Phase 7 merge; it is the smallest change that makes the paper
+a student sat and the paper their result reviews the same bytes. (2) only if the merge cannot wait
+for one migration.
+
+**Status: open, owner to decide.** The A5b queue item in `docs/NEXT-TASKS.md` is not started.

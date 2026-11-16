@@ -1047,3 +1047,19 @@ the same source the start response and scoring use. Freezing content per attempt
 `pnpm test:unit`, `pnpm test:db` or `pnpm test:e2e`, and no Docker. The claim above is what the code
 and the specs say; the CI runs on the pushed commit decide, and the queue item stays `[ ]` until
 those runs are read.
+
+
+
+### The red rounds on the way
+
+`a39a199` was red in `typecheck` and `e2e` in both runs: the test's `AttemptResult.review` element
+type lacked `position`, `marks` and `negativeMarks`, and the review spec asserted the web submit
+body was empty before asserting it equals `{ ok: true }`. Both were test mistakes and were fixed in
+`7fe9f0b`, which left `typecheck` and `database` green.
+
+`7fe9f0b` was still red in `e2e`: the back-button test assumed browser history would land on the
+result after a `router.push`, and the in-progress test flaked once on registration from a shared
+client address. The back-button test now goes back and asserts only what the rule says — the paper
+and its stems are gone — and then visits the entry URL and asserts it redirects to the result; each
+test in `e2e/attempt-review.spec.ts` sets its own `x-forwarded-for`, so a per-IP registration limit
+is never shared.
