@@ -852,7 +852,7 @@ fixed in `6f5579a` to assert the value as a number, with no product code touched
 
 
 
-## Phase 7, A4 (built — runs queued, not read)
+## Phase 7, A4 (built — superseded by the "done" section below)
 
 **The taking screens.** A student reaches their paper from the enrollment list, takes it once, and
 sees the result. The paper is delivered once and never again; the server keeps the clock and the
@@ -922,12 +922,11 @@ anonymous visitor redirected to sign in.
 | A submit after the deadline is refused, with the reason on the result | `a submit that arrives after the deadline is refused and the result says so` (e2e) |
 | Another student, an unknown id, a closed enrollment and an anonymous visitor | `another student’s attempt, an unknown one and a closed one are all not available` (e2e) |
 
-### Not yet verified
+### Was not yet verified at the time
 
-Nothing in A4 has been compiled or run in this session: no `pnpm lint`, `pnpm typecheck`,
-`pnpm test:unit`, `pnpm test:db` or `pnpm test:e2e`, and no Docker for the database and browser
-suites. The claim above is what the code and the specs say, not a green run; the CI jobs on the
-pushed commit are what will decide, and the queue item stays `[ ]` until those runs are read.
+That first record was written before any run of this work had been read. It has since been verified in
+both nine-job runs of `e2f88959cb555610ed6a6d47f952de9d99d3d60c`; the "done" section below is the
+current record, and the queue item is `[x]`.
 
 
 
@@ -941,3 +940,63 @@ Test timeout of 30000ms exceeded`, waiting for `locator('input[name="fullName"]'
 registers an admin, signs in and navigates, so the cause is not visible by reading. It is recorded
 here, not fixed, because a fix would be a guess; the next session can give it an explicit bounded
 timeout if the trace shows the budget being eaten by the setup rather than by a missing form.
+
+
+
+## Phase 7, A4 (done — both runs of `e2f8895` green)
+
+**Verified** in both nine-job runs of `e2f88959cb555610ed6a6d47f952de9d99d3d60c`
+([run 43841325606](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841325606), push, `e2e` 5m38s,
+`gitleaks` 10s; [run 43841317370](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841317370),
+pull_request, `e2e` 5m35s, `gitleaks` 8s): eighteen green check results. The `e2e` jobs are green under
+`set -o pipefail`, so the whole `playwright test` run exited 0 — every spec passed, including all five
+`attempt-take` tests, none of which is skipped — and the `database` jobs are green, so
+`apps/api/test/attempts-api.test.ts` (the three enrollment-state cases and the lazy-finalisation case
+included) and `apps/api/test/attempts-sweeper.test.ts` ran and passed. Their readable log slices are
+Postgres and container output, so the per-test Playwright and vitest lines are not re-quotable; the green
+jobs are what prove the runs.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| The instructions render, then Start opens the paper | `a student starts once, answers and submits, and the result is exact` — `instructions shown`, `press Start twice`, `paper shown` |
+| The paper and the countdown are on screen | same test — `attempt-question` visible and `attempt-countdown` matching `MM:SS` |
+| A double click writes exactly one attempt | same test — two clicks in one task, then `readAttemptsForEnrollment` is 1 |
+| Submit gives the exact score and counts, as decimal text, status submitted | same test — `2.00 of 4.00`, `100.00%`, correct 1, wrong 0, unattempted 1, attempted `1 of 2`, "Submitted by you" |
+| A reload shows the cannot-resume screen with no question content | `a reload cannot show the paper again and says so, with a countdown` — the message is present, the countdown matches, and neither page text nor HTML contains a stem |
+| No key or explanation in any response or page, the capture is proven non-empty and the scan proven able to fail | same test — start 200/201, state 200, submit 200 with body `{ ok: true }`; the three bodies and the instructions, paper and result pages are scanned; the planted `isCorrect`, `"correct"` key and explanation are found by the same scanners |
+| The submit body is captured through the route handler | same test — `page.route` + `route.fetch()` + `route.fulfill`, so the body is read where it exists |
+| The one-minute attempt auto-submits at the deadline with its answers | `at the deadline the page auto-submits and lands on the result with its answers` — result within 85 s, `1.50 of 4.00`, `50.00%` |
+| A late submit is refused with the "time ran out" message and an auto-submitted 0.00 | `a submit that arrives after the deadline is refused and the result says so` — grace pinned to 0, `0.00 of 4.00`, "Ended automatically at the deadline" |
+| Another student's ids show not-available | `another student’s attempt, an unknown one and a closed one are all not available` |
+| An anonymous visitor is redirected to sign-in | same test |
+| The state route returns state only, not-found for another student, and finalises an expired attempt lazily | `answers the enrollment’s attempt as null before a start and its state after, without the paper`, `reads an ended attempt as ended, and carries no result data`, `ends an expired attempt on the enrollment read, lazily, and answers its state only`, `answers not found for another student’s enrollment, an unknown one and a suspended account` |
+| Rich content only through the sanitising renderer, and KaTeX with trust false | `attempt-runner.tsx` puts only the API's `sanitizeStoredContent` output into HTML and renders LaTeX through `renderLatex` |
+
+### The four defects found in the old tree
+
+Reviewing the first, uncommitted version of A4 found four real defects, all fixed before it was
+committed: the result page's relative imports were one directory too shallow; the submit route handler
+forwarded the API's result body — which carries the review, the correct option and the explanation — to
+the browser; the runner injected a question's raw LaTeX as HTML, and the API does not sanitise `latex`;
+and "clear this answer" wrote an empty option id, which would have made the whole submit a 400.
+
+### The red rounds on the way
+
+Five red rounds, each a different cause, none of them the page's behaviour:
+
+- `a419e9b` — the first taking-page test timed out at the 30 s default with no message. The double click
+  used `locator.evaluate`, which retries while its element is detached, and the Start button is replaced
+  by the paper; fixed in `372df09` with `page.evaluate`.
+- `372df09` — still red, now at 120 s, and the failed `database` run also showed the sweeper-race test
+  expecting `SWEEPER` where the submit's own expiry path had written `LAZY`; fixed in `009a4e1` by
+  accepting both documented sources and asserting the invariants in both orders. Green from then on.
+- `4a22e5a` — the new instrumentation named the step: "the capture is real and carries no key exceeded
+  20000ms". The response bodies had been collected as promises and awaited after the page navigated;
+  fixed in `fbc6bde` by reading each body immediately after its own `waitForResponse`.
+- `fbc6bde` — start and state bodies read fine, and the submit body still hung: the runner reads only
+  `response.ok` and navigates at once, so Chromium discards that body; fixed in `2a1dd61` by capturing it
+  through a `page.route` handler that fetches and fulfils the real response.
+- `fbc6bde`, one run — `e2e/catalog.spec.ts:237` flaked and passed on retry; recorded above as a known
+  flake, not fixed.
