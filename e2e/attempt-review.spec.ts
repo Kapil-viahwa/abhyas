@@ -599,23 +599,33 @@ test.describe.serial('the result and the review', () => {
       await expect(page.getByTestId('attempt-result')).toBeVisible();
     });
 
+    // The second student gets a context of its own: the owner above is still signed in, and
+    // middleware sends a signed-in visitor from /register to /account.
     const otherEmail = `e2e-review-other-${marker}@example.com`;
-    await step('register a second student', async () => registerStudent(page, otherEmail, 'Review Other Student'));
-    await step('sign in as the second student', async () => signIn(page, otherEmail));
+    const otherContext = await browser.newContext();
+    const other = await otherContext.newPage();
+    await other.context().setExtraHTTPHeaders({ 'x-forwarded-for': '198.18.0.66' });
 
-    await step('another student’s result is not available, and shows no review', async () => {
-      await page.goto(`/attempt/result/${attemptId}`);
-      await expect(page.getByTestId('result-missing')).toBeVisible();
+    try {
+      await step('register a second student', async () => registerStudent(other, otherEmail, 'Review Other Student'));
+      await step('sign in as the second student', async () => signIn(other, otherEmail));
 
-      const view = await readPage(page);
-      expect(view.text).not.toContain(alphaText);
-      expect(leakedText(view.html)).toEqual([]);
-    });
+      await step('another student’s result is not available, and shows no review', async () => {
+        await other.goto(`/attempt/result/${attemptId}`);
+        await expect(other.getByTestId('result-missing')).toBeVisible();
 
-    await step('a malformed id is not available', async () => {
-      await page.goto('/attempt/result/not-a-uuid');
-      await expect(page.getByTestId('result-missing')).toBeVisible();
-    });
+        const view = await readPage(other);
+        expect(view.text).not.toContain(alphaText);
+        expect(leakedText(view.html)).toEqual([]);
+      });
+
+      await step('a malformed id is not available', async () => {
+        await other.goto('/attempt/result/not-a-uuid');
+        await expect(other.getByTestId('result-missing')).toBeVisible();
+      });
+    } finally {
+      await otherContext.close();
+    }
 
     await step('an anonymous visitor is sent to sign in', async () => {
       const anonymousContext = await browser.newContext();
