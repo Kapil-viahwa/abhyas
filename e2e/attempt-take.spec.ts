@@ -500,15 +500,12 @@ test.describe.serial('taking an attempt', () => {
       await expect(page.getByTestId('result-status')).toContainText('Submitted by you');
     });
 
-    // A4's result page is minimal: no question, no key, no explanation.
-    await step('result page is minimal', async () => {
+    // A5 adds the per-question review to this page, so its stems and explanations are expected
+    // here now; the "no paper content before the end" rule is proven in attempt-review.spec.ts.
+    await step('result page shows the summary', async () => {
       const view = await readPage(page);
-      expect(view.text).not.toContain(alphaText);
-      expect(view.text).not.toContain(betaText);
-      expect(view.html).not.toContain(alphaText);
-      expect(view.html).not.toContain(betaText);
-      expect(leakedKeys(view.html)).toEqual([]);
-      expect(leakedText(view.html)).toEqual([]);
+      expect(view.text).toContain('2.00 of 4.00');
+      expect(view.text).toContain('Submitted by you');
     });
 
     attemptA = new URL(page.url()).pathname.split('/').at(-1) ?? '';
