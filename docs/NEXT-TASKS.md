@@ -97,18 +97,27 @@ submit and publish, with the previous list and the status left intact, and a val
 building and publishing), `apps/api/src/questions/single-correct.spec.ts` for the four reasons,
 and one Playwright check that the picker does not offer the fixture's numerical question. — Verified in both nine-job runs of `3fcbe4eb3756b48c197812f10552a7c0e54ebc43`: [run 43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670) and [run 43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751), eighteen green check results. Each `unit` job logs `✓ src/questions/single-correct.spec.ts (7 tests)` inside `Test Files 29 passed (29)` / `Tests 227 passed (227)`. The `database` jobs (2m25s and 1m53s) are green under `set -o pipefail`, which proves the whole `test/` suite, `apps/api/test/tests-builder.test.ts` included, ran and passed; their readable log slices are Postgres output, so the vitest summary is not re-quotable. The `e2e` jobs (4m01s and 4m02s) are green under pipefail, so the new picker check and every existing spec passed; their readable slices are container output, so the Playwright list is not re-quotable.
 
-[ ] A3 Attempt API and expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
+[ ] A3a Attempt API and lazy expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
 anywhere, an `OPEN` enrollment required, one start only, the deadline computed on the server,
 questions returned once in the version's order **without** `is_correct`, a numerical answer or an
 explanation); `POST /v1/attempts/:id/submit` (idempotent, the grace window honoured, every answer
 validated against the version's questions and their options, one result written in one
 transaction); `GET /v1/attempts/:id` (status and remaining seconds, never the questions);
 `GET /v1/attempts/:id/result` (own, only after the end, answer keys and explanations only then).
-Expiry is lazy on any read or submit **and** swept by a repeatable job in `apps/worker` every 30
-seconds, both running the same service function under a row lock. Proof: database-job tests — a
-simultaneous submit and sweep giving exactly one result, a submit after the grace window refused
-with its message, a second start refused, a student reading another student's attempt refused,
-no answer key in any pre-end response, and the sweeper ending an expired attempt by itself.
+Expiry is lazy on any read or submit: a shared `finalizeExpiredAttempt` finalises an expired
+attempt under the attempt row lock, with lock order attempt → enrollment → answers → status →
+result. Proof: `apps/api/test/attempts-api.test.ts` — the exact deadline, the paper once, no key
+in any pre-end response, a simultaneous start giving one attempt, one submit and its retry, two
+parallel submits giving one result, the grace window, a late submit discarded, parallel reads
+finalising once, a submit racing a read, and the result refused until the end.
+
+[ ] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds that finds
+`IN_PROGRESS` attempts past `deadline_at + attempt_submit_grace_seconds` and calls the API's own
+`finalizeExpiredAttempt(id, 'SWEEPER')` — the same function A3a's lazy paths use, with
+`FOR UPDATE SKIP LOCKED` — so a submit racing the sweeper still produces exactly one result.
+Proof: a worker/database test that the sweeper ends an expired attempt by itself, that two
+sweepers racing give one result and one `AUTO_SUBMITTED` attempt, and that the worker's repeatable
+registration is declared like the existing jobs.
 
 [ ] A4 The taking page. `/attempts/<id>`: the paper in the version's order, a countdown from the
 server's remaining seconds that re-syncs on every read and never decides expiry, answer selection
