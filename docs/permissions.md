@@ -358,3 +358,50 @@ The route's own response carries counts only — no attempt id, question, option
 student. The service's log lines name an attempt id and the counts, never an answer. A student
 session or an anonymous caller without the secret is refused with the same 404 as any other
 wrong caller.
+
+
+
+## Phase 7, A4: the taking screens
+
+The screens are server-rendered shells over the attempt routes and hold no rule of their own: each
+reads the session, calls the API with its access token, and prints the API's answer. No token,
+paper or answer key ever reaches the browser as data, and every response the browser does receive
+is `Cache-Control: no-store`.
+
+| Screen | Server check before it renders | What it calls |
+| --- | --- | --- |
+| `/attempt/<enrollmentId>` | `loadSession` — any signed-in account; an anonymous visitor is sent to `/login?next=%2Fattempt%2F<id>` | `GET /v1/enrollments/me?pageSize=100` (the paper's summary), `GET /v1/enrollments/<id>/attempt` (does an attempt exist) |
+| `/attempt/result/<attemptId>` | `loadSession` — anonymous to `/login?next=%2Fattempt%2Fresult%2F<id>` | `GET /v1/attempts/<id>/result`, and `GET /v1/attempts/<id>` while it answers 409 so the page can show the countdown |
+| `POST /api/attempts/start` | `guardFormPost` (Origin + double submit), then the session cookie | `POST /v1/enrollments/<id>/attempt` |
+| `GET /api/attempts/<id>/state` | the session cookie | `GET /v1/attempts/<id>` |
+| `POST /api/attempts/<id>/submit` | `guardFormPost`, then the session cookie | `POST /v1/attempts/<id>/submit` |
+| `GET /api/enrollments/<id>/attempt` | the session cookie | `GET /v1/enrollments/<id>/attempt` |
+
+The entry page renders the instructions and a Start button while no attempt exists, the
+"already started, cannot be resumed" screen — the server's remaining time only, no questions and
+no Start button — when an attempt is running that this page cannot show, a redirect to the result
+once the attempt has ended, and the same not-available screen the P5 pages use for an enrollment
+that is not the caller's, does not exist, or is no longer open. Another student's id behaves like
+an unknown one.
+
+The route handlers validate their own parameters and bodies before anything reaches the API: a
+path that is not a UUID, an `answers` field that is not a list of `{ questionId, chosenOptionId }`
+pairs (both UUIDs, at most 100 entries) is **400** with no API text echoed. The submit handler
+returns `{ ok: true }` on success and never forwards the API's result body: that body is the only
+response in the API that carries `isCorrect`, the correct option and the explanation, and A4's
+pages render none of it.
+
+## Phase 7, A4: the enrollment's attempt state route
+
+One route was added to the attempt API in this unit, because a page that has lost the start
+response has no other way to learn that an attempt exists: the paper is delivered once and the
+attempt's id lives only in that response. It is `@Authenticated()`, self-only, refuses a `userId`
+or any other query value with **400**, and another student's or an unknown enrollment is **404**
+with `Unknown enrollment`, never 403.
+
+| Route | What it does | Refusals |
+| --- | --- | --- |
+| `GET /v1/enrollments/:id/attempt` | `{ attempt }` — `null` before a start, the attempt's **state** afterwards: status, `started_at`, `deadline_at`, the server's `now`, the remaining seconds and, once ended, the submit source and time | 400 for a query value, a `userId` or a malformed id; 401 anonymous or suspended; 404 unknown or another student's |
+
+It never returns a question, an option, an answer, a score or an answer key, and it creates
+nothing: a read of an attempt called before a start leaves the database exactly as it was.

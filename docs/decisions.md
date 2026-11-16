@@ -2363,3 +2363,86 @@ owner connection (superuser), pins the grace setting and restores it. The e2e sp
 to 0, seeds an already-expired attempt in SQL, and waits for the real worker by polling the
 database — never a student-facing read, which would finalise it lazily and make the test pass for
 the wrong reason.
+
+
+
+## 0080 — Phase 7, A4: the paper lives in the page's memory and the server keeps the clock
+
+**Decided while building the taking screens.** The screens add no rule: they display what the A3a
+API says. What they do add is where the paper lives, how time is shown, and what a page does when
+the attempt cannot be shown.
+
+**The paper and the answers live only in React memory.** The start response is put into component
+state and nowhere else: no `localStorage`, no `sessionStorage`, no IndexedDB, no cookie, no URL or
+history state, no console log in the page or in the route handler. There is no autosave and no
+partial-save call, by the owner's rule — answers are sent once, on submit. A reload therefore
+loses them, which is the next decision, not an accident.
+
+**A started attempt cannot be resumed, and a lost start response is a lost attempt.** The paper is
+delivered exactly once, in the start response, and the API will not deliver it again. A start that
+answers `attempt_already_started`, a start whose response never arrived, and a reload all end on
+the same screen: "already started, cannot be resumed", the server's remaining time counting down,
+no questions and no Start button. The start is **never retried**. Because the page cannot know the
+attempt's id in those cases, one route was added to the API — `GET /v1/enrollments/:id/attempt`,
+self-only, state only — and the web tier wraps it in `GET /api/enrollments/<id>/attempt` so the
+page can say how long is left without ever holding the paper. That route is documented in
+`docs/permissions.md`.
+
+**The countdown only displays time, with a monotonic clock and one offset from the server.** The
+start response's `remainingSeconds` becomes a deadline in `performance.now()` milliseconds, and
+the tick reads only that. Changing the device clock changes nothing. The page re-syncs every 30
+seconds, on `visibilitychange`, and right before submitting; each re-sync replaces the local
+deadline with the server's remaining seconds, so the server always wins. If a re-sync says the
+attempt has ended, the page stops and goes to the result. A failed re-sync changes nothing: the
+last known server time keeps counting down.
+
+**At zero the page submits the answers it holds — assumed, owner to confirm.** When its own
+countdown reaches zero the page posts the answers it still has through the same idempotent submit
+endpoint, once, retrying only the *same* form on a network failure with a 2 s / 4 s / 6 s backoff
+and then giving up with a message, because the grace window (`attempt_submit_grace_seconds`) can
+still be open. The API's empty auto-submit stays the fallback for a browser that went away. This
+is recorded as the owner's assumption in 0074 and remains owner-to-confirm: if the owner wants a
+page that never submits on the student's behalf, the tick stops calling `submit(true)` and the
+server's sweeper does that work alone.
+
+**A submit after the deadline is refused, and the page says why on the result.** A 409
+`attempt_expired` is not an error screen: the page goes to `/attempt/result/<id>?late=1`, and the
+result page shows "Time ran out before your answers arrived. This attempt was evaluated
+automatically, without them" above the zero result. Carrying the reason in the URL rather than
+flashing a message the navigation would erase is what makes the behaviour verifiable in a browser.
+The submit response itself is a validation error (`400`) only for a malformed body, with one
+generic sentence — the API's text is never echoed.
+
+**The result page is minimal in A4; A5 adds the review.** It shows the score, total marks, the
+counts, the accuracy and how the attempt ended, with the API's decimals printed as given (two
+places for the score and total marks, four for accuracy) and the percentage computed by moving the
+decimal point in a string, never by parsing a float. It reads none of the result body's `review`
+array, so no question, correct option or explanation is rendered in A4. While the attempt runs,
+the page says so and shows the server's remaining seconds only — a small client component ticks
+down and asks the server-rendered page to render again at zero, rather than deciding anything.
+
+**The submit handler does not forward the API's result body.** The API's 200 to a submit is the
+same result object that carries the review, the correct option and the explanation. Forwarding it
+would hand the answer key to a browser during the attempt, so the web handler answers
+`{ ok: true }` and the page navigates to the result page, which fetches the result server-side and
+renders only the fields it names.
+
+**Sanitised HTML for stems and options, KaTeX for LaTeX.** `contentHtml` and `optionHtml` arrive
+already through `sanitizeStoredContent` and are the only fields put into
+`dangerouslySetInnerHTML`. A question's `latex` is *not* HTML and is not sanitised by the API: the
+page renders it through `renderLatex` (KaTeX with `trust: false`), which escapes anything it cannot
+render, so an author's LaTeX cannot become markup.
+
+**Entry points are neutral.** An `OPEN` enrollment shows "Open attempt" on `/tests` and on
+`/tests/<id>`, linking to `/attempt/<enrollmentId>`. The word "Resume" is never shown, because
+resuming is not possible. Nothing else was added to the navigation.
+
+**Tests move the clock; production gains no override.** The database test for the new route reads
+own-before-start (null), own-in-progress (state only), own-ended, another student, unknown,
+anonymous, suspended, a `userId` query and a malformed id, and scans every response recursively
+for key names and for an explanation's text. The browser spec pins `attempt_submit_grace_seconds`,
+`default_enrollment_cost`, `signup_coins` and `daily_reward_coins`, uses unique emails and titles,
+and deliberately leaves no expired `IN_PROGRESS` attempt behind: the worker's sweeper finalises any
+it finds in the shared database. The late-submit spec expires the attempt from inside the route
+handler that is holding the request, immediately before releasing it, so the handful of
+milliseconds in which the sweeper could claim it first is the whole race.

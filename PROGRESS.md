@@ -849,3 +849,82 @@ log line.
 swept` and Playwright reported `43 passed` with this spec the only failure — but the spec compared
 the `NUMERIC(8,2)` `score` as text, and Postgres renders that as `0.00`. The test was wrong; it was
 fixed in `6f5579a` to assert the value as a number, with no product code touched.
+
+
+
+## Phase 7, A4 (built — runs queued, not read)
+
+**The taking screens.** A student reaches their paper from the enrollment list, takes it once, and
+sees the result. The paper is delivered once and never again; the server keeps the clock and the
+answer key.
+
+- `apps/web/src/app/attempt/[enrollmentId]/page.tsx` — the entry: instructions and Start before a
+  start, the "already started, cannot be resumed" screen with the server's remaining time when an
+  attempt exists that this page cannot show, a redirect to the result once it has ended, and the
+  P5 not-available screen for an enrollment that is not the caller's, does not exist, or is no
+  longer open.
+- `apps/web/src/components/attempt-runner.tsx` — the client component: the paper and the answers
+  in React memory only, one question at a time with sanitised stems and options as labelled radio
+  groups, previous/next, a palette of answered and unanswered questions, a confirm step that says
+  how many are unanswered, changeable and clearable answers, focus moved to the question on change,
+  a `beforeunload` warning, and a countdown on a monotonic `performance.now()` deadline seeded from
+  the start response's remaining seconds and replaced by the server's on every re-sync (30 s,
+  `visibilitychange`, and right before submitting).
+- `apps/web/src/app/attempt/result/[attemptId]/page.tsx` — the minimal result: score, total marks,
+  accuracy, correct, wrong, unattempted, attempted and how it ended, with the API's decimals as
+  given; a running attempt shows its countdown only. No question, key or explanation.
+- `apps/web/src/components/attempt-countdown.tsx`, `apps/web/src/lib/countdown.ts` — the display
+  half of the countdown, shared by the taking and result pages.
+- `apps/web/src/lib/attempts-api.ts` — the attempt calls, server-side only, plus a defensive read of
+  every state envelope and `accuracyPercent`, which moves the decimal point in a string.
+- `apps/web/src/app/api/attempts/start/route.ts`, `.../[id]/state/route.ts`,
+  `.../[id]/submit/route.ts`, `apps/web/src/app/api/enrollments/[id]/attempt/route.ts` — the four
+  handlers, each `no-store`, each validating its own parameters and body, each session-checked.
+- `apps/api/src/attempts/attempts.controller.ts` and `attempts.service.ts` —
+  `GET /v1/enrollments/:id/attempt`: self-only, state only, 404 for another student's or an unknown
+  enrollment, 400 for a query value or a `userId`.
+- `apps/web/src/app/tests/page.tsx` and `apps/web/src/app/tests/[id]/page.tsx` — an `OPEN`
+  enrollment now shows "Open attempt" and links to it; the code that promised "taking it is the
+  next phase" is gone.
+
+**Four things fixed while reviewing the uncommitted work**: the result page's relative imports
+were one directory too shallow; the submit handler forwarded the API's result body, which carries
+the review, the correct option and the explanation, to the browser; the runner injected a
+question's raw LaTeX as HTML, and LaTeX is not sanitised by the API — it now goes through KaTeX
+with `trust: false`; and clearing an answer wrote an empty option id, which would have made the
+whole submit a 400.
+
+**Proof.** `apps/api/test/attempts-api.test.ts` gained three cases: the enrollment read before a
+start (`{ attempt: null }`), during it (state only, exact keys, no questions, no key names) and
+after it (ended, with no score and no explanation), and every refusal — another student, unknown,
+anonymous, suspended, `userId`, malformed id — leaving the enrollment `OPEN` with no attempt
+created. `e2e/attempt-take.spec.ts` covers the happy path with exact decimal text (`2.00 of 4.00`,
+`100.00%`, one right, none wrong, one unattempted), a double start writing exactly one attempt
+(read from the database), a reload showing the cannot-resume screen with none of the stems or
+option text in the page or its HTML, no answer key in any start/state/submit response, the
+one-minute paper auto-submitting at the deadline with `1.50 of 4.00` and `50.00%`, a late submit
+refused with the "time ran out" message and an auto-submitted `0.00 of 4.00`, and the access
+checks — another student's attempt and result, an unknown id, a closed enrollment, and an
+anonymous visitor redirected to sign in.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| The enrollment read is `null` before a start and state only afterwards | `answers the enrollment’s attempt as null before a start and its state after, without the paper` |
+| An ended attempt reads as ended and carries no result data | `reads an ended attempt as ended, and carries no result data` |
+| Another student, an unknown id, anonymous, suspended, `userId` and a bad id are all refused, with nothing changed | `answers not found for another student’s enrollment, an unknown one and a suspended account` |
+| Start, answer, submit and an exact result | `a student starts once, answers and submits, and the result is exact` (e2e) |
+| A double start writes one attempt | same spec — two clicks in one task, `readAttemptsForEnrollment` is 1 |
+| No key or explanation in any start, state or submit response, or on the result page | same spec — every `/api/attempts/` and `/api/enrollments/` body is scanned |
+| A reload cannot show the paper again | `a reload cannot show the paper again and says so, with a countdown` (e2e) |
+| The page auto-submits at the server's deadline with its answers | `at the deadline the page auto-submits and lands on the result with its answers` (e2e) |
+| A submit after the deadline is refused, with the reason on the result | `a submit that arrives after the deadline is refused and the result says so` (e2e) |
+| Another student, an unknown id, a closed enrollment and an anonymous visitor | `another student’s attempt, an unknown one and a closed one are all not available` (e2e) |
+
+### Not yet verified
+
+Nothing in A4 has been compiled or run in this session: no `pnpm lint`, `pnpm typecheck`,
+`pnpm test:unit`, `pnpm test:db` or `pnpm test:e2e`, and no Docker for the database and browser
+suites. The claim above is what the code and the specs say, not a green run; the CI jobs on the
+pushed commit are what will decide, and the queue item stays `[ ]` until those runs are read.
