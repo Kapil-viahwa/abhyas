@@ -17,6 +17,10 @@ export interface SubmitAnswerInput {
   readonly chosenOptionId: string;
 }
 
+/** The sweeper's own bound: an internal run finalises at most this many attempts. */
+export const ATTEMPT_SWEEP_MAX_BATCH = 50;
+export const ATTEMPT_SWEEP_DEFAULT_BATCH = 50;
+
 const START_FIELDS: readonly string[] = [];
 const SUBMIT_FIELDS = ['answers'] as const;
 const ANSWER_FIELDS = ['questionId', 'chosenOptionId'] as const;
@@ -95,4 +99,26 @@ export function parseSubmitBody(body: unknown): SubmitAnswerInput[] {
   }
 
   return answers;
+}
+
+/** The internal sweeper's body: an optional positive batch size, never above the cap. */
+export function parseSweepBody(body: unknown): number {
+  if (body === undefined || body === null) {
+    return ATTEMPT_SWEEP_DEFAULT_BATCH;
+  }
+
+  const record = asRecord(body);
+  rejectUnknown(record, ['batchSize']);
+
+  const value = record.batchSize;
+  if (value === undefined) {
+    return ATTEMPT_SWEEP_DEFAULT_BATCH;
+  }
+
+  const size = typeof value === 'number' ? value : Number(String(value).trim());
+  if (!Number.isInteger(size) || size < 1 || size > ATTEMPT_SWEEP_MAX_BATCH) {
+    throw new BadRequestException(`batchSize must be a whole number between 1 and ${String(ATTEMPT_SWEEP_MAX_BATCH)}`);
+  }
+
+  return size;
 }

@@ -1,23 +1,15 @@
-import { Body, Controller, Get, Header, HttpCode, Inject, NotFoundException, Param, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Header, HttpCode, Inject, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiForbiddenResponse, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { parseAllowedAddress, type AllowedAddress } from '@abhyas/shared';
 
 import { CurrentUser, Public, RequirePermissions, type AuthenticatedUser } from '../auth/access';
 import { ReauthenticationService } from '../auth/reauthentication.service';
 import { requestMeta, type RequestLike } from '../auth/request';
-import { loadConfig } from '../config/config';
+import { assertInternalRequest } from '../infra/internal-request';
 import { RedisService } from '../infra/redis.service';
 import { REDIS_PROBE } from '../infra/tokens';
 import { CoinService, type BulkBatchResult, type CoinEntryResult, type CoinHistoryResult } from './coin.service';
 import { CoinsService, type BulkJobView, type BulkPreview, type CoinRecipient } from './coins.service';
 import { CoinReconciliationService, type ReconciliationResult } from './reconciliation.service';
-import {
-  INTERNAL_FAILURE_LIMIT,
-  INTERNAL_FAILURE_WINDOW_SECONDS,
-  addressAllowed,
-  internalFailureKey,
-  secretMatches,
-} from './internal-access';
 import {
   COIN_HARD_BULK_CEILING,
   parseCoinAmount,
@@ -219,7 +211,7 @@ export class CoinsInternalController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Run one batch of a queued bulk assignment' })
   async drain(@Req() request: RequestLike, @Body() body: unknown): Promise<BulkBatchResult> {
-    await this.assertInternal(request);
+    await assertInternalRequest(request, this.redisService);
 
     const input = (body ?? {}) as { jobId?: unknown };
     return this.coins.runBulkJob(parseUuid(input.jobId, 'jobId'));
@@ -230,37 +222,8 @@ export class CoinsInternalController {
   @HttpCode(200)
   @ApiOperation({ summary: 'Compare every wallet with its ledger, without changing any' })
   async reconcile(@Req() request: RequestLike): Promise<ReconciliationResult> {
-    await this.assertInternal(request);
+    await assertInternalRequest(request, this.redisService);
 
     return this.reconciliation.reconcile();
-  }
-
-  /** The secret, the source address, and a per-address failure counter; 404 on any failure. */
-  private async assertInternal(request: RequestLike): Promise<void> {
-    const config = loadConfig(process.env);
-    const address = requestMeta(request).ip;
-    const networks: AllowedAddress[] = config.INTERNAL_ALLOWED_ADDRESSES.map((entry) =>
-      parseAllowedAddress(entry),
-    ).filter((entry): entry is AllowedAddress => entry !== null);
-
-    if (!addressAllowed(networks, address)) {
-      throw new NotFoundException();
-    }
-
-    const failuresKey = internalFailureKey(address);
-    const failures = Number((await this.redisService.redis.get(failuresKey)) ?? '0');
-
-    if (failures >= INTERNAL_FAILURE_LIMIT) {
-      throw new NotFoundException();
-    }
-
-    if (!secretMatches(request.headers['x-internal-secret'], config.INTERNAL_API_SECRET)) {
-      await this.redisService.redis
-        .multi()
-        .incr(failuresKey)
-        .expire(failuresKey, INTERNAL_FAILURE_WINDOW_SECONDS)
-        .exec();
-      throw new NotFoundException();
-    }
   }
 }

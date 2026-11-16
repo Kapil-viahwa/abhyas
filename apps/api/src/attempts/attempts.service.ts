@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../auth/access';
@@ -47,6 +47,12 @@ export interface AttemptResultView {
   readonly totalMarks: string;
   readonly accuracy: string;
   readonly review: readonly ReviewQuestionView[];
+}
+
+export interface AttemptSweepResult {
+  readonly finalized: number;
+  readonly skipped: number;
+  readonly failed: number;
 }
 
 interface LockedEnrollmentRow {
@@ -150,6 +156,8 @@ function scoringQuestions(paper: readonly PaperRow[]): ScoringQuestion[] {
  */
 @Injectable()
 export class AttemptsService {
+  private readonly logger = new Logger('AttemptsSweeper');
+
   constructor(@Inject(DATABASE_PROBE) private readonly database: DatabaseService) {}
 
   private get prisma() {
@@ -316,6 +324,59 @@ export class AttemptsService {
 
       return this.resultView(tx, current);
     });
+  }
+
+  /**
+   * The sweeper's entry point: claim up to `batchSize` expired attempts and finalise each one
+   * through the same `finalizeExpiredAttempt` the lazy reads use, in its own transaction, so one
+   * failing attempt never rolls back or blocks the others.
+   *
+   * The claim is a short transaction: it reads the grace setting inside it, selects ids with
+   * `FOR UPDATE SKIP LOCKED` (so two sweepers never wait on each other) and releases the locks
+   * by committing before any finalisation. Finalising re-checks the clock, the status and the
+   * lock, so a submit or a lazy read that won the race makes this a `skipped`, not a second
+   * result. Returns counts only; the log names attempts and counts, never an answer.
+   */
+  async expireExpiredAttempts(batchSize: number): Promise<AttemptSweepResult> {
+    const ids = await this.prisma.$transaction(async (tx) => {
+      const grace = await this.graceSeconds(tx);
+      return tx.$queryRaw<{ id: string }[]>`
+        SELECT "id"
+        FROM "attempts"
+        WHERE "status" = 'IN_PROGRESS'
+          AND "deadline_at" + (${grace}::int * interval '1 second') < now()
+        ORDER BY "deadline_at" ASC
+        LIMIT ${batchSize}::int
+        FOR UPDATE SKIP LOCKED
+      `;
+    });
+
+    let finalized = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const row of ids) {
+      try {
+        const done = await this.finalizeExpiredAttempt(row.id, 'SWEEPER');
+        if (done) {
+          finalized += 1;
+          this.logger.log(`attempt ${row.id} auto-submitted by the sweeper`);
+        } else {
+          skipped += 1;
+        }
+      } catch (error) {
+        failed += 1;
+        this.logger.warn(
+          `attempt ${row.id} could not be swept (${error instanceof Error ? error.name : 'UnknownError'})`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `attempt sweep: ${String(finalized)} finalized, ${String(skipped)} skipped, ${String(failed)} failed`,
+    );
+
+    return { finalized, skipped, failed };
   }
 
   /**
