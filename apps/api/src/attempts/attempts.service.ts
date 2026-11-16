@@ -171,32 +171,7 @@ export class AttemptsService {
         });
       }
 
-      let created: CreatedAttemptRow;
-      try {
-        const rows = await tx.$queryRaw<CreatedAttemptRow[]>`
-          INSERT INTO "attempts" ("enrollment_id", "user_id", "test_version_id", "deadline_at")
-          VALUES (
-            ${enrollment.id}::uuid,
-            ${actor.id}::uuid,
-            ${version.id}::uuid,
-            now() + (${version.durationMinutes}::int * interval '1 minute')
-          )
-          RETURNING "id", "status", "started_at", "deadline_at", now() AS "server_now"
-        `;
-        const row = rows[0];
-        if (row === undefined) {
-          throw new ConflictException('The attempt was not created');
-        }
-        created = row;
-      } catch (error) {
-        if (attemptAlreadyStarted(error)) {
-          throw new ConflictException({
-            code: 'attempt_already_started',
-            message: 'This enrollment has already been started; a paper is delivered once',
-          });
-        }
-        throw error;
-      }
+      const created = await this.insertAttempt(tx, enrollment, actor, version.id, version.durationMinutes);
 
       const paper = await this.loadPaper(tx, enrollment.test_version_id);
 
@@ -539,6 +514,44 @@ export class AttemptsService {
   // -------------------------------------------------------------------------
   // Rows and clock
   // -------------------------------------------------------------------------
+
+  /**
+   * The one INSERT. `deadline_at` is computed from the same transaction timestamp the A1 trigger
+   * writes into `started_at`, so the difference is exactly the version's duration.
+   */
+  private async insertAttempt(
+    tx: Prisma.TransactionClient,
+    enrollment: LockedEnrollmentRow,
+    actor: AuthenticatedUser,
+    testVersionId: string,
+    durationMinutes: number,
+  ): Promise<CreatedAttemptRow> {
+    try {
+      const rows = await tx.$queryRaw<CreatedAttemptRow[]>`
+        INSERT INTO "attempts" ("enrollment_id", "user_id", "test_version_id", "deadline_at")
+        VALUES (
+          ${enrollment.id}::uuid,
+          ${actor.id}::uuid,
+          ${testVersionId}::uuid,
+          now() + (${durationMinutes}::int * interval '1 minute')
+        )
+        RETURNING "id", "status", "started_at", "deadline_at", now() AS "server_now"
+      `;
+      const row = rows[0];
+      if (row === undefined) {
+        throw new ConflictException('The attempt was not created');
+      }
+      return row;
+    } catch (error) {
+      if (attemptAlreadyStarted(error)) {
+        throw new ConflictException({
+          code: 'attempt_already_started',
+          message: 'This enrollment has already been started; a paper is delivered once',
+        });
+      }
+      throw error;
+    }
+  }
 
   private async reloadAttempt(tx: Prisma.TransactionClient, attemptId: string): Promise<LockedAttemptRow> {
     const rows = await tx.$queryRaw<LockedAttemptRow[]>`
