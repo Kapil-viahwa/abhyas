@@ -1,5 +1,5 @@
 import { OTP_RETENTION_MINUTES } from '../jobs/otp-purge';
-import { COIN_BULK_DRAIN_JOB, COIN_RECONCILIATION_JOB, OTP_PURGE_JOB } from './maintenance';
+import { ATTEMPT_EXPIRY_SWEEP_JOB, COIN_BULK_DRAIN_JOB, COIN_RECONCILIATION_JOB, OTP_PURGE_JOB } from './maintenance';
 
 /**
  * The repeatable jobs the worker registers on boot.
@@ -12,6 +12,12 @@ export const OTP_PURGE_INTERVAL_MS = 15 * 60 * 1000;
 export const COIN_BULK_DRAIN_INTERVAL_MS = 30 * 1000;
 /** Once a day: a wallet that drifted should be noticed before a person spends from it. */
 export const COIN_RECONCILIATION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * An attempt past its deadline plus the grace window should be ended within half a minute of
+ * that moment, whether or not the student reads it; lazy expiry still covers the worker being
+ * down (decision 0079).
+ */
+export const ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS = 30 * 1000;
 
 export interface RepeatableJob {
   readonly name: string;
@@ -42,6 +48,11 @@ export const REPEATABLE_JOBS: readonly RepeatableJob[] = [
   {
     name: COIN_RECONCILIATION_JOB,
     every: COIN_RECONCILIATION_INTERVAL_MS,
+    data: {},
+  },
+  {
+    name: ATTEMPT_EXPIRY_SWEEP_JOB,
+    every: ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS,
     data: {},
   },
 ];

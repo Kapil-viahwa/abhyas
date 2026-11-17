@@ -39,6 +39,7 @@ const examName = `E2E Builder Category ${marker} · E2E Builder Exam ${marker}`;
 const paperTitle = `E2E Builder Paper ${marker}`;
 const alphaText = `Alpha builder question ${marker}`;
 const betaText = `Beta builder question ${marker}`;
+const numericalText = `Numerical builder question ${marker}`;
 
 /** The paper the first test creates, used by the rest. */
 let testId = '';
@@ -155,7 +156,7 @@ test.describe.serial('the test builder', () => {
     const editorId = new URL(page.url()).pathname.split('/').filter(Boolean).pop() ?? '';
     expect(editorId).not.toBe('');
 
-    const seeded = seedBuilderFixture({ editorId, marker, alphaText, betaText });
+    const seeded = seedBuilderFixture({ editorId, marker, alphaText, betaText, numericalText });
     alphaQuestionId = seeded.alphaQuestionId;
     const context = await browser.newContext(CLIENT);
     const editor = await context.newPage();
@@ -189,6 +190,12 @@ test.describe.serial('the test builder', () => {
     // The API returns the decimal as Prisma's text, so the scale may or may not be padded.
     await expect(editor.getByTestId('test-marks')).toHaveValue(/^2(\.00)?$/);
     await expect(editor.getByTestId('test-negative')).toHaveValue(/^0\.5(0)?$/);
+
+    // Decision 0077: the picker offers only questions a paper can score. The fixture's numerical
+    // question is published and in this exam, and must not be offered beside the two MCQs.
+    await expect(editor.getByTestId('question-picker-note')).toBeVisible();
+    await expect(editor.getByTestId('question-candidate').filter({ hasText: numericalText })).toHaveCount(0);
+    await expect(editor.getByTestId('question-candidate').filter({ hasText: alphaText })).toBeVisible();
 
     // Two published questions of this exam.
     const order = editor.getByTestId('question-order');

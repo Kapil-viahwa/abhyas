@@ -70,7 +70,27 @@ export const CONTENT_SECURITY_POLICY = contentSecurityPolicy();
 
 export const SECURITY_HEADERS: readonly HeaderRule[] = securityHeaders();
 
-/** `next.config.ts` shape: the same rules for every route. */
+/**
+ * The pages that must never be cached.
+ *
+ * The result and review of an attempt carry the answer key and the explanations, so a shared
+ * cache must not keep them and the back/forward cache must not serve them again after a sign-out
+ * on the same device. Next sets these per path, which is exactly the granularity that is needed
+ * here: the review lives at one route and nowhere else (decision 0081).
+ */
+export function noStoreRules(): Array<{ source: string; headers: HeaderRule[] }> {
+  return [
+    {
+      source: '/attempt/result/:path*',
+      headers: [
+        { key: 'Cache-Control', value: 'no-store, max-age=0' },
+        { key: 'Referrer-Policy', value: 'no-referrer' },
+      ],
+    },
+  ];
+}
+
+/** `next.config.ts` shape: the same rules for every route, plus the no-store result pages. */
 export function headerRules(origin: string | undefined = ''): Array<{ source: string; headers: HeaderRule[] }> {
-  return [{ source: '/:path*', headers: securityHeaders(origin) }];
+  return [{ source: '/:path*', headers: securityHeaders(origin) }, ...noStoreRules()];
 }

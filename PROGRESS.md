@@ -488,3 +488,773 @@ unchanged because `main` changed none of them.
 - **Existing editor `publish_tests` grants are deleted** by that migration and cannot be
   re-created; an editor who published tests before can no longer do so, and keeps
   `content.publish` for question versions.
+
+
+
+## Phase 7, A1 (done — both runs of `9ab5f08` green)
+
+**The attempt model.** One migration, `20270201000000_attempts`, sorts after every migration on
+`main` (the newest is `20270101000000_tests_and_enrollments`); no existing migration was edited
+and no directory needed renaming.
+
+- `attempts` — `enrollment_id` (`UNIQUE`: one attempt per enrollment), `user_id`,
+  `test_version_id`, `started_at` (the database's `now()`, overwritten by a trigger so a caller
+  cannot back-date it), `deadline_at` (`CHECK deadline_at > started_at`), `status`
+  (`IN_PROGRESS`, `SUBMITTED`, `AUTO_SUBMITTED`) with one CHECK pairing `submitted_at` and
+  `submit_source`, and a one-way trigger: `IN_PROGRESS` moves to an ended status exactly once and
+  the enrollment, student, version, start and deadline never change. A `BEFORE INSERT` trigger
+  reads the enrollment and refuses a student or version that is not its own.
+- `attempt_answers` — a row only for an answered question (`chosen_option_id NOT NULL`),
+  `UNIQUE (attempt_id, question_id)`, a guard that the question is placed in the attempt's
+  version and the option belongs to that question, and a refusal of every write once the attempt
+  has ended. The table is real so autosave can be added later as a write path (0074); no autosave
+  route, column or setting is added.
+- `results` — `UNIQUE (attempt_id)`, counts, `score`, `total_marks`, `accuracy`, CHECKs
+  (`attempted = correct + wrong`, `correct + wrong + unattempted = total_questions`, accuracy in
+  `[0, 1]`, accuracy 0 when nothing was attempted), a trigger that refuses an insert while the
+  attempt is still running, and one that refuses every `UPDATE`/`DELETE`.
+- `attempt_submit_grace_seconds` (integer, default 5, bounds 0–60) is created here, as 0074
+  places it in A1.
+- Indexes: `attempts (status, deadline_at) WHERE status = 'IN_PROGRESS'` for the future sweeper,
+  `attempts (user_id)`, and the unique `attempt_answers (attempt_id, question_id)`.
+
+Proof: `apps/api/test/attempts-model.test.ts` in the database job — one attempt per enrollment
+under two simultaneous inserts, the deadline CHECK, the submitted pair, `started_at` from the
+database, the one-way status under two simultaneous endings, answers unique per question and
+tied to the version and the question, answers frozen after the end, a result only after the end
+and immutable, one result under two simultaneous inserts, the count and accuracy CHECKs, the
+student/version consistency, and the grace setting's row.
+
+**The finding that shaped the queue: a published test can contain `NUMERICAL` questions.** P2's
+builder validation checks ownership, publication and the paper's exam, not `question_type`. A
+numerical question has no options and its answer is `question_versions.numerical_answer`, so A1
+stores only a chosen option (the shape the engine can score) and decision 0075 records
+"numerical-answer questions in tests" as an owner-to-confirm item: the recommendation is that
+the builder refuse them once A3 exists, but the builder is not changed in this unit.
+
+**Not verified here, proven in CI:** this session cannot run Postgres. The model is proven by
+`apps/api/test/attempts-model.test.ts` in the `database` job, which is green on the head
+`9ab5f08db7f6bccac50b0256a5185cab0d386c11` in both nine-job runs — [run 42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709) (job 128599236097, 2m04s) and [run 42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335) (job 128599247640, 2m22s) — with the other eight jobs (audit, lint, typecheck, unit, docker, compose-smoke, e2e, gitleaks) green in each. The tool that lists them merges the two runs into one row per job name; the two sets of job ids are what separates them. The green job's readable log slice is Postgres and container output, so the vitest summary line is not re-quotable: the green `database` job, running `pnpm test:db` under `set -o pipefail`, is the proof that the file ran in full and that `20270201000000_attempts` applied.
+
+### Every claim, and the test that proves it
+
+Nineteen cases, one file, all passing in both runs.
+
+| Claim | Test | What refuses |
+| --- | --- | --- |
+| One attempt per enrollment under concurrency | `lets one of two simultaneous inserts win and refuses the other` | `attempts_enrollment_key` on the loser, exactly one `fulfilled`, one row left |
+| The deadline must be after the start | `refuses a deadline that is not after the start` | CHECK `attempts_deadline_after_start`, zero rows |
+| The submitted pair exists exactly when not running | `requires submitted_at and submit_source exactly when the attempt is not running` | CHECK `attempts_submitted_fields`, then the same pair accepted on its own enrollment |
+| An unknown submit source is refused | `refuses an unknown submit source` | CHECK `attempts_submit_source_valid` |
+| `started_at` is the database's, never the caller's | `sets started_at from the database, even when the caller sends one` | the `attempts_started_at_from_database` trigger overwrites a 2001 date |
+| The status is one-way and once | `moves IN_PROGRESS to SUBMITTED once and refuses everything after it` | `attempts: an ended attempt cannot be changed`, on an update and on a raw jump back |
+| One of two simultaneous endings wins | `lets exactly one of two simultaneous endings win` | counts `[0, 1]`, ending status still terminal |
+| The enrollment, student, version, start and deadline are fixed | `refuses to change the enrollment, student, version, start or deadline` | `are fixed at start` on a changed student and a changed deadline |
+| The student is the enrollment's | `refuses a student who is not the enrollment's` | `belongs to the enrollment's student`, zero rows |
+| The version is the enrollment's | `refuses a version that is not the enrollment's` | `is of the enrollment's version`, zero rows |
+| One answer per question | `takes one row per question and refuses a second answer to it` | unique `attempt_answers (attempt_id, question_id)`, one row left |
+| The question must be in the attempt's paper | `refuses a question that is not in the attempt's paper` | `is not in this attempt's paper`, zero rows |
+| The option must be that question's | `refuses an option that belongs to another question` | `is not an option of question`, zero rows |
+| Answers are frozen once the attempt ended | `refuses to write or change an answer once the attempt has ended` | `cannot be written or changed once the attempt has ended`, on an insert and a raw update; the stored option unchanged |
+| A result needs an ended attempt | `refuses a result for an attempt that is still running` | `an attempt that is still running has no result`, zero rows |
+| A written result is immutable | `is written once an attempt has ended, and cannot be updated or deleted` | `a written result cannot be updated or deleted`, on update and delete; score still 2 |
+| One result per attempt under concurrency | `lets exactly one of two simultaneous inserts win` | `results_attempt_key`, one row left |
+| The count and accuracy CHECKs | `enforces the count and accuracy CHECKs` | `results_attempted_sum`, `results_total_sum`, `results_accuracy_range`, `results_accuracy_zero_when_unattempted` — each on its own insert, zero rows |
+| The grace setting exists with its bounds | `exists with its bounds` | `attempt_submit_grace_seconds` = 5, min 0, max 60 |
+
+### Two red rounds on the way
+
+- **`46fcc34` — the guard's join named the wrong column.** Both runs of the first head failed
+  only in `database`: `The column o.version_id does not exist in the current database` (P2022)
+  from `attempt_answers_guard`. `question_options` names its version column
+  `question_version_id`. The migration itself applied and 268 of 271 tests passed; all three
+  failures were this one function. Fixed in `60781c0` by correcting the join. The migration had
+  never been applied anywhere shared, so it was edited in place rather than followed by a second
+  migration, and no CHECK, trigger or index was weakened.
+- **`60781c0` — a test regex did not match Prisma's own format.** Both runs again failed only in
+  `database`, now on one case: the expected
+  ``Unique constraint failed on the fields: (`attempt_id`, `question_id`)`` against Prisma 5.22's
+  actual ``(`attempt_id`,`question_id`)``, which prints no space after the comma. The refusal was
+  right and the migration was right; only the assertion was too literal. Fixed in `9ab5f08`,
+  which still names both columns and still asserts the count is one.
+
+
+
+
+## Phase 7, A2 (done — both runs of `04f7fab` green)
+
+**The scoring function.** `apps/api/src/attempts/scoring.ts` — one exported function,
+`scoreAttempt(questions, answers)`, pure: no database, no Prisma, no clock, no randomness, no
+I/O. The caller loads the correct option from the database and passes it in; the function never
+reads a key.
+
+- **Exact arithmetic.** Marks are parsed once into hundredths as a bigint, summed as integers,
+  and formatted back at the edge. `question_versions.marks` and `negative_marks` and the two
+  `test_versions` figures are `NUMERIC(6, 2)`, so 0.25 negatives and fractional marks are real;
+  a float would drift. `score` and `total_marks` leave as two-place strings and `accuracy` as a
+  four-place string, the form Prisma's `Decimal` columns take.
+- **Output is exactly the `results` columns** — `score`, `correctCount`, `wrongCount`,
+  `unattemptedCount`, `attemptedCount`, `totalQuestions`, `totalMarks`, `accuracy` — and every
+  A1 CHECK holds on it: attempted = correct + wrong, the three counts sum to the question count,
+  accuracy in [0, 1], accuracy 0.0000 when nothing was attempted.
+- **Accuracy** is `floor((2 × correct × 10000 + attempted) / (2 × attempted))` at four places,
+  rounded half up, zero attempted giving 0.0000.
+- **The score is not floored at zero** (assumed, owner to confirm); the column and every results
+  CHECK allow a negative score.
+- **Refusal over ignoring:** `UNKNOWN_QUESTION`, `DUPLICATE_ANSWER`, `UNKNOWN_OPTION`,
+  `NOT_SINGLE_CORRECT`, `INVALID_MARKS` and `INVALID_QUESTION`, each a `ScoringError` with the
+  stable code and a message that names ids only. A `NUMERICAL` question anywhere in the version
+  refuses the whole version, per decision 0075's open item; the builder is unchanged.
+
+Proof: `apps/api/src/attempts/scoring.spec.ts`, in the unit job — all correct; all wrong with
+negative marking; all unattempted; an empty version; mixed; single question; fractional marks
+and negatives with exact expected scores; per-question marks; accuracy at 1/3, 2/3, 1/2, 1/6,
+5/6 and 1; every refusal with its code; the inputs untouched; determinism; the A1 invariants on
+the output; and a property test over 60 generated versions using a mulberry32 generator written
+in the spec, checking the score against independently computed integer arithmetic, the counts,
+that reordering the answers changes nothing, and that a duplicate answer is refused.
+
+**No database test in this unit.** The insert this output feeds is A3's transaction, so A3's
+tests will prove the output against the `results` table; A2 has no database code to prove.
+
+**Verified:** both nine-job runs of `04f7fabd4cd7d64fde45c65295f8e9e00d9e33c7` are green —
+[run 42440488533](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440488533) (unit job 128608475364) and [run 42440491591](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440491591) (unit job 128608485097) — eighteen green check results. Each `unit` job's log carries `✓ src/attempts/scoring.spec.ts (23 tests)` and `Tests 220 passed (220)`, and `lint` and `typecheck` are green in both runs.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| All correct | `scores every correct answer` |
+| All wrong, with negative marking | `subtracts the negative marks of every wrong answer` |
+| All unattempted gives score 0 and accuracy 0 | `scores nothing when nothing was attempted` |
+| An empty version is zero | `scores an empty version as zero` |
+| Mixed | `scores a mixed paper` |
+| Zero attempted never divides | `never divides by zero` |
+| Fractional marks exact in hundredths | `adds fractional marks and fractional negatives without drift`, `keeps tenths exact where binary floats drift` |
+| Marks that differ per question | `uses each question's own marks and negative marks` |
+| One question | `scores a single-question version` |
+| Accuracy rounded half up at four places | `rounds half up at the fourth decimal` (1/3, 2/3, 1/2, 1/6, 5/6, 1) |
+| Each refusal code | `refuses an answer for a question that is not in the paper` (`UNKNOWN_QUESTION`), `refuses two answers for the same question` (`DUPLICATE_ANSWER`), `refuses an option of another question` (`UNKNOWN_OPTION`), `refuses a question that is not single-correct` and `refuses a question with no single correct option` (`NOT_SINGLE_CORRECT`), `refuses a question that lists an option twice` (`INVALID_QUESTION`), `refuses negative, non-finite or over-precise marks` (`INVALID_MARKS`) |
+| The message never names the key | `names the question or option but never the answer key` |
+| Inputs unchanged | `leaves its inputs untouched` |
+| Deterministic | `is deterministic` |
+| Output satisfies every A1 invariant | `produces a result that satisfies every results-table invariant` |
+| Property test against independent integer arithmetic | `agrees with exact integer arithmetic over generated versions` (60 generated versions, mulberry32 written in the spec, reordering changes nothing, a duplicate answer is refused) |
+
+
+
+## Phase 7, A2b (done — both runs of `3fcbe4e` green)
+
+**The builder refuses what a paper cannot score.** The owner's decision (0077): a test holds
+single-correct option questions only; the bank keeps its numerical questions for practice.
+
+- `apps/api/src/questions/single-correct.ts` — the one definition: `MCQ`, at least two options,
+  exactly one marked correct. Called at all three points that can place a question: `setQuestions`,
+  `submit` (which re-reads each question's *current* version, because a question can be edited
+  after it was placed) and inside the `publish` transaction, so nothing unscorable is ever frozen.
+- A refusal is **400** with `code: "question_not_single_correct"`, the `questionId`, and
+  `Question N (<id>) cannot be scored: <reason>` — never which option is correct and never the
+  numerical answer. It runs in the caller's transaction, so the previous list and the status are
+  untouched.
+- `apps/web/src/app/editor/tests/[id]/page.tsx` filters the picker to the same shape and says so;
+  the API stays the authority.
+- `scoreAttempt` still refuses a non-`MCQ` paper — defence in depth, not the guard.
+
+**What this session could find about existing data:** nothing, from the code and the fixtures.
+The bank's validation and the deferred `question_options_answer_key` trigger make an MCQ with
+fewer than two, none or several correct options unpublishable, so the only affected rows would be
+papers holding a `NUMERICAL` question; every repository fixture builds MCQ papers only. The
+read-only query that would find them is in decision 0077, and it has not been run against a
+production database from this session. If one exists, archive the paper and rebuild it.
+
+Proof: `apps/api/src/questions/single-correct.spec.ts` (the four reasons, and no message names an
+option), `apps/api/test/tests-builder.test.ts` (a published numerical question refused when the
+list is set with the previous list intact; submit and publish refusing after a placed question is
+edited into a numerical one, with status and published versions untouched; a valid paper still
+building, submitting and publishing), and one Playwright check in `e2e/test-builder.spec.ts` that
+the picker does not offer the fixture's numerical question while it does offer a single-correct
+one.
+
+**Verified:** both nine-job runs of `3fcbe4eb3756b48c197812f10552a7c0e54ebc43` are green —
+[run 43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670) and [run 43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751) — eighteen green check
+results. Each `unit` job logs `✓ src/questions/single-correct.spec.ts (7 tests)` within `Test
+Files 29 passed (29)` / `Tests 227 passed (227)`. The `database` jobs (2m25s, 1m53s) are green
+under `set -o pipefail`, so the whole `test/` suite, `apps/api/test/tests-builder.test.ts`
+included, ran and passed; their readable slices are Postgres output, so the vitest summary is
+not re-quotable. The `e2e` jobs (4m01s, 4m02s) are green under pipefail, so the new picker
+check and every existing spec passed; their readable slices are container output, so the
+Playwright list is not re-quotable.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| A numerical question is refused when the list is set, and the previous list stays intact | `refuses a numerical question when the list is set, and writes nothing` |
+| An MCQ with no correct option, several correct options or fewer than two options is refused | `refuses an option-based question with no correct option`, `… with several correct options`, `… with fewer than two options` (the helper's unit spec; these states cannot be published past the database's deferred trigger) |
+| Replacing the list with one bad question refuses the whole replacement | `refuses a numerical question when the list is set, and writes nothing` |
+| Submit refuses after a placed question is edited into a bad state | `refuses to submit a paper whose placed question was edited into a numerical one` |
+| Publish re-validates and leaves status and versions untouched | `refuses to publish and leaves the status and the version alone` |
+| A valid single-correct paper still builds, submits and publishes | `still builds, submits and publishes a paper of single-correct questions` |
+| The refusal never contains the correct option | asserted in both refusal cases with `expect(refused.body).not.toContain('isCorrect')` |
+| The picker does not offer the numerical fixture question | `the test builder` — the picker note is visible, the numerical text is not offered, and a single-correct one is |
+
+
+
+## Phase 7, A3a (done — both runs of `2c54378` green)
+
+**The attempt API.** Four self-only routes, a shared finalisation and one projection.
+
+- `POST /v1/enrollments/:id/attempt` locks the enrollment, refuses anything but `OPEN` and a
+  published version, and inserts the attempt in one statement whose `deadline_at` is
+  `now() + duration * interval '1 minute'` — the same transaction timestamp the A1 trigger puts
+  in `started_at`, so the difference is exactly the version's duration. The paper is returned
+  once, in order, through the whitelist. A second start is `409 attempt_already_started` and
+  carries nothing; two simultaneous starts give one attempt via the unique index.
+- `GET /v1/attempts/:id` returns the state and the server's remaining seconds, never the paper.
+- `POST /v1/attempts/:id/submit` locks the attempt, then the enrollment, checks the close
+  (`deadline_at + attempt_submit_grace_seconds`), inserts the answers, ends the attempt as
+  `SUBMITTED`/`STUDENT`, scores with `scoreAttempt`, writes the result and completes the
+  enrollment — one transaction. A replay returns the first result; a late submit ends the
+  attempt with an empty result and is refused `409 attempt_expired`.
+- `GET /v1/attempts/:id/result` finalises an expired attempt first, refuses while it runs, and is
+  the only response carrying the key and the explanations.
+
+`finalizeExpiredAttempt` is exported for A3b's sweeper and shares `finalizeLocked` with the lazy
+paths, so two callers produce one result. Lock order everywhere: attempt → enrollment → answers →
+status → result. The start and the end are audited (`ATTEMPT_STARTED`, `ATTEMPT_SUBMITTED`,
+`ATTEMPT_AUTO_SUBMITTED`).
+
+Proof: `apps/api/test/attempts-api.test.ts` in the database job (fourteen cases: the exact deadline, the paper in
+order with an exact key-allowlist and a recursive key-name scan, no key in state or the submit
+refusal, a simultaneous start, another student's enrollment and attempt as 404, suspended 401,
+`userId` refused in a body and a query, three answers scoring `1.50` exactly with the enrollment
+`COMPLETED`, a retry and a parallel submit giving one result, five invalid submissions writing
+nothing, a late submit discarded, a submit inside a pinned grace window, parallel reads finalising
+with source `LAZY`, a submit racing a read, and the result refused until the end), and
+`apps/api/src/attempts/attempts.projection.spec.ts` in the unit job (the allowlist, the sanitising,
+and that the review is the only shape with the key).
+
+**Time in tests:** `SET LOCAL session_replication_role = replica` in one interactive transaction,
+on the migration owner connection (superuser in the compose and CI database), restores nothing
+globally; the grace setting is pinned and restored to 5.
+
+**Verified:** both nine-job runs of `2c543788972b905952e2277cb1ee72f416d9b1b9` are green —
+[run 43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061) and [run 43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073) — eighteen green check
+results, gitleaks included (9s and 7s, `no leaks found`). Each `unit` job logs `✓
+src/attempts/attempts.projection.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)`
+inside `Test Files 30 passed (30)` / `Tests 231 passed (231)`. `typecheck` is green with the
+`AttemptState` fix. The `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-api.test.ts`
+and its fourteen cases ran and passed after the decimal fix; their readable slices are Postgres
+output, so the vitest summary is not re-quotable. The `e2e` jobs are green under pipefail, so every
+existing spec still passed.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| Start success shape, and `deadline_at - started_at` exactly the duration | `starts an attempt: the deadline is the database clock plus the duration, and the paper is delivered once` |
+| No answer-key data in the start, state or submit responses | the exact question/option allowlist and the recursive key-name scan in the start test; `reads the state without the paper or any answer data`; `expectNoAnswerKey` on the in-progress result refusal and the invalid-answer refusal |
+| A second start is refused without re-delivering questions or moving the clock | same start test — `attempt_already_started`, no `questions`, `startedAt`/`deadlineAt` unchanged in the row |
+| Two simultaneous starts give one attempt | `lets exactly one of two simultaneous starts create the attempt` |
+| Another student's attempt or enrollment is not found | `refuses a closed enrollment, another student's enrollment, …` and `reads the state …` |
+| No `userId` anywhere | `refuses a userId in a body, a query or the path, and an unknown field` |
+| Submit scores exactly as the scoring function, decimals at 2/2/4 places | `scores one right, one wrong and one unattempted answer exactly …` — `1.50`, `6.00`, `0.5000` |
+| Retry returns the same result and writes nothing | `returns the same result on a retry and writes nothing new` |
+| Parallel double submit gives one result | `gives exactly one result when two submits arrive at once` |
+| Invalid input refused, nothing written | `refuses invalid answers and writes nothing` |
+| Submit inside the grace window accepted | `accepts a submit inside the grace window` |
+| Submit after deadline plus grace refused; attempt `AUTO_SUBMITTED`, empty result, enrollment `EXPIRED`, answers never stored | `refuses a submit past the deadline, ends the attempt with an empty result and discards the answers` |
+| Lazy expiry finalises once under two parallel reads | `finalises an expired attempt exactly once through parallel state reads` |
+| A submit racing a lazy read gives one result | `gives exactly one result when a submit races a lazy read` |
+| Result refused while `IN_PROGRESS`, key only after the end | `refuses the result while the attempt runs, and another student's result is not found` and the review assertions in the scoring case |
+
+### The red round on the way
+
+`23443c6` was red in `typecheck` and `database` in both runs: the test's `AttemptState` interface
+lacked `serverNow` (`Property 'serverNow' does not exist on type 'AttemptState'`), and four
+assertions expected `2.00`/`1.50`/`6.00`/`0.00` where the API returned Prisma's unpadded text
+`2`/`1.5`/`6`/`0`. The test interface was stale and the service was the real fault: a `NUMERIC`
+result read back loses its trailing zeroes. Fixed in `2c54378` with one `formatDecimal` helper in
+the service (two places for `score` and `totalMarks`, four for `accuracy`), no assertion
+weakened; the database job then ran 289 tests with none failing.
+
+
+
+## Phase 7, A3b (done — both runs of `6f5579a` green)
+
+**The deadline sweeper.** The worker no longer leaves an abandoned attempt for the next reader:
+a repeatable job ends it, through the API's own finalisation.
+
+- `apps/api/src/attempts/attempts-internal.controller.ts` — `POST /v1/internal/attempts/expire-expired`,
+  guarded by the same `assertInternalRequest` as the bulk-coin drain (secret, address allowlist,
+  failure counter, 404 on any refusal), answering counts only.
+- `AttemptsService.expireExpiredAttempts(batchSize)` — one short transaction reads the grace and
+  claims up to 50 expired ids with `FOR UPDATE SKIP LOCKED`, then each attempt is finalised in its
+  own transaction through the existing `finalizeExpiredAttempt(id, 'SWEEPER')`. No second
+  finalisation path, no setting added, no model change.
+- `apps/worker/src/jobs/attempt-sweeper.ts` — calls the route with the secret and a 15 s timeout,
+  treats an error or a timeout as a failed tick (logged, retried next tick), and runs up to five
+  immediate rounds while a full batch comes back.
+- `apps/worker/src/queues/schedule.ts` — `attempt-expiry-sweep` every 30 seconds
+  (`ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS`), registered as a BullMQ repeatable declaration beside the
+  coin drain, so a restart does not double it.
+
+Proof: `apps/api/test/attempts-sweeper.test.ts` (finalise once with source `SWEEPER`, an empty
+result, score 0, every question unattempted and an `EXPIRED` enrollment, no answers; an attempt
+not due, one inside the grace window and one already submitted untouched; two simultaneous sweeps
+finalising once between them; a sweep racing a submit giving one result; capped batches; an
+injected failure not stopping the others; anonymous, student-session, wrong-secret and
+non-allowlisted callers all 404 with nothing changed), `apps/worker/src/jobs/attempt-sweeper.spec.ts`
+and the schedule spec (the loop, the cap, an unreachable API not throwing, the 30-second
+registration), and `e2e/attempt-sweeper.spec.ts` with `e2e/attempts-fixture.ts`, which pins the
+grace to 0, seeds an expired attempt in SQL, and polls the database — never a student route — for
+`AUTO_SUBMITTED|SWEEPER`, then checks `EXPIRED`, score 0 and no answers.
+
+**Deploy note:** `INTERNAL_ALLOWED_ADDRESSES` must include the worker's address in production, or
+every sweep answers 404 and only lazy reads end an expired attempt.
+
+**Verified:** both nine-job runs of `6f5579a96179378d4ffb58b0ff3475533b103227` are green —
+[run 43814445045](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814445045) and [run 43814450079](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814450079) — eighteen green check
+results, gitleaks 8s and 15s. Each `unit` job logs `✓ src/jobs/attempt-sweeper.spec.ts (7 tests)`,
+`✓ src/queues/schedule.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside
+`Test Files 6 passed (6)` / `Tests 25 passed (25)` for the worker and `Tests 231 passed (231)` for
+the API. The `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-sweeper.test.ts`
+and the existing coin and bulk tests ran and passed; their readable slices are Postgres output,
+so the vitest summary is not re-quotable. The `e2e` jobs are green, so `e2e/attempt-sweeper.spec.ts`
+ran and passed; their readable slices show the worker's `repeatable jobs registered: …, attempt-expiry-sweep`
+line and only its early `0 expired swept` ticks — the later `1 expired swept` line is in the
+elided portion, so the spec's own `AUTO_SUBMITTED|SWEEPER` assertion is the proof, not a quoted
+log line.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| An expired attempt is finalised once as `AUTO_SUBMITTED` by `SWEEPER`, with an empty result and the enrollment `EXPIRED` | `finalises an expired attempt once: SWEEPER, an empty result, an EXPIRED enrollment, no answers` also `finalises an expired attempt with source SWEEPER, not LAZY` (e2e) |
+| An attempt inside the grace window or before its deadline is not touched | `leaves an attempt that is not due, one inside the grace window and one already submitted alone` |
+| An already ended attempt is not touched | same test — the `SUBMITTED` attempt keeps its one result |
+| Two simultaneous sweeper calls finalise each attempt exactly once in total | `finalises each attempt exactly once when two sweeps run at the same time` |
+| A sweeper racing a student's submit gives one result | `gives one result when the sweeper races a student’s submit` |
+| Capped batches | `works a batch larger than the cap in capped batches`, and the worker spec’s full-batch rounds |
+| One failing attempt does not stop the others | `does not let one failing attempt stop the others` (injected failure, retried by the next sweep) |
+| Counts-only response and logs | `Object.keys(body).sort()` equals `failed, finalized, skipped`; the service logs ids and counts only |
+| The route refuses anonymous, student, editor, wrong secret and non-allowlisted address | `refuses an anonymous caller, a student session, a wrong secret and a non-allowlisted address` |
+| The real worker finalises an expired attempt with no student-facing read, source `SWEEPER` | `e2e/attempt-sweeper.spec.ts` — polls the database only, pins the grace to 0, restores it |
+| The coin drain behaves unchanged after the shared guard | the unchanged `coins-admin.test.ts` and `coin-reconciliation.test.ts`, green in the same `database` jobs |
+
+### The red round on the way
+
+`1f07d3d` was red in `e2e` in both runs: `Expected: "0" / Received: "0.00"` at
+`e2e/attempt-sweeper.spec.ts:60`. The worker had done its job — its log read `attempts: 1 expired
+swept` and Playwright reported `43 passed` with this spec the only failure — but the spec compared
+the `NUMERIC(8,2)` `score` as text, and Postgres renders that as `0.00`. The test was wrong; it was
+fixed in `6f5579a` to assert the value as a number, with no product code touched.
+
+
+
+## Phase 7, A4 (built — superseded by the "done" section below)
+
+**The taking screens.** A student reaches their paper from the enrollment list, takes it once, and
+sees the result. The paper is delivered once and never again; the server keeps the clock and the
+answer key.
+
+- `apps/web/src/app/attempt/[enrollmentId]/page.tsx` — the entry: instructions and Start before a
+  start, the "already started, cannot be resumed" screen with the server's remaining time when an
+  attempt exists that this page cannot show, a redirect to the result once it has ended, and the
+  P5 not-available screen for an enrollment that is not the caller's, does not exist, or is no
+  longer open.
+- `apps/web/src/components/attempt-runner.tsx` — the client component: the paper and the answers
+  in React memory only, one question at a time with sanitised stems and options as labelled radio
+  groups, previous/next, a palette of answered and unanswered questions, a confirm step that says
+  how many are unanswered, changeable and clearable answers, focus moved to the question on change,
+  a `beforeunload` warning, and a countdown on a monotonic `performance.now()` deadline seeded from
+  the start response's remaining seconds and replaced by the server's on every re-sync (30 s,
+  `visibilitychange`, and right before submitting).
+- `apps/web/src/app/attempt/result/[attemptId]/page.tsx` — the minimal result: score, total marks,
+  accuracy, correct, wrong, unattempted, attempted and how it ended, with the API's decimals as
+  given; a running attempt shows its countdown only. No question, key or explanation.
+- `apps/web/src/components/attempt-countdown.tsx`, `apps/web/src/lib/countdown.ts` — the display
+  half of the countdown, shared by the taking and result pages.
+- `apps/web/src/lib/attempts-api.ts` — the attempt calls, server-side only, plus a defensive read of
+  every state envelope and `accuracyPercent`, which moves the decimal point in a string.
+- `apps/web/src/app/api/attempts/start/route.ts`, `.../[id]/state/route.ts`,
+  `.../[id]/submit/route.ts`, `apps/web/src/app/api/enrollments/[id]/attempt/route.ts` — the four
+  handlers, each `no-store`, each validating its own parameters and body, each session-checked.
+- `apps/api/src/attempts/attempts.controller.ts` and `attempts.service.ts` —
+  `GET /v1/enrollments/:id/attempt`: self-only, state only, 404 for another student's or an unknown
+  enrollment, 400 for a query value or a `userId`.
+- `apps/web/src/app/tests/page.tsx` and `apps/web/src/app/tests/[id]/page.tsx` — an `OPEN`
+  enrollment now shows "Open attempt" and links to it; the code that promised "taking it is the
+  next phase" is gone.
+
+**Four things fixed while reviewing the uncommitted work**: the result page's relative imports
+were one directory too shallow; the submit handler forwarded the API's result body, which carries
+the review, the correct option and the explanation, to the browser; the runner injected a
+question's raw LaTeX as HTML, and LaTeX is not sanitised by the API — it now goes through KaTeX
+with `trust: false`; and clearing an answer wrote an empty option id, which would have made the
+whole submit a 400.
+
+**Proof.** `apps/api/test/attempts-api.test.ts` gained three cases: the enrollment read before a
+start (`{ attempt: null }`), during it (state only, exact keys, no questions, no key names) and
+after it (ended, with no score and no explanation), and every refusal — another student, unknown,
+anonymous, suspended, `userId`, malformed id — leaving the enrollment `OPEN` with no attempt
+created. `e2e/attempt-take.spec.ts` covers the happy path with exact decimal text (`2.00 of 4.00`,
+`100.00%`, one right, none wrong, one unattempted), a double start writing exactly one attempt
+(read from the database), a reload showing the cannot-resume screen with none of the stems or
+option text in the page or its HTML, no answer key in any start/state/submit response, the
+one-minute paper auto-submitting at the deadline with `1.50 of 4.00` and `50.00%`, a late submit
+refused with the "time ran out" message and an auto-submitted `0.00 of 4.00`, and the access
+checks — another student's attempt and result, an unknown id, a closed enrollment, and an
+anonymous visitor redirected to sign in.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| The enrollment read is `null` before a start and state only afterwards | `answers the enrollment’s attempt as null before a start and its state after, without the paper` |
+| An ended attempt reads as ended and carries no result data | `reads an ended attempt as ended, and carries no result data` |
+| Another student, an unknown id, anonymous, suspended, `userId` and a bad id are all refused, with nothing changed | `answers not found for another student’s enrollment, an unknown one and a suspended account` |
+| Start, answer, submit and an exact result | `a student starts once, answers and submits, and the result is exact` (e2e) |
+| A double start writes one attempt | same spec — two clicks in one task, `readAttemptsForEnrollment` is 1 |
+| No key or explanation in any start, state or submit response, or on the result page | same spec — every `/api/attempts/` and `/api/enrollments/` body is scanned |
+| A reload cannot show the paper again | `a reload cannot show the paper again and says so, with a countdown` (e2e) |
+| The page auto-submits at the server's deadline with its answers | `at the deadline the page auto-submits and lands on the result with its answers` (e2e) |
+| A submit after the deadline is refused, with the reason on the result | `a submit that arrives after the deadline is refused and the result says so` (e2e) |
+| Another student, an unknown id, a closed enrollment and an anonymous visitor | `another student’s attempt, an unknown one and a closed one are all not available` (e2e) |
+
+### Was not yet verified at the time
+
+That first record was written before any run of this work had been read. It has since been verified in
+both nine-job runs of `e2f88959cb555610ed6a6d47f952de9d99d3d60c`; the "done" section below is the
+current record, and the queue item is `[x]`.
+
+
+
+### Known flake, not A4
+
+`e2e/catalog.spec.ts:237` (`an editor can author in their own catalog but not reach the admin ones`)
+failed once on `fbc6bde373f8caf67723616b56ed221ff42a1079` and passed on retry: `page.fill:
+Test timeout of 30000ms exceeded`, waiting for `locator('input[name="fullName"]')` after
+`page.goto('/admin/users/new')` (job 133204755164). The page is a plain server-rendered form
+(`apps/web/src/app/admin/users/new/page.tsx:22-48`) and that test has no timeout of its own while it
+registers an admin, signs in and navigates, so the cause is not visible by reading. It is recorded
+here, not fixed, because a fix would be a guess; the next session can give it an explicit bounded
+timeout if the trace shows the budget being eaten by the setup rather than by a missing form.
+
+
+
+## Phase 7, A4 (done — both runs of `e2f8895` green)
+
+**Verified** in both nine-job runs of `e2f88959cb555610ed6a6d47f952de9d99d3d60c`
+([run 43841325606](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841325606), push, `e2e` 5m38s,
+`gitleaks` 10s; [run 43841317370](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841317370),
+pull_request, `e2e` 5m35s, `gitleaks` 8s): eighteen green check results. The `e2e` jobs are green under
+`set -o pipefail`, so the whole `playwright test` run exited 0 — every spec passed, including all five
+`attempt-take` tests, none of which is skipped — and the `database` jobs are green, so
+`apps/api/test/attempts-api.test.ts` (the three enrollment-state cases and the lazy-finalisation case
+included) and `apps/api/test/attempts-sweeper.test.ts` ran and passed. Their readable log slices are
+Postgres and container output, so the per-test Playwright and vitest lines are not re-quotable; the green
+jobs are what prove the runs.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| The instructions render, then Start opens the paper | `a student starts once, answers and submits, and the result is exact` — `instructions shown`, `press Start twice`, `paper shown` |
+| The paper and the countdown are on screen | same test — `attempt-question` visible and `attempt-countdown` matching `MM:SS` |
+| A double click writes exactly one attempt | same test — two clicks in one task, then `readAttemptsForEnrollment` is 1 |
+| Submit gives the exact score and counts, as decimal text, status submitted | same test — `2.00 of 4.00`, `100.00%`, correct 1, wrong 0, unattempted 1, attempted `1 of 2`, "Submitted by you" |
+| A reload shows the cannot-resume screen with no question content | `a reload cannot show the paper again and says so, with a countdown` — the message is present, the countdown matches, and neither page text nor HTML contains a stem |
+| No key or explanation in any response or page, the capture is proven non-empty and the scan proven able to fail | same test — start 200/201, state 200, submit 200 with body `{ ok: true }`; the three bodies and the instructions, paper and result pages are scanned; the planted `isCorrect`, `"correct"` key and explanation are found by the same scanners |
+| The submit body is captured through the route handler | same test — `page.route` + `route.fetch()` + `route.fulfill`, so the body is read where it exists |
+| The one-minute attempt auto-submits at the deadline with its answers | `at the deadline the page auto-submits and lands on the result with its answers` — result within 85 s, `1.50 of 4.00`, `50.00%` |
+| A late submit is refused with the "time ran out" message and an auto-submitted 0.00 | `a submit that arrives after the deadline is refused and the result says so` — grace pinned to 0, `0.00 of 4.00`, "Ended automatically at the deadline" |
+| Another student's ids show not-available | `another student’s attempt, an unknown one and a closed one are all not available` |
+| An anonymous visitor is redirected to sign-in | same test |
+| The state route returns state only, not-found for another student, and finalises an expired attempt lazily | `answers the enrollment’s attempt as null before a start and its state after, without the paper`, `reads an ended attempt as ended, and carries no result data`, `ends an expired attempt on the enrollment read, lazily, and answers its state only`, `answers not found for another student’s enrollment, an unknown one and a suspended account` |
+| Rich content only through the sanitising renderer, and KaTeX with trust false | `attempt-runner.tsx` puts only the API's `sanitizeStoredContent` output into HTML and renders LaTeX through `renderLatex` |
+
+### The four defects found in the old tree
+
+Reviewing the first, uncommitted version of A4 found four real defects, all fixed before it was
+committed: the result page's relative imports were one directory too shallow; the submit route handler
+forwarded the API's result body — which carries the review, the correct option and the explanation — to
+the browser; the runner injected a question's raw LaTeX as HTML, and the API does not sanitise `latex`;
+and "clear this answer" wrote an empty option id, which would have made the whole submit a 400.
+
+### The red rounds on the way
+
+Five red rounds, each a different cause, none of them the page's behaviour:
+
+- `a419e9b` — the first taking-page test timed out at the 30 s default with no message. The double click
+  used `locator.evaluate`, which retries while its element is detached, and the Start button is replaced
+  by the paper; fixed in `372df09` with `page.evaluate`.
+- `372df09` — still red, now at 120 s, and the failed `database` run also showed the sweeper-race test
+  expecting `SWEEPER` where the submit's own expiry path had written `LAZY`; fixed in `009a4e1` by
+  accepting both documented sources and asserting the invariants in both orders. Green from then on.
+- `4a22e5a` — the new instrumentation named the step: "the capture is real and carries no key exceeded
+  20000ms". The response bodies had been collected as promises and awaited after the page navigated;
+  fixed in `fbc6bde` by reading each body immediately after its own `waitForResponse`.
+- `fbc6bde` — start and state bodies read fine, and the submit body still hung: the runner reads only
+  `response.ok` and navigates at once, so Chromium discards that body; fixed in `2a1dd61` by capturing it
+  through a `page.route` handler that fetches and fulfils the real response.
+- `fbc6bde`, one run — `e2e/catalog.spec.ts:237` flaked and passed on retry; recorded above as a known
+  flake, not fixed.
+
+
+
+## Phase 7, A5 (done — both runs of `0637d14` green)
+
+**The result and the review.** The page a student sees the answer key on, and the only one.
+
+- `apps/web/src/app/attempt/result/[attemptId]/page.tsx` — server-rendered summary (test title,
+  score of total marks, accuracy as a percentage by moving the decimal point, correct, wrong,
+  unattempted, attempted, status, and a plain note for an auto-submitted attempt) plus the
+  per-question review: number, sanitised stem and options with "Your answer" / "Correct answer" /
+  "Your answer was wrong" markers, an unattempted label, the marks earned or lost printed from the
+  API's decimal strings, and the sanitised explanation. Filters through a validated
+  `?show=all|wrong|unattempted`, a jump list, and a retake link that says a retake needs a new
+  enrollment and a new fee.
+- `apps/web/src/lib/attempts-api.ts` — the review types and the result's `testId`/`testTitle`; the
+  submit type is now the summary only.
+- `apps/web/src/lib/security-headers.ts` (+ its spec) — `Cache-Control: no-store, max-age=0` and
+  `Referrer-Policy: no-referrer` for `/attempt/result/:path*` through `next.config.ts`.
+- `apps/web/src/app/tests/page.tsx` — a **Result** link for a `COMPLETED` or `EXPIRED` enrollment
+  (it goes through `/attempt/<enrollmentId>`, which redirects to the result).
+- `apps/api/src/attempts/attempts.service.ts` and `attempts.controller.ts` — the result view carries
+  `testId` and `testTitle`; `POST /v1/attempts/:id/submit` now answers `AttemptSubmitView`, the
+  summary without the review, so the result read is the single response carrying the key.
+
+**Proof.** `apps/api/test/attempts-api.test.ts` — the review of the attempt's own frozen version
+(its question ids and positions equal that version's `test_questions`), an unattempted question with
+no chosen option, an auto-submitted attempt with score `0.00`, total `6.00`, every question
+unattempted and the key and explanations still shown, the recursive scan finding a key in the ended
+result while start, state and submit carry none, a malformed id as 400, and two parallel result
+reads of an expired attempt giving one row and one `AUTO_SUBMITTED` result. The submit tests now
+assert the summary's exact keys and `expectNoAnswerKey` on the submit body.
+`e2e/attempt-review.spec.ts` — the exact summary (`1.50 of 6.00`, `50.00%`, 1/1/1, `2 of 3`), every
+question's markers and explanation, the three filters, in-progress showing no paper content, the
+auto-submitted page, the back button returning to the result and not the paper, and access checks for
+another student, an anonymous visitor and a malformed id.
+
+**Known limitation.** The review's question list, order and marks are the attempt's frozen
+`test_version_id`, but each question's *content* is resolved from that question's current version —
+the same source the start response and scoring use. A published paper or a live attempt can therefore
+still have a question edited under it (decision 0082): a live submit is then refused `400
+unknown_option` rather than mis-scored, and an ended attempt's review would show new content beside an
+immutable result. The fix is to pin `test_questions.question_version_id` at publish, with the start
+response, the scoring function and the review all reading the pinned version; it is queued as **A5b,
+before the merge**, and was not half-built here.
+
+**Verified** in both nine-job runs of `0637d1477d612074af56a0a9994d5e5c57d6dbf7`:
+[run 43857637203](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857637203) (push, `e2e` 6m00s,
+`gitleaks` 10s) and [run 43857648539](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857648539)
+(pull_request, GitHub's merge of that head into `1133d76`, `e2e` 6m08s, `gitleaks` 11s): eighteen green
+check results, none of the nine jobs red in either run. Each `unit` job logs
+`✓ src/lib/security-headers.spec.ts (8 tests)` inside `Test Files 9 passed (9)` / `Tests 57 passed (57)`
+for `apps/web` (48 for `packages/shared`, 25 for the worker, 231 for the API in the same job), and the
+whole `pnpm test:unit` step exited 0. The `database` jobs are green under `set -o pipefail`, so the entire
+`pnpm test:db` suite ran and passed, `apps/api/test/attempts-api.test.ts` and its five new review cases
+included; their readable log slices are Postgres and service-container output, so the vitest summary is
+not re-quotable. The `e2e` jobs are green under `set -o pipefail`, so the whole `playwright test` run
+exited 0: every spec passed, `e2e/attempt-review.spec.ts` included, and because its five tests are one
+`describe.serial` block that stops at the first failure, a passing run is all five; their readable slices
+are the container logs collected after the run, so the Playwright list is not re-quotable either.
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| The summary is exact: `1.50 of 6.00`, `50.00%`, 1 correct, 1 wrong, 1 unattempted, `2 of 3`, "Submitted by you" | `a submitted attempt shows the exact summary and the full review` (e2e) |
+| Each question carries its markers — correct `+2` with your answer and the correct answer, wrong `−0.5` with all three, unattempted `0` with the label and the key — and its explanation | same test |
+| The Wrong and Unattempted filters show only what they name, and All restores it, through a validated `?show=` | same test — 1, 1 and 3 cards, each with its `data-outcome` |
+| While the attempt runs, the result page says so and its text and HTML carry no stem, no key name and no explanation | `before the end the result page shows in-progress and none of the paper` (e2e) |
+| An auto-submitted attempt shows `0.00 of 6.00`, 0/0/3, the plain "no answers were received" note, and every question unattempted with its key | `an auto-submitted attempt shows 0.00 and every question unattempted` (e2e) |
+| The back button does not bring the paper back, and the entry URL of an ended attempt redirects to the result | `the back button after the result does not show the paper again` (e2e) |
+| Another student sees not-available with none of the review, an anonymous visitor is sent to sign-in, and a malformed id is not available | `another student, an anonymous visitor and a malformed id` (e2e) — the second student in its own browser context and client address |
+| The start and state bodies carry no key, and the web submit handler's body is non-empty and exactly `{ ok: true }` | the first test — the submit body captured through `page.route` + `route.fetch()`, the planted `isCorrect` found by the same scan |
+| The review is the attempt's own frozen version, in its order, with an unattempted question marked | `returns the review of the attempt’s own frozen version, with an unattempted question marked` (database) |
+| An auto-submitted attempt's review shows the key and the explanations for every question | `shows the key and the explanation for an auto-submitted attempt, with every question unattempted` (database) |
+| The paper responses carry no key, and the same recursive scan finds one in the ended result | `carries no key in the paper responses, and the same scan finds one in the result` (database) |
+| A malformed attempt id answers 400 | `answers a malformed attempt id on the result as a bad request` (database) |
+| Two parallel result reads of an expired attempt give one row and one result | `gives one result and one row when two result reads arrive on an expired attempt` (database) |
+| The submit body is the summary only, with its exact keys and no answer key | `scores one right, one wrong and one unattempted answer exactly, and completes the enrollment` (database) — `expectNoAnswerKey` on the submit body |
+| The result and review route is never cached | `never caches the result and review page` — `apps/web/src/lib/security-headers.spec.ts`, 8 tests, in the `unit` log |
+
+
+
+### The red rounds on the way
+
+`a39a199` was red in `typecheck` and `e2e` in both runs: the test's `AttemptResult.review` element
+type lacked `position`, `marks` and `negativeMarks`, and the review spec asserted the web submit
+body was empty before asserting it equals `{ ok: true }`. Both were test mistakes and were fixed in
+`7fe9f0b`, which left `typecheck` and `database` green.
+
+`7fe9f0b` was still red in `e2e`: the back-button test assumed browser history would land on the
+result after a `router.push`, and the in-progress test flaked once on registration from a shared
+client address. The back-button test now goes back and asserts only what the rule says — the paper
+and its stems are gone — and then visits the entry URL and asserts it redirects to the result; each
+test in `e2e/attempt-review.spec.ts` sets its own `x-forwarded-for`, so a per-IP registration limit
+is never shared.
+
+
+`3ade1fa` — the docs commit on top of `7fe9f0b` — was red in `e2e` in both runs, `53 passed` and one
+failure: `e2e/attempt-review.spec.ts:583 › another student, an anonymous visitor and a malformed id`,
+`TimeoutError: page.fill: Timeout 15000ms exceeded`, waiting for `locator('input[name="fullName"]')` in
+`registerStudent`. The second student was being registered on a page that was still signed in as the
+first, and middleware sends a signed-in visitor from `/register` to `/account`, so the form never
+rendered. Fixed in `0637d14`: the second student gets a browser context of its own, with its own client
+address, closed in a `finally`. No assertion was loosened — the not-available screen, the anonymous
+redirect and the malformed id are checked exactly as before.
+
+
+
+## Phase 7, A5b (done — both runs of `015bf33` green, push run re-run once)
+
+**The paper pins the question version it froze.** A published paper no longer resolves a question's
+content through `questions.current_version`, so editing the bank cannot change what an attempt was
+given, what it was scored on, or what its review shows.
+
+- `apps/api/prisma/migrations/20270301000000_test_question_pinning/migration.sql` —
+  `test_questions.question_version_id` (nullable, foreign key to `question_versions`, `ON DELETE
+  RESTRICT`, indexed), the backfill of every `PUBLISHED`/`ARCHIVED` version's rows to each question's
+  current version, `test_questions_version_matches` (the pin names a version of the same question),
+  `test_versions_pinned_before_publish` (a version cannot be stamped published with an unpinned
+  row), a tightened `test_questions_frozen` (a row cannot leave a published paper either), and two
+  post-backfill assertions.
+- `apps/api/prisma/schema.prisma` — `TestQuestion.questionVersionId` and its relation;
+  `QuestionVersion.pinnedIn`.
+- `apps/api/src/tests/tests.service.ts` — `pinQuestions`, called inside `publish` before the stamp,
+  and `assertScorablePaper(…, { requirePinned: true })` against the versions just pinned.
+- `apps/api/src/attempts/attempts.service.ts` — `loadPaper` reads the pinned version (the current
+  version only when there is no pin), and `start` refuses `paper_not_pinned`.
+- `apps/api/test/support/database.ts` — `publishTestVersion`, the pin-then-stamp order every
+  fixture now uses; the three attempt seed helpers and `e2e/tests-fixture.ts` use the same order.
+- `e2e/tests-fixture.ts` — `editQuestionFixture` writes what `saveDraft` + question `publish` leave
+  behind, because the e2e editor is seeded in SQL and never signs in; and `seedBuilderFixture` takes
+  optional option texts so a spec can scan for them.
+
+**Proof.** `apps/api/test/attempts-pinning.test.ts` (database job, seven cases) — publish pins every
+row; a non-scorable current version is refused `question_not_single_correct` with the version,
+status and pins unchanged; after a real `PATCH` + publish of the question, a new attempt gets the
+original content and option ids and the ended attempt's review shows the original stem, explanation
+and correct option beside its `4.00`; an in-flight submit after the edit is accepted and scored
+`-0.50` (the withdrawn `unknown_option`); a paper published after the edit pins the new version; a
+draft keeps null pins and cannot be stamped published; the pin cannot be changed, deleted or moved
+out of a published paper and cannot name another question's version. `e2e/attempt-review.spec.ts`
+adds the sixth serial test: sit, submit, edit, and the result and a second student's attempt both
+still show the paper as it was.
+
+**The reviewer's own in-progress check.** The same spec's in-progress test now scans the result URL
+for every option text of the fixture's three questions, the "Correct answer" marker and both
+explanations, as well as the stems, and proves both scanners against a planted string before
+trusting their emptiness.
+
+**Known limitation, owner to confirm.** The backfill pins an already-published paper to the
+question's current version at migration time. That is exact for a paper whose questions were never
+edited after publishing and an approximation for one that was edited (the old content is not in the
+database); decision 0082 records the rule.
+
+**Verified** in both runs of `015bf33dabdb9745571209e53572e0570342e8bd`:
+[run 44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (push, re-run once
+after its `gitleaks` hung — `e2e` 5m41s, `gitleaks` 9s) and
+[run 44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) (pull_request,
+`e2e` 5m26s, `gitleaks` 17s): eighteen green checks between them, none red. The `database` jobs (1m53s
+and 1m56s) are green under `set -o pipefail`, so the whole `pnpm test:db` suite ran, the migration
+`20270301000000_test_question_pinning` applied and `apps/api/test/attempts-pinning.test.ts` passed all
+seven of its cases; their readable log slices are Postgres output, so the vitest summary is not
+re-quotable. The `e2e` jobs are green under pipefail, so every spec passed, the sixth
+`attempt-review` case included; the `unit` jobs (38s and 26s) are green too.
+
+**Checked a second time by hand:** the pinning tests compare against the ORIGINAL values and the
+sixth e2e case reads the original stem and option texts from the page body, not from the heading
+whose test id only carries "Question 1".
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| Publishing pins every row, and a non-scorable current version is refused `question_not_single_correct` with the version, the paper's status and every pin unchanged | `pins every placement to the question’s current version when the paper is published`, `refuses to publish a paper whose current question version is not scorable` (database) |
+| After the question is edited in the bank, a new attempt gets the ORIGINAL content and option ids | `delivers, scores and reviews the pinned content after the question is edited` — `contentHtml` contains the original stem, the option ids equal the pinned version's, and the edited ids are absent (database); sixth e2e case for a second student |
+| Scoring uses the original key | same database test — `4.00`, 2 correct, 0 wrong; the in-flight case below — `-0.50` |
+| The ended review shows the original stem, options, key and explanation beside the stored score | same database test — `score` `4.00`, review stem/explanation original, `correctOptionId` the original, exactly one `isCorrect` option, the edited values absent; sixth e2e case — `2.00 of 2.00`, correct 1, original stems, options and explanation on the page |
+| An in-flight submit after the edit is accepted and scored `-0.50` on the original key | `accepts an in-flight submit after the edit and scores it on the paper it was given` — 200 (no `unknown_option`), `-0.50`, 1 wrong, review original (database) |
+| A paper published AFTER the edit pins the new version | `pins a paper published after the edit to the new version, and leaves a draft unpinned` — the pin is the new version id and the start body carries the edited content (database) |
+| A draft stays unpinned | same test — the draft placement's `questionVersionId` is null, and stamping that version published is refused `/not pinned to a question version/` |
+| The pin is frozen, and a published version cannot hold an unpinned row | `refuses to change, remove or move a pin on a published paper, and a pin of another question` — `/a published paper cannot be changed/` for update, delete and a move out; `/belongs to question/` for another question's version; the pin is unchanged after every refusal; plus `test_versions_pinned_before_publish` in the draft case above |
+| No new key exposure in any response | `expectNoAnswerKey` on the start body (`:566`) and the submit body (`:604`), the submit being the summary only; `attempts.projection.ts` unchanged |
+| The in-progress result page shows no stem, option text, marker or explanation | `before the end the result page shows in-progress and none of the paper` (e2e) — every option text, `Correct answer`, both explanations and the stems absent from text and HTML, scanners proven against a planted string first |
+
+### The red rounds on the way
+
+- `7080600` — `e2e/tests-fixture.ts:217` `ReferenceError: querySql is not defined`: the new edit
+  helper used a function that lives in `attempts-fixture.ts`; fixed in `0594f13` with a `querySql`
+  helper in the file that uses it.
+- `7080600` — `attempts-pinning.test.ts:834` `expected 409 to be 200`: `publishTestVersion` stamped
+  the version but left the `tests` row `SUBMITTED`, so archiving it was refused. The fixture was
+  wrong, not the service: fixed in `0594f13` by stamping the test row the way `TestsService.publish`
+  does.
+- `015bf33` — `attempt-review.spec.ts:805` `toContainText` on `attempt-question` expected a stem,
+  received `Question 1`: that test id is the heading. Fixed in `015bf33` by asserting the heading's
+  text and reading the stem and options from the page.
+- Two hung `gitleaks` jobs: the `cf50ca4` pull_request run and the `015bf33` push run
+  (`133770196668`, "running, 7s" for ~20 minutes). The second was re-run once and passed in 9s as
+  `133867898247`; nothing about the repository was at fault.
+
+### Known gap — CI hygiene
+
+The `gitleaks` job has hung twice, both times stuck in its own step after the runner started it (the
+section that downloads gitleaks 8.16.1 and scans), never red and never finishing. Proposed for the
+A6 push, **not changed here**: a `timeout-minutes` of a few minutes on the `gitleaks` job, so a hang
+fails fast instead of lingering on a check list. The action stays pinned by full commit SHA.
+
+
+
+
+## Phase 7 — the whole phase, claim by claim
+
+Branch `phase-7`, pull request #28 (draft, unmerged). Every row below was seen passing in a finished
+CI run on the head named; nothing here is claimed from reading alone.
+
+| Unit | Claim | Run | Proving file |
+| --- | --- | --- | --- |
+| A1 | The attempt model and its guards: one attempt per enrollment, the database's clock, one-way ending, answers only for placed questions, an immutable result, and the grace setting | [42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709), [42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335) | `apps/api/test/attempts-model.test.ts` (database job) |
+| A2 | Scoring: marks × correct − negative × wrong, unattempted zero, accuracy correct ÷ attempted, hundredths in integers, refusal over ignoring | [42440488533](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440488533), [42440491591](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440491591) | `apps/api/src/attempts/scoring.spec.ts` (unit job, 23 tests) |
+| A2b | Only single-correct option questions reach a paper, refused on set, submit and publish inside the transaction | [43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670), [43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751) | `apps/api/src/questions/single-correct.spec.ts`, `apps/api/test/tests-builder.test.ts` |
+| A3a | The start, state, submit and result routes: the server's deadline, the paper once, no key before the end, one submit, the grace window, lazy expiry, one result under parallel reads | [43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061), [43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073) | `apps/api/test/attempts-api.test.ts` (database job) |
+| A3b | The sweeper: the internal route's guard, `SKIP LOCKED` claims, one finalisation path, the real worker ending a seeded expired attempt | [43814445045](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814445045), [43814450079](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814450079) | `apps/api/test/attempts-sweeper.test.ts`, `apps/worker/src/jobs/attempt-sweeper.spec.ts`, `e2e/attempt-sweeper.spec.ts` |
+| A4 | The taking page: start once, submit, the exact result, a reload cannot show the paper, auto-submit at the deadline, a late submit refused, access checks | [43841325606](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841325606), [43841317370](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841317370) | `e2e/attempt-take.spec.ts` |
+| A5 | The result and review page: exact summary decimals, per-question markers and explanation, the three filters, in-progress shows nothing, an auto-submitted 0.00, the back button, another student and a malformed id not found, no-store | [43857637203](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857637203), [43857648539](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857648539) | `e2e/attempt-review.spec.ts`, `apps/api/test/attempts-api.test.ts`, `apps/web/src/lib/security-headers.spec.ts` |
+| A5b | The published paper pins the question version it froze: publish pins and re-validates, all readers use the pin, an in-flight submit still scores, the pin is frozen, a draft stays unpinned | [44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (push, `gitleaks` re-run once), [44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) | `apps/api/test/attempts-pinning.test.ts` (7 cases), sixth case in `e2e/attempt-review.spec.ts` |
+
+**The phase's own head so far:** both runs of `475710d93d0e699bda43e63844a8d617894c70da` are green
+([44032983162](https://github.com/Kapil-viahwa/abhyas/actions/runs/44032983162), push, `e2e` 5m22s,
+`gitleaks` 13s; [44032993204](https://github.com/Kapil-viahwa/abhyas/actions/runs/44032993204),
+pull_request, `e2e` 5m59s, `gitleaks` 10s), 18 checks green.
+
+**Main sync:** `origin/main` was still `1133d76c24efba107dd707109e4ec8b0e456b988` when this session
+fetched, so no merge was made and nothing was renamed; both Phase 7 migrations sort after every
+migration on `main` (`20270201000000_attempts`, `20270301000000_test_question_pinning`).
+
+**CI hygiene:** the `gitleaks` job hung twice on this branch (`cf50ca4` pull_request run, and the
+`015bf33` push run where it was re-run once and passed in 9s); its `timeout-minutes` is now 5 instead
+of 10, so a hang fails fast. Every other job already carried a timeout before this session.
+
+**Pending:** the runs on the final A6 docs head — the merge waits for both to be fully green, and
+this session does not merge.
+
+### Known gaps, stated plainly
+
+- **No autosave.** Answers live only in the browser's memory until submit; a closed browser or a
+  reload scores zero. `attempt_answers` exists so autosave can be added later as a write path.
+- **No shuffling** and no per-section patterns; questions come in the version's order.
+- **No refund** for a lost or auto-submitted attempt; a retake is a new enrollment and a new fee.
+- **The paper lives only in browser memory**; a lost start response means a lost attempt (the
+  enrollment's state route says an attempt exists but cannot re-deliver it).
+- **Production's migration role must own `test_questions`** (or be able to disable
+  `test_questions_frozen` for one statement), and the A5b backfill is exact only where a question was
+  never edited after its paper was published.
+- **The `gitleaks` job has hung twice** on this branch; the five-minute cap is the fix, not a cure.
+- **`e2e/catalog.spec.ts:237`** flaked once in Phase 7 (job 133204755164) and passed on retry; it is
+  unrelated to the attempt engine and is recorded above, not fixed.
+- **The Dependabot major upgrades are parked** (PRs #2–#12, untouched); the cleanup has not run.

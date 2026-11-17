@@ -1,6 +1,7 @@
 import { processPing } from '../jobs/ping';
 import { OTP_RETENTION_MINUTES, purgeOtpRequests, type OtpPurgeClient } from '../jobs/otp-purge';
 import {
+  ATTEMPT_EXPIRY_SWEEP_JOB,
   COIN_BULK_DRAIN_JOB,
   COIN_RECONCILIATION_JOB,
   MAINTENANCE_QUEUE,
@@ -28,6 +29,10 @@ export interface MaintenanceDeps {
   /** Compares every wallet with its ledger, through the API's internal route. */
   readonly coinReconciliation?:
     | { run(): Promise<{ walletsChecked: number; mismatches: number } | null> }
+    | undefined;
+  /** Finalises expired attempts through the API's internal route. */
+  readonly attemptSweeper?:
+    | { run(): Promise<{ finalized: number; skipped: number; failed: number }> }
     | undefined;
 }
 
@@ -71,6 +76,18 @@ export async function runMaintenanceJob(job: MaintenanceJob, deps: MaintenanceDe
     const result = await deps.coinReconciliation.run();
     deps.log(
       `coins: reconciliation checked ${String(result?.walletsChecked ?? 0)} wallet(s), ${String(result?.mismatches ?? 0)} mismatch(es)`,
+    );
+    return result;
+  }
+
+  if (job.name === ATTEMPT_EXPIRY_SWEEP_JOB) {
+    if (deps.attemptSweeper === undefined) {
+      throw new Error('The worker has no attempt sweeper configured');
+    }
+
+    const result = await deps.attemptSweeper.run();
+    deps.log(
+      `attempts: ${String(result.finalized)} expired swept, ${String(result.skipped)} skipped, ${String(result.failed)} failed`,
     );
     return result;
   }

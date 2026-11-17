@@ -1980,3 +1980,692 @@ field from `enrollments.service.ts`; there is no second fetch style and no clien
 A page that cannot load its data renders an error sentence instead of throwing (the catalog, the
 enrollment list and the detail page each have their own empty/error branch), because a thrown
 server component shows the student a crash and the run a missing test id.
+
+
+
+## 0074 — Phase 7: the server's clock, submit-only answers, and the sweeper
+
+**Decided before phase 7's first unit. Two parts: what the owner has decided, and what this
+session assumes and the owner will confirm.**
+
+### Decided by the owner
+
+**The server owns the clock.** `POST /v1/enrollments/:id/attempt` computes `deadline_at =
+started_at + test_version.duration_minutes` and stores it. The page shows a countdown from the
+remaining seconds the server sends, re-synced on every read, and never decides expiry itself: a
+browser clock, a paused tab or a manipulated timer cannot extend or shorten an attempt.
+
+**Answers are saved only on submit.** There is no autosave and no partial-save endpoint. The
+consequence is accepted and is written plainly in `docs/PHASE-7.md`: an attempt the server ends
+at its deadline without a submit call has an **empty answer set**, so every question is
+unattempted and the score is zero. Closing the browser scores zero.
+
+**One start per enrollment, and no resume.** Starting delivers the paper once; a second start is
+refused, a reload does not re-deliver it and the questions are never returned by any later read.
+Ending moves the enrollment to `COMPLETED` (submitted) or `EXPIRED` (auto-submitted); a new
+attempt needs a new enrollment and a new payment.
+
+**Scoring is one pure function.** Correct earns the version's `marks_per_question`, wrong loses
+its `negative_marks_per_question`, unattempted scores zero, single-correct only, no partial
+marking. `accuracy = correct ÷ attempted` with zero attempted giving zero. The function is a
+function of (version, submitted answers) alone, unit-tested on its own, and the only place that
+computes marks.
+
+**Answer keys stay on the server until the attempt has ended.** The phase 6 projection rule holds
+before the end — no `is_correct`, `numerical_answer` or `explanation_html` in the start response
+or in any pre-end read — and the post-end result is the only student response that carries them.
+
+**Questions come in the version's order.** No shuffling in this phase.
+
+### Assumed, owner to confirm
+
+- **A grace window of `attempt_submit_grace_seconds`, default 5, bounds 0–60.** A submit arriving
+  within it of `deadline_at` is accepted for network latency; later than that the attempt has
+  already been ended by the server and the submit is refused with a clear message.
+- **The sweeper lives in the existing worker and runs at least every 30 seconds**, following the
+  bulk-coin drain's shape (a repeatable job, a query over database state, work done through the
+  API's own service so there is still one writer, row locks and idempotency so a kill resumes).
+  The same ending happens **lazily** on any read or submit of an expired attempt, so no result
+  depends on the worker being up.
+- **A reload mid-test ends access to the paper.** The page warns before leaving, the enrollment
+  is not refunded, and there is no resume.
+- **The autosave table exists but no autosave endpoint does.** `attempt_answers` is in A1's data
+  model so a later autosave is a new write path rather than a rewrite; nothing writes it before a
+  submit in this phase.
+- **One attempt per enrollment and one result per attempt**, enforced by unique indexes and by a
+  trigger that refuses to change a written result, so a submit racing the sweeper or two workers
+  still produce exactly one result.
+
+**Consequence for the queue:** A1 adds `attempts`, `attempt_answers`, `results` and the grace
+setting; A2 writes the pure scoring function; A3 the four student routes and both expiry paths;
+A4 and A5 the taking and result screens; A6 docs and merge; A7 stop. The specification and the
+audit of what already exists are in `docs/PHASE-7.md`, and the queue is in `docs/NEXT-TASKS.md`.
+
+
+
+## 0075 — Phase 7, A1: the attempt's guards live in the database
+
+**Decided while writing the attempt migration.** A3 will compute and write these rows, but the
+rules that must never be skipped are enforced by Postgres, in the same style as the paper's
+freeze (0069) and the ledger's guards (0060).
+
+**An attempt's student and version are read from its enrollment.** SQL has no foreign key over a
+pair of columns that are only unique together, and `enrollments` already proves that a purchase
+is one student's one version of one paper. So a `BEFORE INSERT` trigger reads the enrollment and
+raises unless `user_id` and `test_version_id` are exactly its own. The pair is then fixed for
+life: the same table's one-way trigger refuses any update to the enrollment, the student, the
+version, the start or the deadline.
+
+**The start is the database's now(), not the application's.** `started_at` has a default, and a
+`BEFORE INSERT` trigger overwrites whatever the writer sent — Prisma's model carries the column,
+so without the trigger a caller could back-date an attempt to look early or late. The deadline
+is *computed* in A3, where the version's duration is read inside the same transaction that
+starts the attempt, and is only *stored and guarded* here: the CHECK is `deadline_at >
+started_at`, and the one-way trigger refuses a later change to it. Computing it in the database
+would need the duration copied onto the attempt or a trigger reading another table, and the API
+already owns the version read.
+
+**Ending is one way and once.** `IN_PROGRESS` may move to `SUBMITTED` or `AUTO_SUBMITTED`; every
+other change, including a second ending and a jump back, is refused. A single CHECK pairs
+`submitted_at` and `submit_source`, so a row can never be half-submitted. Two simultaneous
+endings do not need a lock to be safe: the handler's update is conditional on `status =
+'IN_PROGRESS'`, and the trigger refuses the loser's write even if it gets that far.
+
+**Answers exist only for attempted questions.** A row per answered question, with
+`chosen_option_id NOT NULL`: an unattempted question simply has no row, which is what "answers
+are saved only on submit" means in the data model, and it is why an auto-submitted attempt
+without a submit call has an empty set. A guard trigger checks that the question is placed in
+the attempt's version and that the option belongs to that question, and refuses any insert,
+update or delete once the attempt has ended. The table stays real so autosave can later be a
+write path (0074).
+
+**A result is written after the end and never after.** A trigger refuses a result for an attempt
+that is still `IN_PROGRESS`, and a second trigger refuses every `UPDATE` and `DELETE`. The
+counts CHECK `attempted = correct + wrong` and `correct + wrong + unattempted = total_questions`,
+accuracy is bounded, and a CHECK states the zero case: accuracy is 0 when nothing was attempted.
+
+**`attempt_submit_grace_seconds` is created here, not in A3.** Decision 0074 places the setting
+in A1's migration, so the row exists (integer, default 5, bounds 0–60) before the handler that
+reads it is written.
+
+### Assumed, owner to confirm: numerical-answer questions in a test
+
+**A published test can contain `NUMERICAL` questions today.** Phase 6's P2 validates that a
+placed question is the caller's own (or an Administrator's), published, and in the paper's exam
+— it does not filter on `question_type`. A numerical question has no options at all; its answer
+is `question_versions.numerical_answer`, and the deferred trigger enforces the "no options for a
+numerical" rule. The two question types therefore mean two different answering and scoring
+shapes, and A1 stores only a chosen option, because that is the only shape the answer table can
+hold safely now.
+
+**Not designed here, and not changed in the builder either.** This unit adds no numerical
+scoring and no builder restriction. The open item for the owner is whether a paper may contain a
+numerical-answer question at all before the attempt engine can score one. Until it is decided,
+A2's scoring function will treat a numerical question in a paper as it treats any question with
+no chosen option — unattempted — and the recommendation is that the builder refuse a numerical
+question once A3 exists, so a paper can never contain a question the engine cannot score. That
+recommendation is recorded here rather than acted on, because the builder is not in A1's scope.
+
+
+
+## 0076 — Phase 7, A2: scoring in hundredths, and refusal over ignoring
+
+**Decided while writing the pure scoring function.** `scoreAttempt` takes the frozen version's
+questions as plain data and the submitted answers as plain data, and returns exactly the columns
+`results` needs. It reads no database, no clock and no key of its own: the caller loads the
+correct option and passes it in.
+
+**The arithmetic unit is the hundredth, held as a bigint.** `question_versions.marks`,
+`question_versions.negative_marks`, `test_versions.marks_per_question` and
+`test_versions.negative_marks_per_question` are all `NUMERIC(6, 2)`, so a fractional marking —
+0.25 negatives, half marks — is real. Binary floats cannot carry 0.25 or 0.10 exactly, and a
+paper long enough would drift; marks are therefore parsed once, at the edge, into a bigint count
+of hundredths, the score is a sum of those integers, and it is formatted back to a two-place
+string once at the other edge. Nothing in between is a float.
+
+**The caller supplies each question's marks.** The function takes marks per question, not one
+figure for the whole paper. A3 fills it with the version's `marks_per_question` for every
+question — which is exactly the rule in `docs/PHASE-7.md` — and `total_marks` is the sum of
+those marks over every question in the version: the most the paper is worth, a figure no CHECK
+constrains but every student reads.
+Per-question marks would need no rewrite of the function.
+
+**Accuracy rounds half up at the fourth decimal.** `results.accuracy` is `NUMERIC(6, 4)`. The
+ratio is computed in integers as `floor((2 × correct × 10000 + attempted) / (2 × attempted))`,
+so it can never be a float, never NaN, and — because correct is never greater than attempted —
+never above 1.0000. Zero attempted is 0.0000, which is also what the results CHECK
+`results_accuracy_zero_when_unattempted` demands.
+
+**The score is not floored at zero. Assumed, owner to confirm.** A paper with heavy negative
+marking can score below zero, and the number is stored as it comes out. A negative score is
+permitted by the column (`NUMERIC(8, 2)`) and by every results CHECK, which bound the counts and
+the accuracy, not the score. If the owner wants a floor, it belongs here as one statement and
+changes no column.
+
+**Refusal beats ignoring.** An answer for a question outside the version, a second answer to the
+same question, a chosen option that is not that question's, a question with no single correct
+option, and a marks value that is negative, non-finite or finer than two places are all refused
+with a `ScoringError` carrying a stable code — `UNKNOWN_QUESTION`, `DUPLICATE_ANSWER`,
+`UNKNOWN_OPTION`, `NOT_SINGLE_CORRECT`, `INVALID_MARKS` — and a message that names ids only,
+never which option is correct. Every one of these means tampering or a builder bug, and scoring
+around it would hide both. A version that repeats a question or an option is refused with
+`INVALID_QUESTION`.
+
+**`NUMERICAL` questions are refused until the owner decides 0075's open item.** A paper can
+contain one today, because phase 6's builder does not filter on `question_type`, and this
+function cannot score one: its answer is `numerical_answer`, not an option. It therefore refuses
+the whole version rather than silently counting the question as unattempted. The builder is not
+changed in this unit; the recommendation in 0075 stands — once A3 exists, the builder should
+refuse a numerical question, so a paper can never contain a question the engine cannot score.
+
+**The output is strings so the insert cannot trip a CHECK.** `score` and `total_marks` are
+two-place strings, `accuracy` is a four-place string, and the counts are integers; Prisma's
+`Decimal` fields accept the strings unchanged. The unit tests assert every results invariant on
+the output itself.
+
+The tests are `apps/api/src/attempts/scoring.spec.ts`, in the unit job. No database-job test is
+added in this unit, because the insert this output feeds is A3's transaction; A3's tests will
+prove it against the table.
+
+
+
+## 0077 — Phase 7, A2b: a test paper holds only single-correct questions
+
+**Decided by the owner: tests contain single-correct (option) questions only, and the builder
+must refuse numerical-answer questions.** This closes the open item recorded in 0075 and 0076.
+The question bank is unchanged: a `NUMERICAL` question stays valid there for practice, and only
+a *test* refuses one.
+
+**One definition, in one place.** `apps/api/src/questions/single-correct.ts` defines
+"single-correct": the option-based single-answer type (`MCQ`), at least two options, and exactly
+one option marked correct. The builder calls it at the three points that can put a question on a
+paper — setting the list, submitting the draft, and publishing inside the publishing
+transaction — so no path can carry an unscorable question into a frozen version. The reason the
+last two exist as well as the first is that a question can be edited after it is placed: an
+editor's `PATCH /v1/questions/:id` opens a new draft version of that question, and the paper
+still points at the question.
+
+**The refusal is a code, an id and a reason, never a key.** It answers **400** with
+`code: "question_not_single_correct"`, the `questionId`, and a message of the form
+`Question 3 (<id>) cannot be scored: it is not a single-answer option question` (or "fewer than
+two options", "no correct option", "more than one correct option"). It never says which option is
+correct, and it never repeats the numerical answer. A refusal happens inside the caller's
+transaction, so the previous question list and the test's status are left exactly as they were.
+
+**Why the other three states are unreachable in practice.** The database's deferred
+`question_options_answer_key` trigger already refuses to commit an MCQ that has fewer than two
+options, no correct option or several, and `questions/service` refuses the same on publish. So
+the only non-single-correct question that can exist as a published question is a `NUMERICAL`
+one; the other three reasons are still checked, by the same helper, so the builder cannot be the
+weak link if that database rule ever changes. They are proven by
+`apps/api/src/questions/single-correct.spec.ts`.
+
+**The picker agrees with the API.** The builder page filters the candidates to the same shape,
+using the `questionType` and option flags its list already returns (no new API field, and no
+option body beyond the flags), and says on the page that only single-correct option questions
+can be added. This is a convenience, not the guarantee: the API is the authority.
+
+**Scoring still refuses them, as defence in depth.** `scoreAttempt` refuses a version containing
+a non-`MCQ` question and every other shape the helper refuses (0076), so a paper that somehow
+escaped the builder cannot be scored wrongly.
+
+### The read-only check for papers that already exist
+
+No migration is added; nothing existing is mutated. Run this against a copy of production to
+find any draft, submitted or published paper whose current question versions are not
+single-correct:
+
+```sql
+SELECT DISTINCT
+    t.id AS test_id, t.status AS test_status, tv.version AS test_version,
+    tv.published_at, q.id AS question_id, q.current_version AS question_version,
+    qv.question_type
+FROM tests t
+JOIN test_versions tv ON tv.test_id = t.id
+JOIN test_questions tq ON tq.test_version_id = tv.id
+JOIN questions q ON q.id = tq.question_id
+JOIN question_versions qv ON qv.question_id = q.id AND qv.version = q.current_version
+LEFT JOIN question_options qo ON qo.question_version_id = qv.id
+WHERE t.status IN ('DRAFT', 'SUBMITTED', 'PUBLISHED')
+GROUP BY t.id, t.status, tv.version, tv.published_at, q.id, q.current_version, qv.question_type
+HAVING qv.question_type <> 'MCQ'
+    OR count(qo.id) < 2
+    OR count(*) FILTER (WHERE qo.is_correct) <> 1;
+```
+
+**What this session could find:** from the code and its fixtures, nothing. The question bank's
+own validation and the deferred trigger make an MCQ with fewer than two, none or several
+correct options impossible to publish, so the only rows this can return are papers holding a
+`NUMERICAL` question; the repository's fixtures (`apps/api/test/tests-builder.test.ts`,
+`apps/api/test/attempts-model.test.ts`, `e2e/tests-fixture.ts`) build only MCQ papers and would
+return none. This session has no access to a production database, so the query has not been run
+there.
+
+**If production does have such a paper:** archive it and rebuild it. Archiving is the
+non-destructive path (its enrollments stay), a published version cannot be rewritten, and a
+revision published from the builder cannot carry the question any more.
+
+
+
+## 0078 — Phase 7, A3a: the attempt API's clock, window and lock order
+
+**Decided while writing the attempt routes.** The attempt is the student's one sitting of the
+paper the enrollment bought; this unit builds the four routes and the lazy expiry, and A3b adds
+the worker's sweeper on the same finalisation.
+
+**The submission window closes at `deadline_at + attempt_submit_grace_seconds`.** The grace
+setting is read inside the submitting transaction (default 5, bounds 0–60), and no route reads a
+clock from the client: the start's `deadline_at` is the database's `now()` plus the version's
+duration in the same statement, and the state's `server_now` and remaining seconds come from the
+database too. A submit at or before the close is accepted; after it the attempt is over.
+
+**Any caller may finalise an expired attempt, and finalising is idempotent.** A submit, a state
+read, a result read and A3b's sweeper all go through one `finalizeLocked`: under the attempt row
+lock it re-reads the clock and the grace, ends an `IN_PROGRESS` attempt as `AUTO_SUBMITTED` with
+source `LAZY` or `SWEEPER`, writes the empty-answer result and moves the enrollment to `EXPIRED`.
+The status guard and the `results_attempt_key` unique index make the second caller a no-op, so two
+readers, or a submit racing a read, produce exactly one result. `finalizeExpiredAttempt` is
+exported for the sweeper, which asks for `FOR UPDATE SKIP LOCKED`; the lazy callers use
+`FOR UPDATE`.
+
+**Lock order: attempt, then enrollment, then answers, then the status, then the result.** The
+start locks the enrollment (there is no attempt yet); every other path locks the attempt first so
+one student's two requests cannot deadlock. Answers are inserted before the status changes because
+the A1 guard refuses an answer once the attempt has ended.
+
+**A second start never re-delivers the paper and never moves the clock.** It is refused `409`
+`attempt_already_started`, the unique index on `enrollment_id` is the backstop under two
+simultaneous starts, and the refusal carries no question. The start response is the only pre-end
+response that carries the paper, and it is an allowlist: the stem, LaTeX, marks, type and options
+— never `is_correct`, `numerical_answer`, an explanation, a creator or a status.
+
+**The late submit is discarded.** Past the close the attempt is ended with an empty answer set,
+the enrollment becomes `EXPIRED`, and the request is refused `409` `attempt_expired`; the answers
+it carried are never stored and never scored. That is the same behaviour as an auto-submitted
+attempt, stated by the owner's rule that answers are saved only on submit.
+
+**Another student's attempt or enrollment is "not found".** Every read and write resolves a row
+that is not the caller's to `404`, never `403`, so the routes cannot be used to discover which
+attempts exist. No route anywhere accepts a `userId`.
+
+**The result is the only response that carries the key.** `GET /v1/attempts/:id/result` returns
+the score, counts, accuracy, total marks, the submit source and the per-question review with the
+chosen option, the correct option and the explanation — and only for the caller's own ended
+attempt. The state response has no questions and the submit response is the same result shape.
+
+**Time moves in tests, not in production code.** The tests backdate `started_at` and `deadline_at`
+inside one interactive transaction with `SET LOCAL session_replication_role = replica`, which
+disables the A1 `attempts_one_way` trigger for that transaction only; the connection is the
+migration owner, which is a superuser in the compose and CI database. The grace setting is pinned
+with an upsert-and-verify helper and restored to 5 afterwards. No clock override was added to the
+application.
+
+**Assumed, owner to confirm — still open, now implemented.** These were recorded in 0074 as
+assumptions and this unit implements them as decided: the 5-second grace window (a setting), lazy
+expiry on any read or submit, one attempt per enrollment and one result per attempt. They stay
+marked owner-to-confirm: if the owner wants a different grace, a no-grace rule, or a different
+late-submit message, the setting and one message change and no data changes.
+
+
+
+## 0079 — Phase 7, A3b: the sweeper is a poller on the API's own finalisation
+
+**Decided while adding the deadline sweeper.** The worker does not finalise attempts itself: it
+calls the API's internal route, which runs the same `finalizeExpiredAttempt` the lazy reads use.
+The attempt engine keeps one writer and one finalisation path (A3a's decision 0078), and the
+worker stays a poller over database state exactly like the bulk-coin drain.
+
+**Batch size 50, claimed with `FOR UPDATE SKIP LOCKED`, finalised per attempt.** One short
+transaction reads the grace setting and selects up to the batch (default and hard maximum **50**)
+of `IN_PROGRESS` attempts whose `deadline_at + grace < now()`, ordered by `deadline_at`, with
+`FOR UPDATE SKIP LOCKED`; it commits and releases the locks before any finalisation. Each id is
+then finalised in its **own** transaction, so one failing attempt cannot roll back or block the
+others and a slow finalisation does not hold the whole batch. A sweeper call never selects
+thousands of rows into memory at once, and a backlog drains in capped rounds.
+
+**It uses the database clock only.** The expiry predicate and the grace arithmetic run in SQL
+(`deadline_at + (grace::int * interval '1 second') < now()`), and the per-attempt finalisation
+re-reads the clock under its row lock. No timestamp is accepted from the caller, and a batch size
+is the only input.
+
+**The response and the log are counts and ids only.** The route answers
+`{ finalized, skipped, failed }` — no attempt id, question, option, chosen answer, email or name.
+The service logs `attempt <id> auto-submitted by the sweeper`, a warning naming an attempt id and
+the error's *name* on a failure, and one summary line with the counts. Nothing in the sweeper can
+print an answer or a key.
+
+**Any caller finalises, and the status guard decides.** A submit, a lazy read, the result read and
+the sweeper all go through `finalizeLocked`; the row lock plus "only an `IN_PROGRESS` attempt is
+ended" means the second caller finalises nothing (`skipped`), and two results are impossible
+because `results_attempt_key` is unique. A submit racing the sweeper gives either the student's
+`SUBMITTED` result or the empty `AUTO_SUBMITTED` one, never both.
+
+**Every 30 seconds, as one constant.** `ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS` lives beside the other
+intervals in `queues/schedule.ts`; no setting was added for it. It is a BullMQ repeatable
+declaration kept in Redis, so a restarted or duplicated worker does not create a second schedule.
+The worker's loop makes at most **5** immediate rounds of 50 while a full batch keeps coming back,
+so a backlog drains quickly without one tick holding the queue forever.
+
+**An unreachable API is a failed tick, not a crash.** A network error, a timeout (15 s per call),
+a non-200 answer or a body that is not JSON is logged and returns; the next tick is the retry.
+There is no tight retry loop, and the worker never starts before the API is reachable — the job
+only calls it, so the first tick after a restart simply fails and the next one succeeds, the same
+way the coin drain behaves.
+
+**Deploy note.** Production must list the worker's address (or its /24) in
+`INTERNAL_ALLOWED_ADDRESSES`, or every sweep answers 404 and expired attempts are only finalised
+when a student next reads or submits one. The development and CI compose network is pinned to
+`10.213.0.0/24` for exactly this reason (decision 0066).
+
+**Tests move time; production does not gain a clock override.** The database test backdates
+`started_at`/`deadline_at` in one transaction with `session_replication_role = replica` on the
+owner connection (superuser), pins the grace setting and restores it. The e2e spec pins the grace
+to 0, seeds an already-expired attempt in SQL, and waits for the real worker by polling the
+database — never a student-facing read, which would finalise it lazily and make the test pass for
+the wrong reason.
+
+
+
+## 0080 — Phase 7, A4: the paper lives in the page's memory and the server keeps the clock
+
+**Decided while building the taking screens.** The screens add no rule: they display what the A3a
+API says. What they do add is where the paper lives, how time is shown, and what a page does when
+the attempt cannot be shown.
+
+**The paper and the answers live only in React memory.** The start response is put into component
+state and nowhere else: no `localStorage`, no `sessionStorage`, no IndexedDB, no cookie, no URL or
+history state, no console log in the page or in the route handler. There is no autosave and no
+partial-save call, by the owner's rule — answers are sent once, on submit. A reload therefore
+loses them, which is the next decision, not an accident.
+
+**A started attempt cannot be resumed, and a lost start response is a lost attempt.** The paper is
+delivered exactly once, in the start response, and the API will not deliver it again. A start that
+answers `attempt_already_started`, a start whose response never arrived, and a reload all end on
+the same screen: "already started, cannot be resumed", the server's remaining time counting down,
+no questions and no Start button. The start is **never retried**. Because the page cannot know the
+attempt's id in those cases, one route was added to the API — `GET /v1/enrollments/:id/attempt`,
+self-only, state only — and the web tier wraps it in `GET /api/enrollments/<id>/attempt` so the
+page can say how long is left without ever holding the paper. That route is documented in
+`docs/permissions.md`.
+
+**The countdown only displays time, with a monotonic clock and one offset from the server.** The
+start response's `remainingSeconds` becomes a deadline in `performance.now()` milliseconds, and
+the tick reads only that. Changing the device clock changes nothing. The page re-syncs every 30
+seconds, on `visibilitychange`, and right before submitting; each re-sync replaces the local
+deadline with the server's remaining seconds, so the server always wins. If a re-sync says the
+attempt has ended, the page stops and goes to the result. A failed re-sync changes nothing: the
+last known server time keeps counting down.
+
+**At zero the page submits the answers it holds — assumed, owner to confirm.** When its own
+countdown reaches zero the page posts the answers it still has through the same idempotent submit
+endpoint, once, retrying only the *same* form on a network failure with a 2 s / 4 s / 6 s backoff
+and then giving up with a message, because the grace window (`attempt_submit_grace_seconds`) can
+still be open. The API's empty auto-submit stays the fallback for a browser that went away. This
+is recorded as the owner's assumption in 0074 and remains owner-to-confirm: if the owner wants a
+page that never submits on the student's behalf, the tick stops calling `submit(true)` and the
+server's sweeper does that work alone.
+
+**A submit after the deadline is refused, and the page says why on the result.** A 409
+`attempt_expired` is not an error screen: the page goes to `/attempt/result/<id>?late=1`, and the
+result page shows "Time ran out before your answers arrived. This attempt was evaluated
+automatically, without them" above the zero result. Carrying the reason in the URL rather than
+flashing a message the navigation would erase is what makes the behaviour verifiable in a browser.
+The submit response itself is a validation error (`400`) only for a malformed body, with one
+generic sentence — the API's text is never echoed.
+
+**The result page is minimal in A4; A5 adds the review.** It shows the score, total marks, the
+counts, the accuracy and how the attempt ended, with the API's decimals printed as given (two
+places for the score and total marks, four for accuracy) and the percentage computed by moving the
+decimal point in a string, never by parsing a float. It reads none of the result body's `review`
+array, so no question, correct option or explanation is rendered in A4. While the attempt runs,
+the page says so and shows the server's remaining seconds only — a small client component ticks
+down and asks the server-rendered page to render again at zero, rather than deciding anything.
+
+**The submit handler does not forward the API's result body.** The API's 200 to a submit is the
+same result object that carries the review, the correct option and the explanation. Forwarding it
+would hand the answer key to a browser during the attempt, so the web handler answers
+`{ ok: true }` and the page navigates to the result page, which fetches the result server-side and
+renders only the fields it names.
+
+**Sanitised HTML for stems and options, KaTeX for LaTeX.** `contentHtml` and `optionHtml` arrive
+already through `sanitizeStoredContent` and are the only fields put into
+`dangerouslySetInnerHTML`. A question's `latex` is *not* HTML and is not sanitised by the API: the
+page renders it through `renderLatex` (KaTeX with `trust: false`), which escapes anything it cannot
+render, so an author's LaTeX cannot become markup.
+
+**Entry points are neutral.** An `OPEN` enrollment shows "Open attempt" on `/tests` and on
+`/tests/<id>`, linking to `/attempt/<enrollmentId>`. The word "Resume" is never shown, because
+resuming is not possible. Nothing else was added to the navigation.
+
+**Tests move the clock; production gains no override.** The database test for the new route reads
+own-before-start (null), own-in-progress (state only), own-ended, another student, unknown,
+anonymous, suspended, a `userId` query and a malformed id, and scans every response recursively
+for key names and for an explanation's text. The browser spec pins `attempt_submit_grace_seconds`,
+`default_enrollment_cost`, `signup_coins` and `daily_reward_coins`, uses unique emails and titles,
+and deliberately leaves no expired `IN_PROGRESS` attempt behind: the worker's sweeper finalises any
+it finds in the shared database. The late-submit spec expires the attempt from inside the route
+handler that is holding the request, immediately before releasing it, so the handful of
+milliseconds in which the sweeper could claim it first is the whole race.
+
+
+
+## 0081 — Phase 7, A5: the review is server-rendered, and the key leaves through one route
+
+**Decided while building the result and review page.** This is the only unit in which a correct
+option and an explanation reach a student, so the shape of that delivery is the decision.
+
+**The review is rendered on the server, and only the page's HTML leaves the server.** The result
+page is a server component: it calls `GET /v1/attempts/:id/result` with the session's token through
+`callWithSession`, and renders the summary and every question's stem, options, markers, marks and
+explanation as HTML. No review array is passed to a client component, so the key never enters a
+bundle, a hydration payload, `localStorage`, a URL or the console. The filter is a validated query
+parameter (`?show=all|wrong|unattempted`) resolved on the server, which is why the whole review can
+stay server-rendered and still be filterable.
+
+**The submit response no longer carries the review.** Until this unit `POST /v1/attempts/:id/submit`
+answered the full `AttemptResultView`, review included — a second place the key left the server.
+It now answers an `AttemptSubmitView`: the same summary the page shows (score, total marks, counts,
+accuracy, status, submit source, submitted time) and no review, built from the result row without
+loading the paper, so the key cannot reach a submit response even by accident. A replay returns that
+same summary. `GET /v1/attempts/:id/result` is now the single response carrying the key, and it is
+refused with `attempt_in_progress` before the end, for another student's attempt with 404 and for a
+malformed id with 400.
+
+**No cache, at the route level.** `next.config.ts` already owns the security headers, so the same
+module adds a `no-store` rule for `/attempt/result/:path*` (plus `Referrer-Policy: no-referrer`,
+since the URL names an attempt). A shared cache must not keep a page with a paper's key, and the
+back/forward cache must not serve it after a sign-out on a shared device. A server component cannot
+set a response header on its own, which is why the rule lives in the config rather than in the page.
+
+**The review is the attempt's own frozen paper.** The question list, its order and the marks come
+from the attempt's `test_version_id` and its `test_questions`, never from the live paper, so editing
+or republishing a test cannot change what a finished attempt reviews. The question *content* is
+resolved from each question's current version — the same source the start response and scoring use
+— so the review shows the same questions the student was given, but an editor who edits a question
+after an attempt would change what that attempt's review displays. That is a known limitation of the
+phase 6 data model (`test_questions` references a question, not a question version); freezing
+content per attempt needs a `question_version` column on `test_questions`, a backfill and a builder
+change, and it is recorded here rather than half-done in this unit.
+
+**What an auto-submitted attempt shows.** Because answers are saved only on submit, an attempt the
+server ends at the deadline has an empty answer set: every question is unattempted and the score is
+zero. The page says so in plain words — "no answers were received, so every question is marked
+unattempted — that is the deadline, not a mistake you made" — and the review still shows the key and
+the explanations, because the attempt has ended.
+
+**A retake is a new purchase, and the page says so.** The result view gained `testId` and
+`testTitle` (ended attempts only) so the page can link back to `/tests/<testId>` with the sentence
+that a retake needs a new enrollment and a new fee. The enrollments list shows a **Result** link for
+a `COMPLETED` or `EXPIRED` enrollment, pointing at `/attempt/<enrollmentId>`, which redirects to the
+result once the attempt has ended.
+
+**Markers are text as well as colour.** Each option carries "Your answer", "Correct answer" and,
+when the chosen option is not the correct one, "Your answer was wrong"; each question carries a
+Correct ✓ / Wrong ✗ / Not attempted — label and the marks it earned or lost, printed from the
+API's own decimal strings (`+2`, `−0.5`, `0`) rather than computed with floating point.
+
+**Tested, not asserted.** `apps/api/test/attempts-api.test.ts` gains the review of the attempt's own
+frozen version (its question ids and positions equal that version's `test_questions`), an
+unattempted question with no chosen option, an auto-submitted attempt with the key and every
+question unattempted, the scan finding a key in the ended result while start, state and submit
+carry none, a malformed id, and two parallel result reads of an expired attempt giving one row.
+`e2e/attempt-review.spec.ts` proves the page: the exact summary and markers, the filters, no paper
+content before the end, the auto submission, the retake path, the back button, and access for
+another student, an anonymous visitor and a malformed id.
+
+
+
+## 0082 — Question versioning in attempts (implemented and verified in CI, owner to confirm the backfill rule)
+
+**Why this exists.** A5 reads a review's question list, order and marks from the attempt's frozen
+test version, but each question's *content* — stem, options, the correct option and the explanation
+— is resolved from that question's **current** version. This records what that means today, because
+it is a real risk to scoring and the owner has to choose the fix.
+
+**(a) Can a question used by a published test, or by a live attempt, be edited today? Yes.**
+`QuestionsService.saveDraft` (`apps/api/src/questions/questions.service.ts:267-367`) creates a new
+`question_versions` row when the current version is published (`:284`, `:318-347`), then moves the
+pointer and demotes the question: `currentVersion = targetVersion, status = 'DRAFT'`
+(`:350-353`). `publish` then publishes that version. `test_questions` stores only `question_id`
+(`apps/api/prisma/migrations/20270101000000_tests_and_enrollments/migration.sql:128-143`), and the
+only freeze is on the paper's own rows — `test_questions_frozen` refuses inserts, updates and
+deletes once the paper's version is published (`:147-164`), and `test_versions_frozen` covers the
+version row — so nothing about the question's content is frozen. An editor who owns the question (or
+any administrator) can therefore edit the stem, the options or the correct option of a question
+that sits in a published paper, and nothing refuses, archives or warns. `loadPaper`
+(`apps/api/src/attempts/attempts.service.ts:498-533`) reads `question.currentVersion` at call time,
+so the start response, the scoring and the review all follow the pointer as it moves.
+
+**(b) Consequences today.**
+1. *A live attempt.* The student was given version 1's option ids. After the edit, `submit`
+   re-reads the paper as version 2, whose options have new ids, so `scoreAttempt` refuses the old
+   chosen option with `Unknown option` and the API answers **400** (`scoring.ts:191-196`) — a
+   legitimate in-flight submit becomes unsubmittable. If the attempt then expires, the sweeper
+   scores an empty answer set, which is correct for an abandoned attempt but hides what happened.
+   A scoring key different from the delivered paper's is therefore possible in the opposite
+   direction: the student cannot be scored against either version's key in that case, they are
+   refused.
+2. *An ended attempt.* The review renders version 2's stem, options, correct option and
+   explanation, not what the student saw or was scored on.
+3. *The page can contradict its summary.* `results` is immutable (A1's trigger), so the score and
+   counts stay as computed, while the review next to them shows a different key.
+
+**(c) The data model does not pin it.** There is no `question_version_id` on `test_questions` and
+none on `attempt_answers`. A migration would add `test_questions.question_version_id UUID NOT NULL
+REFERENCES question_versions(id)` (an index on it, and it is immutable once the paper version is
+published, which the existing `test_questions_frozen` trigger already enforces), backfilled with
+each question's current version — correct for every paper nobody has edited since publishing.
+
+**(d) Options, smallest first.**
+1. **Pin the question version at publish.** Migration above; `tests.service` writes the id when the
+   paper's question list is set; `loadPaper` joins `test_questions` to `question_versions` by that id
+   instead of the pointer; the start response, scoring and the review all read the pinned version.
+   Units: one migration (with backfill), one service read, the builder insert, database tests (a
+   published paper keeps its content after an edit) and one e2e. **Risk:** low; it is the structural
+   fix and it closes the scoring risk completely. It is the recommended option.
+2. **Interim guard: refuse the edit.** In `saveDraft`, refuse to create a new version of a question
+   that is inside any published test version or any non-ended attempt, with a stable code
+   (`question_in_use`), and tell the editor to archive the question and build a replacement. Units:
+   one service check, one query, database tests, one refusal message in the editor. **Risk:** low to
+   build, but it blocks legitimate typo fixes in a live paper and does not fix attempts already
+   running when it ships; it is a stopgap, not the model.
+3. **A pre-start re-check** in `start` that refuses a paper whose pinned content no longer matches
+   what the enrollment bought — narrower than (2) and leaves the review inconsistency of (b)(2).
+
+**Recommendation.** Do (1) before the Phase 7 merge; it is the smallest change that makes the paper
+a student sat and the paper their result reviews the same bytes. (2) only if the merge cannot wait
+for one migration.
+
+**Implemented in A5b — option (1), the pin.** `test_questions` gained
+`question_version_id` (nullable, foreign key to `question_versions`, `ON DELETE RESTRICT`, indexed)
+in `20270301000000_test_question_pinning`.
+
+- **A draft follows the bank; a published paper is pinned.** A `DRAFT` or `SUBMITTED` version keeps
+  the column null, and the builder keeps showing each question's current version, exactly as
+  before. `TestsService.publish` pins every placement to the question's **current** version with a
+  single `UPDATE ... FROM "questions" q, "question_versions" qv WHERE qv."question_id" = q."id" AND
+  qv."version" = q."current_version"`, inside the publishing transaction and **before**
+  `test_versions.published_at` is stamped. It then re-runs `assertScorablePaper` against the
+  versions just pinned (`requirePinned: true`), so publishing freezes nothing unscorable and
+  nothing unpinned.
+- **All three readers use the pin.** `AttemptsService.loadPaper` selects `questionVersionId` and
+  resolves the version by that id when it is set, falling back to `currentVersion` only when it is
+  null. The start response (`paperQuestion`), the scoring (`scoreAttempt(scoringQuestions(paper),
+  …)`) and the review (`reviewQuestion`) all take their stem, options, correct option, marks and
+  explanation from that one read, so they cannot disagree. `start` also refuses
+  `paper_not_pinned` when any placement of the enrollment's version is unpinned.
+- **The pin is frozen, and a published paper cannot be unpinned.** The existing
+  `test_questions_frozen` trigger already refused every insert, update and delete on a row of a
+  published version; it was tightened to check the row's **previous** parent as well on an update,
+  so a row can no longer be moved out of a published paper. A new
+  `test_versions_pinned_before_publish` trigger refuses to set `published_at` while any placement of
+  that version has a null pin, and `test_questions_version_matches` refuses a pin naming a version
+  of another question.
+- **Editing a question needs no new block.** `saveDraft` still opens a new version and moves
+  `currentVersion`; a published paper and every attempt on it keep reading their pin, so the edit
+  reaches only drafts and papers published later. The old 400 `unknown_option` on an in-flight
+  submit is gone, because the option the student saw is still in the pinned version.
+- **The backfill, and its limitation.** Every row of a `PUBLISHED` or `ARCHIVED` test version was
+  pinned to the question's current version at migration time. That is exact for a paper whose
+  questions were never edited after it was published, and an **approximation** for a paper whose
+  question was edited after publishing: the pin there is the content as of the migration, which is
+  what every reader was already seeing, because the prior version cannot be reconstructed from the
+  data. **The owner should confirm that rule**; nothing in the migration invents a history.
+  `DRAFT` and `SUBMITTED` rows were left null. The backfill needed the `test_questions_frozen`
+  trigger off for one statement, done with `ALTER TABLE "test_questions" DISABLE TRIGGER
+  "test_questions_frozen"` and re-enabled immediately after — table ownership, not a superuser,
+  which is why it is not `session_replication_role`. The migration asserts afterwards that no
+  published row is unpinned and no pin names another question, so a silent miss fails the deploy.
+- **Tested.** `apps/api/test/attempts-pinning.test.ts` (database job): publish pins every row;
+  publishing a paper whose current version is numerical is refused `question_not_single_correct`
+  with nothing changed; after an edit through the real `PATCH`/`POST /v1/questions` routes, a new
+  attempt gets the original content and option ids, submits and scores `4.00` on the original key,
+  and the review shows the original stem, explanation and correct option; an in-flight submit after
+  the edit is accepted (no `unknown_option`) and scored `-0.50` on the paper the student saw; a
+  paper published after the edit pins the new version and delivers it; a draft keeps null pins and
+  cannot be stamped published while unpinned; the pin cannot be changed, deleted or moved out of a
+  published paper, and a pin of another question is refused. `e2e/attempt-review.spec.ts` adds
+  "the paper a student sat keeps its content after the question is edited": a student sits and
+  submits, the editor's edit is written through `editQuestionFixture`, the result still shows the
+  original review text and score, and a second student starting the same paper gets the original
+  stem and options.
+
+- **Deploy note.** The migration runs as the table owner: it disables exactly one trigger on
+  `test_questions` for the backfill statement and re-enables it immediately, which needs ownership of
+  that table rather than a superuser (that is why it is not `session_replication_role`).
+  Production's migration role (`MIGRATION_DATABASE_URL`) must therefore own `test_questions`, or be
+  able to run `ALTER TABLE "test_questions" DISABLE TRIGGER "test_questions_frozen"`. The backfill
+  pins each already-published paper to the question's current version — **exact** where the question
+  was never edited after publishing, an **approximation** where it was (the rule the owner is asked
+  to confirm above).
+- **Verified in CI.** Both runs of `015bf33dabdb9745571209e53572e0570342e8bd` are green: the push run
+  [44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (`e2e` 5m41s,
+  `gitleaks` 9s after one re-run of a hung job) and the pull_request run
+  [44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) (`e2e` 5m26s,
+  `gitleaks` 17s). The `database` jobs ran `apps/api/test/attempts-pinning.test.ts` in full and the
+  `e2e` jobs ran the sixth `attempt-review` case; the claim table is in `PROGRESS.md`.
+
+
+
+### Owner to confirm — the whole phase, in one list
+
+Seven items in 0074–0082 were assumed while the phase was built. Each is a one-line change if the
+owner decides otherwise; the last is the backfill rule.
+
+1. **The score is not floored at zero** (0076). A paper with heavy negative marking stores a negative
+   `results.score`; the column and every CHECK allow it.
+2. **A late submit is accepted within `attempt_submit_grace_seconds`** (default 5, bounds 0–60) and
+   refused after it with `attempt_expired`, the attempt having already been ended (0074).
+3. **Expiry runs twice on purpose**: the page auto-submits at the deadline, the worker's sweeper
+   looks every 30 seconds, and any read or submit of an expired attempt finalises it lazily (0074,
+   0078, 0079).
+4. **A reload or a closed browser ends access**, with no refund; an attempt auto-submitted with no
+   answers scores zero, because answers are saved only on submit (0074).
+5. **A lost start response means a lost attempt**: the paper is delivered once and its id lives only
+   in that response; the enrollment's state route can say an attempt exists but cannot re-deliver it
+   (0074, 0078).
+6. **Tests contain single-correct option questions only** — settled in 0077, enforced on set, submit
+   and publish, and listed here so the whole set of rules reads in one place.
+7. **The pinning backfill rule** (0082): a paper published before A5b is pinned to each question's
+   current version at migration time — exact where the question was never edited after publishing,
+   an approximation where it was.

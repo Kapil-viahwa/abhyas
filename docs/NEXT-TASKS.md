@@ -53,6 +53,143 @@ a draft and submits it** — and an editor calling either route must be refused 
 
 [ ] P7 STOP and report. The attempt engine (starting and taking a test) is the next phase and starts only on the owner's prompt.
 
+## Phase 7 — the attempt engine
+
+Branch `phase-7`, one pull request. The specification and the audit of what already exists is
+`docs/PHASE-7.md`; the rules and the assumptions are `docs/decisions.md` 0074. Same protocol as
+above: one unit per session, push once, stop. Every row must keep the owner's rules — the server
+owns the clock, answers are saved only on submit, one start per enrollment and no resume, and
+answer keys never leave the server before the attempt has ended.
+
+[x] A1 Data model. One migration: `attempts` (unique enrollment, `started_at`, `deadline_at`,
+`submitted_at`, `status` `IN_PROGRESS`/`SUBMITTED`/`AUTO_SUBMITTED`, submit source), with CHECK
+`deadline_at > started_at`; `attempt_answers` (attempt, question, chosen option) with
+`UNIQUE (attempt, question)` and a guard that the question is in the attempt's version and the
+option is that question's; `results` (score, correct, wrong, unattempted, attempted, accuracy,
+marks) with `UNIQUE (attempt)` and a trigger that refuses `UPDATE`/`DELETE`; the
+`attempt_submit_grace_seconds` setting (integer, default 5, 0–60). Prisma models in the same
+unit, because the database job runs the API against the schema. Proof: a database-job test file
+— the CHECKs, one attempt per enrollment, one answer per question, a foreign question or option
+refused, a result immutable once written, and two simultaneous inserts of the same attempt
+leaving exactly one. — Verified in both nine-job runs of `9ab5f08db7f6bccac50b0256a5185cab0d386c11`: [run 42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709) and [run 42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335), eighteen green check results between them. The tool that lists them merges the two runs into one row per job name, so the job ids are what separates them: `database` 128599236097 (2m04s) and 128599247640 (2m22s), both green, with the other eight jobs green in each run. The green job's readable log slice is Postgres and container output, so the vitest summary line is not re-quotable; the green `database` job, which runs `pnpm test:db` under `set -o pipefail`, is the proof that `apps/api/test/attempts-model.test.ts` ran in full and passed, and the same step applies the migrations, so `20270201000000_attempts` applied. Two red rounds on the way: `46fcc34` (the answer guard's join named `o.version_id`; the column is `question_version_id`), fixed in `60781c0`, and `60781c0` (a test regex required a space that Prisma 5.22's unique-violation message does not print), fixed in `9ab5f08`. The claim-by-claim table and both rounds are recorded in `PROGRESS.md`.
+
+[x] A2 The scoring function. A pure function of (version, submitted answers): correct ×
+marks per question − wrong × negative marks per question, unattempted zero, `accuracy =
+correct ÷ attempted` with zero attempted giving zero, carrying marks as the version's decimals
+rather than floats. Unit tests: all correct, all wrong with negative marking, all unattempted,
+mixed, zero attempted, fractional marks, a question not in the version ignored or refused
+(state which), duplicate answers refused, and a property-style check that score equals
+`marks × correct − negative × wrong` over generated answer sets. No HTTP, no database: this is
+the only place marks are computed. — Implemented in `apps/api/src/attempts/scoring.ts` (a refusal
+is chosen over ignoring, and `NUMERICAL` questions are refused), proved by
+`apps/api/src/attempts/scoring.spec.ts`, and recorded in decision 0076. — Verified in both
+nine-job runs of `04f7fabd4cd7d64fde45c65295f8e9e00d9e33c7`: [run 42440488533](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440488533) and [run 42440491591](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440491591), eighteen green check results between them. The `unit` jobs read
+`✓ src/attempts/scoring.spec.ts (23 tests)` and `Tests 220 passed (220)`, so all 23 scoring cases,
+the property test included, passed; `lint` and `typecheck` were green in both runs too.
+
+[x] A2b The builder refuses numerical questions (owner's decision, 0077). `apps/api/src/questions/single-correct.ts`
+is the one definition of "single-correct" — the option-based single-answer type, at least two
+options, exactly one marked correct — used when a paper's question list is set, on submit and
+inside the publish transaction; a refusal carries `question_not_single_correct`, the question id
+and a sentence that never names the key. The builder's picker offers only such questions and
+says so. Proof: `apps/api/test/tests-builder.test.ts` (a numerical question refused on set,
+submit and publish, with the previous list and the status left intact, and a valid paper still
+building and publishing), `apps/api/src/questions/single-correct.spec.ts` for the four reasons,
+and one Playwright check that the picker does not offer the fixture's numerical question. — Verified in both nine-job runs of `3fcbe4eb3756b48c197812f10552a7c0e54ebc43`: [run 43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670) and [run 43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751), eighteen green check results. Each `unit` job logs `✓ src/questions/single-correct.spec.ts (7 tests)` inside `Test Files 29 passed (29)` / `Tests 227 passed (227)`. The `database` jobs (2m25s and 1m53s) are green under `set -o pipefail`, which proves the whole `test/` suite, `apps/api/test/tests-builder.test.ts` included, ran and passed; their readable log slices are Postgres output, so the vitest summary is not re-quotable. The `e2e` jobs (4m01s and 4m02s) are green under pipefail, so the new picker check and every existing spec passed; their readable slices are container output, so the Playwright list is not re-quotable.
+
+[x] A3a Attempt API and lazy expiry. `POST /v1/enrollments/:id/attempt` (self-only, no `userId`
+anywhere, an `OPEN` enrollment required, one start only, the deadline computed on the server,
+questions returned once in the version's order **without** `is_correct`, a numerical answer or an
+explanation); `POST /v1/attempts/:id/submit` (idempotent, the grace window honoured, every answer
+validated against the version's questions and their options, one result written in one
+transaction); `GET /v1/attempts/:id` (status and remaining seconds, never the questions);
+`GET /v1/attempts/:id/result` (own, only after the end, answer keys and explanations only then).
+Expiry is lazy on any read or submit: a shared `finalizeExpiredAttempt` finalises an expired
+attempt under the attempt row lock, with lock order attempt → enrollment → answers → status →
+result. Proof: `apps/api/test/attempts-api.test.ts` — the exact deadline, the paper once, no key
+in any pre-end response, a simultaneous start giving one attempt, one submit and its retry, two
+parallel submits giving one result, the grace window, a late submit discarded, parallel reads
+finalising once, a submit racing a read, and the result refused until the end. — Verified in both
+nine-job runs of `2c543788972b905952e2277cb1ee72f416d9b1b9`: [run 43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061) and [run 43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073), eighteen green check results. Each `unit` job logs `✓ src/attempts/attempts.projection.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside `Test Files 30 passed (30)` / `Tests 231 passed (231)`; `typecheck` is green with the `AttemptState` interface fixed; the `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-api.test.ts` and its fourteen cases ran and passed after the decimal fix (their readable slices are Postgres output, so the vitest summary is not re-quotable); the `e2e` jobs are green, so every existing spec still passed.
+
+[x] A3b The deadline sweeper. A repeatable job in `apps/worker` every 30 seconds (one constant)
+that calls the API's internal `POST /v1/internal/attempts/expire-expired` — guarded by
+`INTERNAL_API_SECRET` and `INTERNAL_ALLOWED_ADDRESSES` through the same `assertInternalRequest`
+as the coin drain, and answering 404 to every wrong caller. The route claims up to 50 expired
+attempts with `FOR UPDATE SKIP LOCKED` in a short transaction, then finalises each in its own
+transaction through the same `finalizeExpiredAttempt(id, 'SWEEPER')` the lazy reads use, and
+returns counts only. The worker treats an HTTP error or a timeout as a failed tick that is logged
+and retried on the next one, and runs again immediately (bounded) while a full batch comes back.
+Proof: `apps/api/test/attempts-sweeper.test.ts` (finalise once with `SWEEPER`, an empty result
+and an `EXPIRED` enrollment; not-due, inside-grace and already-submitted attempts untouched; two
+simultaneous sweeps finalising once between them; a sweep racing a submit giving one result;
+capped batches; one injected failure not stopping the others; every refusal 404 with nothing
+changed), `apps/worker/src/jobs/attempt-sweeper.spec.ts` (the loop, the cap, and an unreachable
+API not throwing), and `e2e/attempt-sweeper.spec.ts` proving the REAL worker sweeps a seeded
+expired attempt with source `SWEEPER`. — Verified in both nine-job runs of
+`6f5579a96179378d4ffb58b0ff3475533b103227`: [run 43814445045](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814445045) and [run 43814450079](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814450079), eighteen green check results, gitleaks 8s and 15s. Each `unit` job logs `✓ src/jobs/attempt-sweeper.spec.ts (7 tests)`, `✓ src/queues/schedule.spec.ts (4 tests)` and `✓ src/auth/route-access.spec.ts (1 test)` inside `Test Files 6 passed (6)` / `Tests 25 passed (25)` for the worker and `Tests 231 passed (231)` for the API. The `database` jobs are green under `set -o pipefail`, so `apps/api/test/attempts-sweeper.test.ts` and the existing coin and bulk tests ran and passed; their readable slices are Postgres output, so the vitest summary is not re-quotable. The `e2e` jobs are green, so `e2e/attempt-sweeper.spec.ts` ran and passed (the run before, `1f07d3d`, reports `43 passed` with this spec the only failure); their readable slices show the worker's `repeatable jobs registered: …, attempt-expiry-sweep` line and only its early `0 expired swept` ticks — the later `1 expired swept` line is in the elided portion, so the spec's `AUTO_SUBMITTED|SWEEPER` assertion, not a quoted log line, is the proof. The red round on the way: `1f07d3d` was red in `e2e` in both runs with `Expected: "0" / Received: "0.00"` at `e2e/attempt-sweeper.spec.ts:60` — the spec compared `NUMERIC(8,2)` text, the test was wrong, and it was fixed in `6f5579a` without touching product code.
+
+[x] A4 The taking page. `/attempt/<enrollmentId>`: the paper in the version's order, a countdown from the
+server's remaining seconds that re-syncs on every read and never decides expiry, answer selection
+for single-correct questions, a submit confirmation, a warning before leaving, and an automatic
+redirect to the result when the attempt ends. Server-checked with `loadSession`. Playwright:
+a student starts, answers, submits and sees the result; a slow page does not move the deadline
+(the deadline shown after a delay is the server's); a submit after expiry is refused with the
+message. — Verified in both nine-job runs of `e2f88959cb555610ed6a6d47f952de9d99d3d60c`:
+[run 43841325606](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841325606) (push, `e2e` 5m38s, `gitleaks` 10s) and [run 43841317370](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841317370) (pull_request, `e2e` 5m35s, `gitleaks` 8s), eighteen green check results. The `e2e` jobs are green under `set -o pipefail`, so the whole `playwright test` run exited 0 and the five `attempt-take` tests ran and passed — no test in that file is skipped and the `describe.serial` suite stops at the first failure, so a passing run is all five. Their readable slices are container and Postgres output, so the Playwright summary line is not re-quotable; the green job is the proof. The claim table, the four defects found in the old tree and the red rounds on the way are in `PROGRESS.md`.
+
+[x] A5 The result and review pages, with Playwright: score, accuracy, correct, wrong, unattempted,
+and the per-question review (the student's answer, the correct answer, the explanation) only
+after the attempt has ended; another student cannot open either page. The enrollment page stops
+promising "taking it is the next phase" and links to the start. — Verified in both nine-job runs
+of `0637d1477d612074af56a0a9994d5e5c57d6dbf7`: [run 43857637203](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857637203)
+(push, `e2e` 6m00s, `gitleaks` 10s) and [run 43857648539](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857648539)
+(pull_request, GitHub's merge of `0637d14` into `1133d76`, `e2e` 6m08s, `gitleaks` 11s), eighteen
+green check results between them. Each `unit` job logs `✓ src/lib/security-headers.spec.ts (8 tests)`
+inside `Test Files 9 passed (9)` / `Tests 57 passed (57)` for `apps/web`, so the new no-store rule for
+`/attempt/result/:path*` passed. The `database` jobs are green under `set -o pipefail`, so the whole
+`pnpm test:db` suite ran and passed, `apps/api/test/attempts-api.test.ts` and its five new review
+cases (the frozen version, the auto-submitted review, the scan that finds a key only in the result, the
+malformed id, the two parallel result reads) included; their readable slices are Postgres output, so the
+vitest summary is not re-quotable. The `e2e` jobs are green under pipefail, so the whole
+`playwright test` run exited 0 and the five `describe.serial` tests in `e2e/attempt-review.spec.ts` ran
+and passed — none is skipped and a serial block stops at the first failure, so a passing run is all
+five; their readable slices are container and Postgres output, so the Playwright list is not re-quotable.
+The claim table and the red rounds are in `PROGRESS.md`. The review's question **content** is still read
+from each question's current version, so it is not yet immutable beside the frozen result (decision
+0082); A5b pins the question version and is queued **before** the merge.
+
+[x] A5b Question versioning in attempts (decision 0082). Pin the question version at publish —
+`test_questions` gains `question_version_id`, backfilled from each question's current version and
+frozen with the paper, and the start response, the scoring function and the review all read that
+pinned version instead of the question's `currentVersion` pointer. Tests: a published paper's content
+and key survive an edit; a live attempt still submits and is scored against the paper it was given;
+the review shows the pinned content. — Done. Verified in both runs of
+`015bf33dabdb9745571209e53572e0570342e8bd`: the push run
+[44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (`e2e` 5m41s,
+`gitleaks` 9s) and the pull_request run
+[44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) (`e2e` 5m26s,
+`gitleaks` 17s), eighteen green checks between them. The push run's `gitleaks` job hung
+(`133770196668`, reported "running, 7s" for ~20 minutes); it was re-run once and passed in 9s as
+`133867898247`. The `database` jobs (1m53s and 1m56s) ran `apps/api/test/attempts-pinning.test.ts`
+with all seven cases plus every existing suite; the `e2e` jobs ran the sixth `attempt-review` case and
+every existing spec. The claim table and the red rounds are in `PROGRESS.md`; the backfill rule stays
+owner-to-confirm in decision 0082, and the deploy note (the migration must own `test_questions`) is
+recorded there. The item was ticked in a docs-only commit, so its own runs are the pair above.
+
+[ ] A6 Docs and merge — **in progress, docs done in the A6 part 1 session; not merged.** Done there:
+`docs/permissions.md` brought to the final state (every Phase 7 route, screen, guard and no-store
+rule, plus the A5b pinning section), decision 0082's status and deploy note, the owner-to-confirm
+list collected at the end of 0074–0082, the known gaps, `docs/ROADMAP.md`, the README links, the
+`PROGRESS.md` phase-wide claim table with run links, the rewritten PR #28 description, and the CI
+hygiene change (the `gitleaks` job capped at five minutes). `main` was unmoved at `1133d76`, so no
+merge commit was made and no migration was renamed. **Not done, by instruction:** marking the PR
+ready and merging. That waits for both runs fully green on the final docs head, then a normal merge
+commit (**never** a push to `main`), then a read of `main`'s CI.
+
+[ ] A7 STOP and report. Results, analytics and dashboards (phase 8) start only on the owner's
+prompt.
+
 ## Reporting
 
 Report in at most 8 lines: what was pushed, which queue item, which test proves it, what is

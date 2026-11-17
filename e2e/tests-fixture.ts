@@ -2,21 +2,25 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
 /**
- * A published exam, one subject and two published questions, owned by the editor whose id is
- * passed in.
+ * A published exam, one subject and three published questions — two option-based and one
+ * numerical — owned by the editor whose id is passed in.
  *
  * The builder spec is about the test screens, not about assembling a question bank through
  * the TipTap editor, so the bank is seeded directly in the e2e stack's database — the same
- * `docker compose exec` route `./coin-settings` uses. Both rows are owned by the editor
- * because the API only lets an editor place their own questions on their own paper, and the
- * question versions are written unpublished, then published, because `question_options_frozen`
- * refuses options inserted into a version whose `published_at` is already set.
+ * `docker compose exec` route `./coin-settings` uses. All rows are owned by the editor because
+ * the API only lets an editor place their own questions on their own paper, and the question
+ * versions are written unpublished, then published, because `question_options_frozen` refuses
+ * options inserted into a version whose `published_at` is already set.
+ *
+ * The numerical question exists to prove decision 0077 in a browser: it is valid in the bank
+ * and must never be offered by a test paper's picker.
  */
 
 export interface BuilderFixture {
   readonly examId: string;
   readonly alphaQuestionId: string;
   readonly betaQuestionId: string;
+  readonly numericalQuestionId: string;
 }
 
 function sqlLiteral(value: string): string {
@@ -32,17 +36,44 @@ function runSql(sql: string): void {
   );
 }
 
+/** One `psql` call that returns a single value, for a fixture that has to read an id back. */
+function querySql(sql: string): string {
+  return execFileSync(
+    'docker',
+    ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'abhyas', '-d', 'abhyas', '-tAc', sql],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  ).trim();
+}
+
 export function seedBuilderFixture(input: {
   readonly editorId: string;
   readonly marker: string;
   readonly alphaText: string;
   readonly betaText: string;
+  /** Optional: the bank's numerical question, unique per run by its default. */
+  readonly numericalText?: string;
+  /**
+   * Optional: the option texts, so a spec can scan a page for them. The second option of each
+   * question is the correct one, so a caller that changes the texts keeps that meaning.
+   */
+  readonly alphaOptions?: readonly [string, string, string];
+  readonly betaOptions?: readonly [string, string, string];
 }): BuilderFixture {
   const category = randomUUID();
   const exam = randomUUID();
   const subject = randomUUID();
   const alpha = randomUUID();
   const beta = randomUUID();
+  const numerical = randomUUID();
+  const numericalText = input.numericalText ?? `Numerical bank question ${input.marker}`;
+  const alphaOptions: readonly [string, string, string] = input.alphaOptions ?? ['4', '7', '9'];
+  const betaOptions: readonly [string, string, string] = input.betaOptions ?? ['2', '6', '7'];
+
+  const optionRows = (questionId: string, texts: readonly [string, string, string], correctPosition: number): string[] =>
+    texts.map(
+      (text, index) =>
+        `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, ${String(index + 1)}, ${sqlLiteral(`<p>${text}</p>`)}, ${index + 1 === correctPosition ? 'true' : 'false'} FROM question_versions WHERE question_id = ${sqlLiteral(questionId)}::uuid;`,
+    );
 
   const sql = [
     'DO $$',
@@ -52,21 +83,24 @@ export function seedBuilderFixture(input: {
     `  INSERT INTO subjects (id, exam_id, name, slug, created_by) VALUES (${sqlLiteral(subject)}::uuid, ${sqlLiteral(exam)}::uuid, 'Reasoning', ${sqlLiteral(`e2e-builder-sub-${input.marker}`)}, ${sqlLiteral(input.editorId)}::uuid);`,
     `  INSERT INTO questions (id, exam_id, subject_id, created_by, status, current_version) VALUES (${sqlLiteral(alpha)}::uuid, ${sqlLiteral(exam)}::uuid, ${sqlLiteral(subject)}::uuid, ${sqlLiteral(input.editorId)}::uuid, 'PUBLISHED', 1);`,
     `  INSERT INTO questions (id, exam_id, subject_id, created_by, status, current_version) VALUES (${sqlLiteral(beta)}::uuid, ${sqlLiteral(exam)}::uuid, ${sqlLiteral(subject)}::uuid, ${sqlLiteral(input.editorId)}::uuid, 'PUBLISHED', 1);`,
+    `  INSERT INTO questions (id, exam_id, subject_id, created_by, status, current_version) VALUES (${sqlLiteral(numerical)}::uuid, ${sqlLiteral(exam)}::uuid, ${sqlLiteral(subject)}::uuid, ${sqlLiteral(input.editorId)}::uuid, 'PUBLISHED', 1);`,
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by) VALUES (${sqlLiteral(alpha)}::uuid, 1, 'MCQ', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.alphaText}</p>`)}, '<p>Alpha has no divisors.</p>', 2, 0.5, ${sqlLiteral(input.editorId)}::uuid);`,
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by) VALUES (${sqlLiteral(beta)}::uuid, 1, 'MCQ', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.betaText}</p>`)}, '<p>Beta is even.</p>', 2, 0.5, ${sqlLiteral(input.editorId)}::uuid);`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 1, '<p>4</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 2, '<p>7</p>', true FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 3, '<p>9</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 1, '<p>2</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(beta)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 2, '<p>6</p>', true FROM question_versions WHERE question_id = ${sqlLiteral(beta)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 3, '<p>7</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(beta)}::uuid;`,
-    `  UPDATE question_versions SET published_at = now() WHERE question_id IN (${sqlLiteral(alpha)}::uuid, ${sqlLiteral(beta)}::uuid);`,
+    `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, numerical_answer, marks, negative_marks, created_by) VALUES (${sqlLiteral(numerical)}::uuid, 1, 'NUMERICAL', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${numericalText}</p>`)}, '<p>Seven.</p>', '7', 2, 0, ${sqlLiteral(input.editorId)}::uuid);`,
+    ...optionRows(alpha, alphaOptions, 2),
+    ...optionRows(beta, betaOptions, 2),
+    `  UPDATE question_versions SET published_at = now() WHERE question_id IN (${sqlLiteral(alpha)}::uuid, ${sqlLiteral(beta)}::uuid, ${sqlLiteral(numerical)}::uuid);`,
     'END $$;',
   ].join('\n');
 
   runSql(sql);
 
-  return { examId: exam, alphaQuestionId: alpha, betaQuestionId: beta };
+  return {
+    examId: exam,
+    alphaQuestionId: alpha,
+    betaQuestionId: beta,
+    numericalQuestionId: numerical,
+  };
 }
 
 
@@ -100,9 +134,10 @@ export function seedAuthor(marker: string): { readonly authorId: string; readonl
 /**
  * A PUBLISHED paper over the fixture's questions, written the way the builder would leave it.
  *
- * The version is written unpublished, its questions placed, and only then stamped, because
- * `test_questions_frozen` refuses a placement in a published version — the same two-statement
- * order the question fixture uses for options.
+ * The version is written unpublished, its questions placed, then each placement pinned to its
+ * question's current version (A5b), and only then is the version stamped, because
+ * `test_questions_frozen` refuses a placement in a published version and
+ * `test_versions_pinned_before_publish` refuses a published paper with an unpinned row.
  */
 export function publishSeededPaper(input: {
   readonly authorId: string;
@@ -131,6 +166,10 @@ export function publishSeededPaper(input: {
     `  VALUES (${sqlLiteral(version)}::uuid, ${sqlLiteral(test)}::uuid, 1, ${String(input.durationMinutes ?? 45)}, 2, 0.5, ${sqlLiteral(input.authorId)}::uuid);`,
     '  INSERT INTO test_questions (test_version_id, question_id, position) VALUES',
     `${positions};`,
+    // A5b: the pin comes before the stamp, or `test_versions_pinned_before_publish` refuses it.
+    `  UPDATE test_questions tq SET question_version_id = qv.id FROM questions q, question_versions qv`,
+    `  WHERE qv.question_id = q.id AND qv.version = q.current_version`,
+    `    AND tq.question_id = q.id AND tq.test_version_id = ${sqlLiteral(version)}::uuid;`,
     `  UPDATE test_versions SET published_at = now() WHERE id = ${sqlLiteral(version)}::uuid;`,
     'END $$;',
   ].join('\n');
@@ -138,4 +177,55 @@ export function publishSeededPaper(input: {
   runSql(sql);
 
   return { testId: test };
+}
+
+/**
+ * Edits a question in the bank the way the editor's screen does: a new question version with a
+ * changed stem, explanation and options, published, and the question's pointer moved to it.
+ *
+ * The e2e editor is seeded in SQL and never signs in, so the browser cannot drive the bank's own
+ * form; this writes exactly what `QuestionsService.saveDraft` followed by `publish` leaves behind,
+ * in the same order (version and options unpublished, then the version published, then the
+ * pointer).
+ */
+export function editQuestionFixture(input: {
+  readonly questionId: string;
+  readonly contentHtml: string;
+  readonly explanationHtml: string;
+  readonly options: readonly [string, string, string];
+  readonly correctPosition: 1 | 2 | 3;
+}): { readonly versionId: string } {
+  const question = sqlLiteral(input.questionId);
+  const options = input.options
+    .map(
+      (text, index) =>
+        `    (next_version, ${String(index + 1)}, ${sqlLiteral(`<p>${text}</p>`)}, ${index + 1 === input.correctPosition ? 'true' : 'false'})`,
+    )
+    .join(',\n');
+
+  const sql = [
+    'DO $$',
+    'DECLARE',
+    '  target INTEGER;',
+    '  next_version UUID;',
+    'BEGIN',
+    `  SELECT current_version + 1 INTO target FROM questions WHERE id = ${question}::uuid;`,
+    `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by)`,
+    `  SELECT question_id, target, question_type, language, difficulty, ${sqlLiteral(`<p>${input.contentHtml}</p>`)}, ${sqlLiteral(`<p>${input.explanationHtml}</p>`)}, marks, negative_marks, created_by`,
+    `  FROM question_versions WHERE question_id = ${question}::uuid AND version = target - 1`,
+    '  RETURNING id INTO next_version;',
+    '  INSERT INTO question_options (question_version_id, position, option_html, is_correct) VALUES',
+    `${options};`,
+    '  UPDATE question_versions SET published_at = now() WHERE id = next_version;',
+    `  UPDATE questions SET current_version = target, status = 'PUBLISHED' WHERE id = ${question}::uuid;`,
+    'END $$;',
+  ].join('\n');
+
+  runSql(sql);
+
+  const versionId = querySql(
+    `SELECT id::text FROM question_versions WHERE question_id = ${question}::uuid AND version = (SELECT current_version FROM questions WHERE id = ${question}::uuid)`,
+  );
+
+  return { versionId };
 }

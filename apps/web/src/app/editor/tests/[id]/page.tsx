@@ -230,7 +230,15 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
     page: pickerPage,
   });
   const onPaper = new Set(test.questions.map((question) => question.questionId));
-  const addable = (candidates?.items ?? []).filter((question) => !onPaper.has(question.id));
+  // Decision 0077: the picker offers only what the paper can score — an option-based question
+  // with exactly one correct option — so an editor is never offered a question the API refuses.
+  const addable = (candidates?.items ?? []).filter(
+    (question) =>
+      !onPaper.has(question.id) &&
+      question.version.questionType === 'MCQ' &&
+      question.options.length >= 2 &&
+      question.options.filter((option) => option.isCorrect).length === 1,
+  );
 
   const field = single(query.field);
   const error = single(query.error);
@@ -393,6 +401,11 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
                 Search
               </button>
             </form>
+
+            <p className="text-xs text-slate-500" data-testid="question-picker-note">
+              Only single-correct option questions can be added. Numerical-answer questions stay in the bank for
+              practice and are not offered here.
+            </p>
 
             <ul data-testid="question-candidates" className="divide-y divide-slate-800 rounded-xl border border-slate-800">
               {addable.map((question) => (

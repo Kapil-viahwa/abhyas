@@ -48,6 +48,9 @@ import { AdminTestsController, EditorTestsController } from './tests/tests.contr
 import { TestsService } from './tests/tests.service';
 import { EnrollmentsController, StudentTestsController } from './tests/enrollments.controller';
 import { EnrollmentsService } from './tests/enrollments.service';
+import { AttemptsController } from './attempts/attempts.controller';
+import { AttemptsInternalController } from './attempts/attempts-internal.controller';
+import { AttemptsService } from './attempts/attempts.service';
 
 @Module({
   controllers: [
@@ -64,6 +67,8 @@ import { EnrollmentsService } from './tests/enrollments.service';
     AdminTestsController,
     StudentTestsController,
     EnrollmentsController,
+    AttemptsController,
+    AttemptsInternalController,
     CoinsController,
     CoinsInternalController,
     WalletController,
@@ -125,6 +130,7 @@ import { EnrollmentsService } from './tests/enrollments.service';
     QuestionsService,
     TestsService,
     EnrollmentsService,
+    AttemptsService,
     // Deny-by-default everywhere: the guard refuses any route without a declaration.
     { provide: APP_GUARD, useClass: AuthGuard },
   ],

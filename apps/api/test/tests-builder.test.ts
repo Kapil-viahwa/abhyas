@@ -277,6 +277,59 @@ describe('the test builder over HTTP', () => {
     return question.id;
   }
 
+  /** A published numerical-answer question: valid in the bank, unscorable on a test paper. */
+  async function newNumericalQuestion(owner: Person, examId: string, subjectId: string): Promise<string> {
+    const question = await db.client.question.create({
+      data: { examId, subjectId, createdBy: owner.id, status: 'PUBLISHED', currentVersion: 1 },
+      select: { id: true },
+    });
+
+    await db.client.questionVersion.create({
+      data: {
+        questionId: question.id,
+        version: 1,
+        questionType: 'NUMERICAL',
+        language: 'EN',
+        difficulty: 'MEDIUM',
+        contentHtml: '<p>What is 3 + 4?</p>',
+        explanationHtml: '<p>Seven.</p>',
+        numericalAnswer: '7',
+        marks: 2,
+        negativeMarks: '0',
+        createdBy: owner.id,
+        publishedAt: new Date(),
+      },
+    });
+
+    return question.id;
+  }
+
+  /** Turns a published question into a NUMERICAL one through the editor's own route. */
+  async function editIntoNumerical(questionId: string): Promise<void> {
+    const edited = await call('PATCH', `/v1/questions/${questionId}`, editorA.token, {
+      examId: examA,
+      subjectId: subjectA,
+      topicId: null,
+      questionType: 'NUMERICAL',
+      language: 'EN',
+      difficulty: 'MEDIUM',
+      contentHtml: '<p>What is 3 + 4?</p>',
+      explanationHtml: '<p>Seven.</p>',
+      latex: null,
+      numericalAnswer: '7',
+      marks: '2',
+      negativeMarks: '0',
+      options: [],
+    });
+    expect(edited.statusCode, edited.body).toBe(200);
+  }
+
+  interface RefusalBody {
+    readonly code?: string;
+    readonly message?: string;
+    readonly questionId?: string;
+  }
+
   async function createPaper(actor: Person = editorA): Promise<string> {
     const created = await call('POST', '/v1/editor/tests', actor.token, {
       examId: examA,
@@ -818,5 +871,102 @@ describe('the test builder over HTTP', () => {
     expect(list.statusCode).toBe(200);
     const items = (list.json() as { items: TestView[] }).items;
     expect(items.every((item) => item.questions.length === 0)).toBe(true);
+  });
+
+  /**
+   * Decision 0077: a paper may hold only an option-based single-answer question with exactly one
+   * correct option. The bank's numerical questions stay valid for practice and never reach a
+   * test; the builder refuses them at all three points that could let one in.
+   */
+  describe('only single-correct questions on a paper', () => {
+    it('refuses a numerical question when the list is set, and writes nothing', async () => {
+      const paper = await draftWithQuestions();
+      const numerical = await newNumericalQuestion(editorA, examA, subjectA);
+
+      const refused = await call('PUT', `/v1/editor/tests/${paper.id}/questions`, editorA.token, {
+        questionIds: [...paper.questionIds, numerical],
+      });
+
+      expect(refused.statusCode, refused.body).toBe(400);
+      const body = refused.json() as RefusalBody;
+      expect(body.code).toBe('question_not_single_correct');
+      expect(body.questionId).toBe(numerical);
+      expect(body.message).toMatch(
+        /^Question 3 \([0-9a-f-]{36}\) cannot be scored: it is not a single-answer option question$/,
+      );
+      // The refusal says what is wrong with the question, never which option is correct.
+      expect(refused.body).not.toContain('isCorrect');
+
+      // The whole replacement was refused: the previous list is still there, in order.
+      const version = await db.client.testVersion.findFirstOrThrow({
+        where: { testId: paper.id, version: 1 },
+        select: { id: true },
+      });
+      const rows = await db.client.testQuestion.findMany({
+        where: { testVersionId: version.id },
+        orderBy: { position: 'asc' },
+        select: { questionId: true },
+      });
+      expect(rows.map((row) => row.questionId)).toEqual(paper.questionIds);
+    });
+
+    it('refuses to submit a paper whose placed question was edited into a numerical one', async () => {
+      const paper = await draftWithQuestions();
+      const target = paper.questionIds[0] ?? '';
+
+      // A question can be edited after it was placed: its current version becomes a new draft.
+      await editIntoNumerical(target);
+
+      const refused = await call('POST', `/v1/editor/tests/${paper.id}/submit`, editorA.token);
+
+      expect(refused.statusCode, refused.body).toBe(400);
+      const body = refused.json() as RefusalBody;
+      expect(body.code).toBe('question_not_single_correct');
+      expect(body.questionId).toBe(target);
+      expect(refused.body).not.toContain('isCorrect');
+
+      const row = await db.client.test.findUniqueOrThrow({
+        where: { id: paper.id },
+        select: { status: true, submittedAt: true },
+      });
+      expect(row.status).toBe('DRAFT');
+      expect(row.submittedAt).toBeNull();
+    });
+
+    it('refuses to publish and leaves the status and the version alone', async () => {
+      const paper = await submittedPaper();
+      const target = paper.questionIds[0] ?? '';
+
+      await editIntoNumerical(target);
+
+      const refused = await call('POST', `/v1/admin/tests/${paper.id}/publish`, admin.token);
+
+      expect(refused.statusCode, refused.body).toBe(400);
+      const body = refused.json() as RefusalBody;
+      expect(body.code).toBe('question_not_single_correct');
+      expect(body.questionId).toBe(target);
+
+      const row = await db.client.test.findUniqueOrThrow({
+        where: { id: paper.id },
+        select: { status: true },
+      });
+      expect(row.status).toBe('SUBMITTED');
+
+      const published = await db.client.testVersion.count({
+        where: { testId: paper.id, publishedAt: { not: null } },
+      });
+      expect(published).toBe(0);
+    });
+
+    it('still builds, submits and publishes a paper of single-correct questions', async () => {
+      const paper = await draftWithQuestions();
+
+      const submitted = await call('POST', `/v1/editor/tests/${paper.id}/submit`, editorA.token);
+      expect(submitted.statusCode, submitted.body).toBe(200);
+
+      const published = await call('POST', `/v1/admin/tests/${paper.id}/publish`, admin.token);
+      expect(published.statusCode, published.body).toBe(200);
+      expect((published.json() as TestView).status).toBe('PUBLISHED');
+    });
   });
 });

@@ -10,3 +10,6 @@ export const COIN_BULK_DRAIN_JOB = 'coin-bulk-drain';
 
 /** Phase 5, item 4a: compares every wallet with its ledger, once a night. */
 export const COIN_RECONCILIATION_JOB = 'coin-reconciliation';
+
+/** Phase 7, A3b: finalises attempts whose deadline plus the grace window has passed. */
+export const ATTEMPT_EXPIRY_SWEEP_JOB = 'attempt-expiry-sweep';

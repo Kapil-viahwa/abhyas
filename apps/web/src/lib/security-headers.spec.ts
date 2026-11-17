@@ -32,9 +32,19 @@ describe('security headers', () => {
   it('applies the rules to every route', () => {
     const rules = headerRules();
 
-    expect(rules).toHaveLength(1);
+    expect(rules).toHaveLength(2);
     expect(rules[0]?.source).toBe('/:path*');
     expect(rules[0]?.headers).toEqual([...SECURITY_HEADERS]);
+  });
+
+  it('never caches the result and review page', () => {
+    const rules = headerRules();
+    const result = rules.find((rule) => rule.source === '/attempt/result/:path*');
+    const byKey = new Map((result?.headers ?? []).map((header) => [header.key, header.value]));
+
+    expect(byKey.get('Cache-Control')).toBe('no-store, max-age=0');
+    expect(byKey.get('Referrer-Policy')).toBe('no-referrer');
+    expect(rules.filter((rule) => rule.source === '/attempt/result/:path*')).toHaveLength(1);
   });
 
   it('adds the storage origin to img-src and to nothing else', () => {

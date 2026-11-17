@@ -504,7 +504,11 @@ jobs:
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Five minutes, not ten. The scan itself takes 7-17s; the job hung twice on phase 7
+    # (`cf50ca4` and `015bf33`, the second reported "in progress, 7s" for over twenty minutes),
+    # and a hang must fail fast rather than linger on a check list and block a merge. If the
+    # runner never starts the job at all, no timeout here helps — that is GitHub's queue.
+    timeout-minutes: 5
     # gitleaks-action lists the pull request's commits to scope its scan, which
     # needs pull-requests: read. Without it the action fails with
     # "Resource not accessible by integration" (403) on /pulls/{n}/commits.

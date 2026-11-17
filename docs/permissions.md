@@ -313,3 +313,166 @@ Nothing on these screens reads a question, an option, an answer key, an explanat
 `created_by`: the API's projection has none of them, and the pages render its summary fields
 only. `/wallet` already lists the `ENROLLMENT` row (its history includes the type) and its type
 filter offers it; the Tests link is added to the account and wallet navigation beside Wallet.
+
+
+
+## Phase 7, A3a: the attempt API
+
+Every route is `@Authenticated()`: a signed-in account, and nothing more. **There is no `userId`
+on any of them** — the account is the session's — and a `userId` in a body or a query is refused
+with **400**, named, exactly as the enrollment routes do. A suspended account's session no longer
+authenticates (401) before any handler runs.
+
+| Route | What it does | Refusals |
+| --- | --- | --- |
+| `POST /v1/enrollments/:id/attempt` | starts the one attempt the enrollment bought, in one transaction, and returns the attempt plus the paper **once**; `deadline_at` is the database's `now()` plus the version's duration | 400 for a body, a field, a query value or a `userId`; 401; 404 for an unknown enrollment or another student's; **409** for an enrollment that is not `OPEN`, a paper that is not published, a paper with an unpinned placement (`paper_not_pinned`, A5b), or a second start (`attempt_already_started`, which re-delivers nothing) |
+| `GET /v1/attempts/:id` | the caller's own attempt: status, `started_at`, `deadline_at`, the server's `now`, the remaining seconds and, once ended, the submit source and time — **never the paper** | 400 for a query value or `userId`; 401; 404 unknown or another student's |
+| `POST /v1/attempts/:id/submit` | validates every answer against the frozen paper, inserts the answers, ends the attempt (`SUBMITTED`, source `STUDENT`), scores it and completes the enrollment, in one transaction; a replay returns the first result unchanged | 400 for a malformed body, a duplicate question (`duplicate_answer`), a question not on the paper (`unknown_question`) or an option that is not that question's (`unknown_option`); 401; 404; **409** `attempt_expired` when the grace window has passed — the attempt is then ended with an empty result and the answers are discarded |
+| `GET /v1/attempts/:id/result` | the caller's own result and per-question review, once the attempt has ended; this is the **only** response that carries `isCorrect`, the correct option and the explanation | 400; 401; 404; **409** `attempt_in_progress` before the end, with no data |
+
+The start response is a whitelist and carries no answer data: question id, position, type, stem,
+LaTeX, marks and negative marks, and each option's id, position, text and LaTeX — never
+`isCorrect`, `numerical_answer`, an explanation, a creator or a status. The state response carries
+no questions at all, so a page can re-sync its countdown without receiving the paper again.
+
+The deadline and the grace window are the server's alone: `attempt_submit_grace_seconds` (default
+5, bounds 0–60) is read inside the submitting transaction, and no route reads a timestamp from the
+client. An attempt past `deadline_at + grace` is finalised — by a submit, by a read, or by A3b's
+sweeper — exactly once, with an empty answer set and an `EXPIRED` enrollment.
+
+
+
+## Phase 7, A3b: the internal expiry route
+
+One route, for the worker and nothing else. It is `@Public()` so no user session reaches it by
+being signed in, and it is guarded by the same `assertInternalRequest` as the bulk-coin drain:
+`INTERNAL_API_SECRET`, the `INTERNAL_ALLOWED_ADDRESSES` allowlist, and a per-address failure
+counter. Every refusal is **404**, so the route does not confirm that it exists. It never appears
+on a student route and is not in the OpenAPI document's student surface.
+
+| Route | What it does | Refusals |
+| --- | --- | --- |
+| `POST /v1/internal/attempts/expire-expired` | claims up to `batchSize` (default and maximum 50) expired attempts with `FOR UPDATE SKIP LOCKED`, finalises each through `finalizeExpiredAttempt(id, 'SWEEPER')` in its own transaction, and answers `{ finalized, skipped, failed }` | **404** for a missing or wrong secret, an address outside the allowlist, or an address over the failure limit; 400 for a malformed body |
+
+The route's own response carries counts only — no attempt id, question, option, answer or
+student. The service's log lines name an attempt id and the counts, never an answer. A student
+session or an anonymous caller without the secret is refused with the same 404 as any other
+wrong caller.
+
+
+
+## Phase 7, A4: the taking screens
+
+The screens are server-rendered shells over the attempt routes and hold no rule of their own: each
+reads the session, calls the API with its access token, and prints the API's answer. No token,
+paper or answer key ever reaches the browser as data, and every response the browser does receive
+is `Cache-Control: no-store`.
+
+| Screen | Server check before it renders | What it calls |
+| --- | --- | --- |
+| `/attempt/<enrollmentId>` | `loadSession` — any signed-in account; an anonymous visitor is sent to `/login?next=%2Fattempt%2F<id>` | `GET /v1/enrollments/me?pageSize=100` (the paper's summary), `GET /v1/enrollments/<id>/attempt` (does an attempt exist) |
+| `/attempt/result/<attemptId>` | `loadSession` — anonymous to `/login?next=%2Fattempt%2Fresult%2F<id>` | `GET /v1/attempts/<id>/result`, and `GET /v1/attempts/<id>` while it answers 409 so the page can show the countdown |
+| `POST /api/attempts/start` | `guardFormPost` (Origin + double submit), then the session cookie | `POST /v1/enrollments/<id>/attempt` |
+| `GET /api/attempts/<id>/state` | the session cookie | `GET /v1/attempts/<id>` |
+| `POST /api/attempts/<id>/submit` | `guardFormPost`, then the session cookie | `POST /v1/attempts/<id>/submit` |
+| `GET /api/enrollments/<id>/attempt` | the session cookie | `GET /v1/enrollments/<id>/attempt` |
+
+The entry page renders the instructions and a Start button while no attempt exists, the
+"already started, cannot be resumed" screen — the server's remaining time only, no questions and
+no Start button — when an attempt is running that this page cannot show, a redirect to the result
+once the attempt has ended, and the same not-available screen the P5 pages use for an enrollment
+that is not the caller's, does not exist, or is no longer open. Another student's id behaves like
+an unknown one.
+
+The route handlers validate their own parameters and bodies before anything reaches the API: a
+path that is not a UUID, an `answers` field that is not a list of `{ questionId, chosenOptionId }`
+pairs (both UUIDs, at most 100 entries) is **400** with no API text echoed. The submit handler
+returns `{ ok: true }` on success and never forwards the API's result body: that body is the only
+response in the API that carries `isCorrect`, the correct option and the explanation, and A4's
+pages render none of it.
+
+## Phase 7, A4: the enrollment's attempt state route
+
+One route was added to the attempt API in this unit, because a page that has lost the start
+response has no other way to learn that an attempt exists: the paper is delivered once and the
+attempt's id lives only in that response. It is `@Authenticated()`, self-only, refuses a `userId`
+or any other query value with **400**, and another student's or an unknown enrollment is **404**
+with `Unknown enrollment`, never 403.
+
+| Route | What it does | Refusals |
+| --- | --- | --- |
+| `GET /v1/enrollments/:id/attempt` | `{ attempt }` — `null` before a start, the attempt's **state** afterwards: status, `started_at`, `deadline_at`, the server's `now`, the remaining seconds and, once ended, the submit source and time | 400 for a query value, a `userId` or a malformed id; 401 anonymous or suspended; 404 unknown or another student's |
+
+It never returns a question, an option, an answer, a score or an answer key, and it creates
+nothing: a read of an attempt called before a start leaves the database exactly as it was. An
+attempt that has passed its deadline is finalised by this read through the same lazy path as
+`GET /v1/attempts/:id` — source `LAZY`, one result, the empty auto-submitted one and an `EXPIRED`
+enrollment — and the response is still state only. `apps/api/test/attempts-api.test.ts` proves
+both halves: the not-started read changes nothing, and an expired one is ended with source `LAZY`
+without a question, a key or a score in the body.
+
+
+
+## Phase 7, A5: the result and review screen
+
+The screen is server-rendered and holds no rule of its own: it reads the session, calls the API's
+result route with the server-side access token, and renders the review the API returns. This is the
+**only** screen a student ever sees an answer key or an explanation on, and it renders none of them
+until the attempt has ended.
+
+| Screen | Server check | What it calls |
+| --- | --- | --- |
+| `/attempt/result/<attemptId>` | `loadSession` — anonymous to `/login?next=%2Fattempt%2Fresult%2F<id>` | `GET /v1/attempts/<id>/result`, and `GET /v1/attempts/<id>` while the result answers 409 |
+
+- **Ended attempts only.** A `SUBMITTED` or `AUTO_SUBMITTED` attempt renders the summary and the
+  review. While the attempt is `IN_PROGRESS` the API answers **409** and the page shows the
+  in-progress message and the countdown — no summary, no question, no key.
+- **Own attempts only.** Another student's attempt and an unknown id are **404** and a malformed id
+  is **400**; the page shows the same not-available screen for all three, and prints nothing from
+  the review. A suspended account's session no longer authenticates, so `loadSession` sends it to
+  sign-in.
+- **No cache.** `apps/web/src/lib/security-headers.ts` adds `Cache-Control: no-store, max-age=0` and
+  `Referrer-Policy: no-referrer` to `/attempt/result/:path*` in `next.config.ts`, so a shared cache
+  does not keep the page and the back/forward cache does not serve it after a sign-out on the same
+  device.
+- **Server-side filtering.** `?show=all|wrong|unattempted` is validated against that allowlist; any
+  other value is `all`. The whole review stays server-rendered, so no review data is passed to a
+  client component, put in a URL beyond the filter name, logged or stored.
+- **Rich content.** The API sanitises `contentHtml`, `optionHtml` and `explanationHtml` with
+  `sanitizeStoredContent` before sending them, and the page puts only those sanitised strings into
+  HTML; LaTeX goes through `renderLatex` (KaTeX with `trust: false`). Nothing else is injected as
+  markup.
+- **Retake.** The API's result view carries the attempt's `test_id` and the test's title (added in
+  this unit, ended attempts only) so the page can link to `/tests/<testId>`, where a retake means a
+  new enrollment and a new fee. The enrollments list on `/tests` now shows a **Result** link for a
+  `COMPLETED` or `EXPIRED` enrollment, which goes through `/attempt/<enrollmentId>` and redirects to
+  the result.
+
+The submit route handler still answers `{ ok: true }` and never the API's result body; the API's
+`POST /v1/attempts/:id/submit` answers the result **summary** only — `GET /v1/attempts/:id/result`
+is the single response that carries the review, the correct option and the explanation.
+
+
+
+## Phase 7, A5b: the paper a student sat is pinned
+
+No route, permission or screen is added by A5b. What changes is the content every existing route
+reads, so the rules above keep holding with a stronger source:
+
+- **Publishing pins.** `POST /v1/admin/tests/:id/publish` still requires `tests.publish`, and inside
+  its transaction it now pins every placement to the question's current version and re-validates
+  single-correct against those pinned versions before stamping the version. A `DRAFT` or `SUBMITTED`
+  paper keeps null pins and the builder keeps showing each question's current version.
+- **Starting refuses an unpinned paper.** `POST /v1/enrollments/:id/attempt` answers **409**
+  `paper_not_pinned` if any placement of the enrollment's version has no pin — the same 409 class as
+  `paper_not_frozen`, and no attempt row is written.
+- **The start response, the scoring and the review read the pin.** `loadPaper` resolves each
+  placement through `question_version_id` when it is set, so the paper delivered once, the answers
+  scored and the review rendered after the end are the same bytes even if an editor edits the
+  question in the bank afterwards. The whitelists are unchanged: the start response still carries no
+  key, and `GET /v1/attempts/:id/result` is still the only response that does.
+- **A question edit needs no new refusal.** `PATCH /v1/questions/:id` and
+  `POST /v1/questions/:id/publish` work as before; the edit reaches drafts and papers published
+  later, never a published paper or an attempt on it.
+- **Editing the pin is impossible from the API.** There is no route for `test_questions`; the
+  database refuses any change to a row of a published paper.

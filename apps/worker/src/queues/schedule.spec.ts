@@ -2,8 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import { OTP_RETENTION_MINUTES } from '../jobs/otp-purge';
 import { runMaintenanceJob } from './dispatch';
-import { COIN_BULK_DRAIN_JOB, COIN_RECONCILIATION_JOB, OTP_PURGE_JOB } from './maintenance';
-import { OTP_PURGE_INTERVAL_MS, REPEATABLE_JOBS, registerRepeatableJobs, type RepeatableQueueHost } from './schedule';
+import {
+  ATTEMPT_EXPIRY_SWEEP_JOB,
+  COIN_BULK_DRAIN_JOB,
+  COIN_RECONCILIATION_JOB,
+  OTP_PURGE_JOB,
+} from './maintenance';
+import {
+  ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS,
+  OTP_PURGE_INTERVAL_MS,
+  REPEATABLE_JOBS,
+  registerRepeatableJobs,
+  type RepeatableQueueHost,
+} from './schedule';
 
 interface RecordedAdd {
   readonly name: string;
@@ -35,11 +46,23 @@ describe('the worker schedule', () => {
     expect(purge?.data.retentionMinutes).toBe(OTP_RETENTION_MINUTES);
   });
 
+  it('registers the attempt expiry sweeper every thirty seconds', async () => {
+    const { queue, calls } = stubQueue();
+
+    await registerRepeatableJobs(queue);
+
+    const sweep = calls.find((call) => call.name === ATTEMPT_EXPIRY_SWEEP_JOB);
+    expect(sweep).toBeDefined();
+    expect(sweep?.options.repeat.every).toBe(30_000);
+    expect(ATTEMPT_EXPIRY_SWEEP_INTERVAL_MS).toBe(30_000);
+  });
+
   it('has a handler for every repeatable job it registers', async () => {
     for (const job of REPEATABLE_JOBS) {
       let deleted = 0;
       let drained = 0;
       let reconciled = 0;
+      let swept = 0;
       const result = await runMaintenanceJob(
         { name: job.name, data: job.data },
         {
@@ -65,6 +88,12 @@ describe('the worker schedule', () => {
               return { walletsChecked: 0, mismatches: 0 };
             },
           },
+          attemptSweeper: {
+            run: async () => {
+              swept += 1;
+              return { finalized: 0, skipped: 0, failed: 0 };
+            },
+          },
         },
       );
 
@@ -72,6 +101,7 @@ describe('the worker schedule', () => {
       expect(deleted, job.name).toBe(job.name === OTP_PURGE_JOB ? 1 : 0);
       expect(drained, job.name).toBe(job.name === COIN_BULK_DRAIN_JOB ? 1 : 0);
       expect(reconciled, job.name).toBe(job.name === COIN_RECONCILIATION_JOB ? 1 : 0);
+      expect(swept, job.name).toBe(job.name === ATTEMPT_EXPIRY_SWEEP_JOB ? 1 : 0);
     }
   });
 
