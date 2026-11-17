@@ -49,6 +49,47 @@ const DEFAULT_STEP_LIMIT_MS = 20_000;
 const ALPHA_EXPLANATION = 'Alpha has no divisors';
 const BETA_EXPLANATION = 'Beta is even';
 
+/**
+ * The fixture's option texts, unique per run so a scan for one can only find the paper's own.
+ * The second option of each question is the correct one, as in the fixture's default.
+ */
+const ALPHA_OPTIONS = [
+  `Review alpha option one ${marker}`,
+  `Review alpha option two ${marker}`,
+  `Review alpha option three ${marker}`,
+] as const;
+const BETA_OPTIONS = [
+  `Review beta option one ${marker}`,
+  `Review beta option two ${marker}`,
+  `Review beta option three ${marker}`,
+] as const;
+const GAMMA_OPTIONS = [
+  `Review gamma option one ${marker}`,
+  `Review gamma option two ${marker}`,
+  `Review gamma option three ${marker}`,
+] as const;
+
+/** The review's own words: the correct-answer marker. Only an ended attempt may show it. */
+const CORRECT_MARKER = 'Correct answer';
+
+/** Everything the result URL must not show while the attempt is still running. */
+const FORBIDDEN_WHILE_IN_PROGRESS = [
+  alphaText,
+  betaText,
+  gammaText,
+  ...ALPHA_OPTIONS,
+  ...BETA_OPTIONS,
+  ...GAMMA_OPTIONS,
+  CORRECT_MARKER,
+  ALPHA_EXPLANATION,
+  BETA_EXPLANATION,
+];
+
+/** Every forbidden phrase found in a page's text or HTML, in the list's own order. */
+function leakedReview(body: string): string[] {
+  return FORBIDDEN_WHILE_IN_PROGRESS.filter((phrase) => body.includes(phrase));
+}
+
 type Timer = ReturnType<typeof setTimeout>;
 
 async function step<T>(name: string, run: () => Promise<T>, limitMs: number = DEFAULT_STEP_LIMIT_MS): Promise<T> {
@@ -309,12 +350,20 @@ test.describe.serial('the result and the review', () => {
   test.beforeAll(() => {
     const author = seedAuthor(marker);
     // Two banks, so the paper has three single-correct questions: one right, one wrong, one left.
-    const bankA = seedBuilderFixture({ editorId: author.authorId, marker, alphaText, betaText });
+    const bankA = seedBuilderFixture({
+      editorId: author.authorId,
+      marker,
+      alphaText,
+      betaText,
+      alphaOptions: ALPHA_OPTIONS,
+      betaOptions: BETA_OPTIONS,
+    });
     const bankB = seedBuilderFixture({
       editorId: author.authorId,
       marker: `${marker}b`,
       alphaText: gammaText,
       betaText: `Review unused question ${marker}`,
+      alphaOptions: GAMMA_OPTIONS,
     });
 
     longTest = publishSeededPaper({
@@ -491,12 +540,32 @@ test.describe.serial('the result and the review', () => {
       await expect(page.getByTestId('result-in-progress')).toBeVisible();
       await expect(page.getByTestId('result-in-progress')).toContainText('has not ended yet');
 
+      // Not an empty page that passes by showing nothing: the message is on it, and the
+      // review's own container is not.
+      await expect(page.getByTestId('review-question')).toHaveCount(0);
+
       const view = await readPage(page);
-      expect(view.text).not.toContain(alphaText);
-      expect(view.text).not.toContain(betaText);
-      expect(view.text).not.toContain(gammaText);
+
+      // Both scanners are proven able to find what they look for before their emptiness is
+      // trusted: the page-text scan, the whole-page scan and the key-name scan.
+      expect(leakedReview('<p>a quiet result page</p>')).toEqual([]);
+      expect(
+        leakedReview(
+          `<p>${alphaText}</p><p>${ALPHA_OPTIONS[1]}</p><span>${CORRECT_MARKER}</span><p>${ALPHA_EXPLANATION}</p>`,
+        ),
+      ).toEqual([alphaText, ALPHA_OPTIONS[1], CORRECT_MARKER, ALPHA_EXPLANATION]);
+      expect(leakedText(`<p>${ALPHA_EXPLANATION}</p>`)).toEqual(['the alpha explanation']);
+
+      // Every stem, every option text, the correct-answer marker and the explanations: the
+      // option texts also appear on the taking screen, but this is the RESULT URL while the
+      // attempt is still running.
+      for (const phrase of FORBIDDEN_WHILE_IN_PROGRESS) {
+        expect(view.text, 'the result page text while the attempt runs').not.toContain(phrase);
+      }
+
+      expect(leakedReview(view.text)).toEqual([]);
+      expect(leakedReview(view.html)).toEqual([]);
       expect(leakedKeys(view.html)).toEqual([]);
-      expect(leakedText(view.html)).toEqual([]);
     });
   });
 

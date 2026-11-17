@@ -43,6 +43,12 @@ export function seedBuilderFixture(input: {
   readonly betaText: string;
   /** Optional: the bank's numerical question, unique per run by its default. */
   readonly numericalText?: string;
+  /**
+   * Optional: the option texts, so a spec can scan a page for them. The second option of each
+   * question is the correct one, so a caller that changes the texts keeps that meaning.
+   */
+  readonly alphaOptions?: readonly [string, string, string];
+  readonly betaOptions?: readonly [string, string, string];
 }): BuilderFixture {
   const category = randomUUID();
   const exam = randomUUID();
@@ -51,6 +57,14 @@ export function seedBuilderFixture(input: {
   const beta = randomUUID();
   const numerical = randomUUID();
   const numericalText = input.numericalText ?? `Numerical bank question ${input.marker}`;
+  const alphaOptions: readonly [string, string, string] = input.alphaOptions ?? ['4', '7', '9'];
+  const betaOptions: readonly [string, string, string] = input.betaOptions ?? ['2', '6', '7'];
+
+  const optionRows = (questionId: string, texts: readonly [string, string, string], correctPosition: number): string[] =>
+    texts.map(
+      (text, index) =>
+        `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, ${String(index + 1)}, ${sqlLiteral(`<p>${text}</p>`)}, ${index + 1 === correctPosition ? 'true' : 'false'} FROM question_versions WHERE question_id = ${sqlLiteral(questionId)}::uuid;`,
+    );
 
   const sql = [
     'DO $$',
@@ -64,12 +78,8 @@ export function seedBuilderFixture(input: {
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by) VALUES (${sqlLiteral(alpha)}::uuid, 1, 'MCQ', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.alphaText}</p>`)}, '<p>Alpha has no divisors.</p>', 2, 0.5, ${sqlLiteral(input.editorId)}::uuid);`,
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, marks, negative_marks, created_by) VALUES (${sqlLiteral(beta)}::uuid, 1, 'MCQ', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${input.betaText}</p>`)}, '<p>Beta is even.</p>', 2, 0.5, ${sqlLiteral(input.editorId)}::uuid);`,
     `  INSERT INTO question_versions (question_id, version, question_type, language, difficulty, content_html, explanation_html, numerical_answer, marks, negative_marks, created_by) VALUES (${sqlLiteral(numerical)}::uuid, 1, 'NUMERICAL', 'EN', 'MEDIUM', ${sqlLiteral(`<p>${numericalText}</p>`)}, '<p>Seven.</p>', '7', 2, 0, ${sqlLiteral(input.editorId)}::uuid);`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 1, '<p>4</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 2, '<p>7</p>', true FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 3, '<p>9</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(alpha)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 1, '<p>2</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(beta)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 2, '<p>6</p>', true FROM question_versions WHERE question_id = ${sqlLiteral(beta)}::uuid;`,
-    `  INSERT INTO question_options (question_version_id, position, option_html, is_correct) SELECT id, 3, '<p>7</p>', false FROM question_versions WHERE question_id = ${sqlLiteral(beta)}::uuid;`,
+    ...optionRows(alpha, alphaOptions, 2),
+    ...optionRows(beta, betaOptions, 2),
     `  UPDATE question_versions SET published_at = now() WHERE question_id IN (${sqlLiteral(alpha)}::uuid, ${sqlLiteral(beta)}::uuid, ${sqlLiteral(numerical)}::uuid);`,
     'END $$;',
   ].join('\n');
