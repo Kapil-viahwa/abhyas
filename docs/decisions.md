@@ -2515,7 +2515,7 @@ another student, an anonymous visitor and a malformed id.
 
 
 
-## 0082 — Question versioning in attempts (implemented, owner to confirm the backfill rule)
+## 0082 — Question versioning in attempts (implemented and verified in CI, owner to confirm the backfill rule)
 
 **Why this exists.** A5 reads a review's question list, order and marks from the attempt's frozen
 test version, but each question's *content* — stem, options, the correct option and the explanation
@@ -2629,4 +2629,19 @@ in `20270301000000_test_question_pinning`.
   submits, the editor's edit is written through `editQuestionFixture`, the result still shows the
   original review text and score, and a second student starting the same paper gets the original
   stem and options.
+
+- **Deploy note.** The migration runs as the table owner: it disables exactly one trigger on
+  `test_questions` for the backfill statement and re-enables it immediately, which needs ownership of
+  that table rather than a superuser (that is why it is not `session_replication_role`).
+  Production's migration role (`MIGRATION_DATABASE_URL`) must therefore own `test_questions`, or be
+  able to run `ALTER TABLE "test_questions" DISABLE TRIGGER "test_questions_frozen"`. The backfill
+  pins each already-published paper to the question's current version — **exact** where the question
+  was never edited after publishing, an **approximation** where it was (the rule the owner is asked
+  to confirm above).
+- **Verified in CI.** Both runs of `015bf33dabdb9745571209e53572e0570342e8bd` are green: the push run
+  [44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (`e2e` 5m41s,
+  `gitleaks` 9s after one re-run of a hung job) and the pull_request run
+  [44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) (`e2e` 5m26s,
+  `gitleaks` 17s). The `database` jobs ran `apps/api/test/attempts-pinning.test.ts` in full and the
+  `e2e` jobs ran the sixth `attempt-review` case; the claim table is in `PROGRESS.md`.
 

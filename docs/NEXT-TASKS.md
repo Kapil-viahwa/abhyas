@@ -159,17 +159,23 @@ The claim table and the red rounds are in `PROGRESS.md`. The review's question *
 from each question's current version, so it is not yet immutable beside the frozen result (decision
 0082); A5b pins the question version and is queued **before** the merge.
 
-[ ] A5b Question versioning in attempts (decision 0082, open, owner to decide). Recommended: pin the
-question version at publish — `test_questions` gains `question_version_id`, backfilled from each
-question's current version and frozen with the paper, and the start response, the scoring function
-and the review all read that pinned version instead of the question's `currentVersion` pointer.
-Stopgap if the merge cannot wait: refuse a new version of a question that is inside a published
-paper or a live attempt, with a stable `question_in_use` code, and point the editor at
-archive-and-replace. Tests: a published paper's content and key survive an edit; a live attempt
-still submits and is scored against the paper it was given; the review shows the pinned content.
-Built in this session — the migration, schema, publish, readers, database tests and one Playwright
-case are in `PROGRESS.md` under "Phase 7, A5b"; the backfill rule waits for the owner's confirmation.
-The item stays `[ ]` until the runs on the pushed commits are read and green.
+[x] A5b Question versioning in attempts (decision 0082). Pin the question version at publish —
+`test_questions` gains `question_version_id`, backfilled from each question's current version and
+frozen with the paper, and the start response, the scoring function and the review all read that
+pinned version instead of the question's `currentVersion` pointer. Tests: a published paper's content
+and key survive an edit; a live attempt still submits and is scored against the paper it was given;
+the review shows the pinned content. — Done. Verified in both runs of
+`015bf33dabdb9745571209e53572e0570342e8bd`: the push run
+[44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (`e2e` 5m41s,
+`gitleaks` 9s) and the pull_request run
+[44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) (`e2e` 5m26s,
+`gitleaks` 17s), eighteen green checks between them. The push run's `gitleaks` job hung
+(`133770196668`, reported "running, 7s" for ~20 minutes); it was re-run once and passed in 9s as
+`133867898247`. The `database` jobs (1m53s and 1m56s) ran `apps/api/test/attempts-pinning.test.ts`
+with all seven cases plus every existing suite; the `e2e` jobs ran the sixth `attempt-review` case and
+every existing spec. The claim table and the red rounds are in `PROGRESS.md`; the backfill rule stays
+owner-to-confirm in decision 0082, and the deploy note (the migration must own `test_questions`) is
+recorded there. The item was ticked in a docs-only commit, so its own runs are the pair above.
 
 [ ] A6 Docs and merge: `docs/permissions.md` (the four routes and who may call them),
 `docs/decisions.md` (0074's assumptions confirmed or corrected), the known gaps (no autosave by

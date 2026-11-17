@@ -1109,7 +1109,7 @@ redirect and the malformed id are checked exactly as before.
 
 
 
-## Phase 7, A5b (built — runs queued, not read)
+## Phase 7, A5b (done — both runs of `015bf33` green, push run re-run once)
 
 **The paper pins the question version it froze.** A published paper no longer resolves a question's
 content through `questions.current_version`, so editing the bank cannot change what an attempt was
@@ -1155,7 +1155,56 @@ question's current version at migration time. That is exact for a paper whose qu
 edited after publishing and an approximation for one that was edited (the old content is not in the
 database); decision 0082 records the rule.
 
-**Not yet verified.** Nothing here has been compiled, migrated or run: no `pnpm lint`, `pnpm
-typecheck`, `pnpm test:unit`, `pnpm test:db`, `pnpm test:e2e` or Docker, and no Postgres, so the
-migration has been read as SQL but never executed. The queue item stays `[ ]` until the runs on the
-pushed commit are read.
+**Verified** in both runs of `015bf33dabdb9745571209e53572e0570342e8bd`:
+[run 44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (push, re-run once
+after its `gitleaks` hung — `e2e` 5m41s, `gitleaks` 9s) and
+[run 44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) (pull_request,
+`e2e` 5m26s, `gitleaks` 17s): eighteen green checks between them, none red. The `database` jobs (1m53s
+and 1m56s) are green under `set -o pipefail`, so the whole `pnpm test:db` suite ran, the migration
+`20270301000000_test_question_pinning` applied and `apps/api/test/attempts-pinning.test.ts` passed all
+seven of its cases; their readable log slices are Postgres output, so the vitest summary is not
+re-quotable. The `e2e` jobs are green under pipefail, so every spec passed, the sixth
+`attempt-review` case included; the `unit` jobs (38s and 26s) are green too.
+
+**Checked a second time by hand:** the pinning tests compare against the ORIGINAL values and the
+sixth e2e case reads the original stem and option texts from the page body, not from the heading
+whose test id only carries "Question 1".
+
+### Every claim, and the test that proves it
+
+| Claim | Test |
+| --- | --- |
+| Publishing pins every row, and a non-scorable current version is refused `question_not_single_correct` with the version, the paper's status and every pin unchanged | `pins every placement to the question’s current version when the paper is published`, `refuses to publish a paper whose current question version is not scorable` (database) |
+| After the question is edited in the bank, a new attempt gets the ORIGINAL content and option ids | `delivers, scores and reviews the pinned content after the question is edited` — `contentHtml` contains the original stem, the option ids equal the pinned version's, and the edited ids are absent (database); sixth e2e case for a second student |
+| Scoring uses the original key | same database test — `4.00`, 2 correct, 0 wrong; the in-flight case below — `-0.50` |
+| The ended review shows the original stem, options, key and explanation beside the stored score | same database test — `score` `4.00`, review stem/explanation original, `correctOptionId` the original, exactly one `isCorrect` option, the edited values absent; sixth e2e case — `2.00 of 2.00`, correct 1, original stems, options and explanation on the page |
+| An in-flight submit after the edit is accepted and scored `-0.50` on the original key | `accepts an in-flight submit after the edit and scores it on the paper it was given` — 200 (no `unknown_option`), `-0.50`, 1 wrong, review original (database) |
+| A paper published AFTER the edit pins the new version | `pins a paper published after the edit to the new version, and leaves a draft unpinned` — the pin is the new version id and the start body carries the edited content (database) |
+| A draft stays unpinned | same test — the draft placement's `questionVersionId` is null, and stamping that version published is refused `/not pinned to a question version/` |
+| The pin is frozen, and a published version cannot hold an unpinned row | `refuses to change, remove or move a pin on a published paper, and a pin of another question` — `/a published paper cannot be changed/` for update, delete and a move out; `/belongs to question/` for another question's version; the pin is unchanged after every refusal; plus `test_versions_pinned_before_publish` in the draft case above |
+| No new key exposure in any response | `expectNoAnswerKey` on the start body (`:566`) and the submit body (`:604`), the submit being the summary only; `attempts.projection.ts` unchanged |
+| The in-progress result page shows no stem, option text, marker or explanation | `before the end the result page shows in-progress and none of the paper` (e2e) — every option text, `Correct answer`, both explanations and the stems absent from text and HTML, scanners proven against a planted string first |
+
+### The red rounds on the way
+
+- `7080600` — `e2e/tests-fixture.ts:217` `ReferenceError: querySql is not defined`: the new edit
+  helper used a function that lives in `attempts-fixture.ts`; fixed in `0594f13` with a `querySql`
+  helper in the file that uses it.
+- `7080600` — `attempts-pinning.test.ts:834` `expected 409 to be 200`: `publishTestVersion` stamped
+  the version but left the `tests` row `SUBMITTED`, so archiving it was refused. The fixture was
+  wrong, not the service: fixed in `0594f13` by stamping the test row the way `TestsService.publish`
+  does.
+- `015bf33` — `attempt-review.spec.ts:805` `toContainText` on `attempt-question` expected a stem,
+  received `Question 1`: that test id is the heading. Fixed in `015bf33` by asserting the heading's
+  text and reading the stem and options from the page.
+- Two hung `gitleaks` jobs: the `cf50ca4` pull_request run and the `015bf33` push run
+  (`133770196668`, "running, 7s" for ~20 minutes). The second was re-run once and passed in 9s as
+  `133867898247`; nothing about the repository was at fault.
+
+### Known gap — CI hygiene
+
+The `gitleaks` job has hung twice, both times stuck in its own step after the runner started it (the
+section that downloads gitleaks 8.16.1 and scans), never red and never finishing. Proposed for the
+A6 push, **not changed here**: a `timeout-minutes` of a few minutes on the `gitleaks` job, so a hang
+fails fast instead of lingering on a check list. The action stays pinned by full commit SHA.
+
