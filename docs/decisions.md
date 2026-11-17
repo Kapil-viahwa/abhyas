@@ -2725,3 +2725,27 @@ whole repository — every branch, every tag, every commit — weekly and on dem
 must report a commit count in the hundreds; a count of 0 or 1 means the mount or the history is wrong.
 If it reports a finding, that finding is a live incident: the value is compromised even if later
 removed, and rotation belongs to the owner before anything else merges.
+
+## 0084 — The Node runtime stays on 22 until a planned upgrade unit
+
+**Decided after Dependabot opened three docker pull requests that move the base image of the api, web
+and worker to `node:26-bookworm-slim`.** None of them was merged, and the `node` image's majors are now
+ignored in `.github/dependabot.yml` the way the package majors were in 0083.
+
+- **What the repository says, everywhere.** `.nvmrc` is `22`; `engines.node` in the root
+  `package.json` is `>=22 <23`; both stages of `apps/api/Dockerfile`, `apps/web/Dockerfile` and
+  `apps/worker/Dockerfile` are `node:22-bookworm-slim`; CI's `setup-node` reads `.nvmrc` through
+  `node-version-file`. They agree on Node 22, and 22 is the runtime every green run has proved.
+- **The failure mode seen.** #40 (api), #41 (web) and #42 (worker) were each red in `docker`,
+  `compose-smoke` and `e2e` while lint, typecheck, unit, database, gitleaks and audit passed. The first
+  real error is the same in all three: `[api build 2/7] RUN corepack enable` → `/bin/sh: 1: corepack:
+  not found` (exit 127). The Node 25+ images no longer ship Corepack, so the build stage cannot enable
+  pnpm and the image never gets built. Nothing in the application was at fault; the toolchain was.
+- **The rule.** A Dependabot pull request whose CI is red in the stack jobs (`docker`,
+  `compose-smoke`, `e2e`) and green in the code jobs is a runtime or toolchain change, not a bump. Read
+  the first real error line before the version number.
+- **The decision.** Node stays on 22. A move to another LTS line is one planned unit that changes
+  `.nvmrc`, the three Dockerfiles, CI and `engines` together, replaces `corepack enable` in the build
+  stage (Corepack is no longer shipped by the Node image) with an explicit pnpm install, and re-runs
+  the compose stack and the Playwright suite before it merges. It is not a bot merge and not part of
+  the minor-and-patch group.
