@@ -177,15 +177,22 @@ every existing spec. The claim table and the red rounds are in `PROGRESS.md`; th
 owner-to-confirm in decision 0082, and the deploy note (the migration must own `test_questions`) is
 recorded there. The item was ticked in a docs-only commit, so its own runs are the pair above.
 
-[ ] A6 Docs and merge — **in progress, docs done in the A6 part 1 session; not merged.** Done there:
-`docs/permissions.md` brought to the final state (every Phase 7 route, screen, guard and no-store
-rule, plus the A5b pinning section), decision 0082's status and deploy note, the owner-to-confirm
-list collected at the end of 0074–0082, the known gaps, `docs/ROADMAP.md`, the README links, the
-`PROGRESS.md` phase-wide claim table with run links, the rewritten PR #28 description, and the CI
-hygiene change (the `gitleaks` job capped at five minutes). `main` was unmoved at `1133d76`, so no
-merge commit was made and no migration was renamed. **Not done, by instruction:** marking the PR
-ready and merging. That waits for both runs fully green on the final docs head, then a normal merge
-commit (**never** a push to `main`), then a read of `main`'s CI.
+[x] A6 Docs and merge. Done: `docs/permissions.md` at the final state (every Phase 7 route,
+screen, guard and no-store rule, plus the A5b pinning section), decision 0082's status and deploy
+note, the owner-to-confirm list at the end of 0074–0082, the known gaps, `docs/ROADMAP.md`, the
+README links, the `PROGRESS.md` phase-wide claim table with run links, the rewritten PR #28
+description, and the CI hygiene change (the `gitleaks` job capped at five minutes). `main` was
+unmoved at `1133d76`, so no merge commit and no migration rename were needed there. Verified head
+`0a39795b57591501a0cb839aadfd3c77e41e6d5f`: push run
+[44034502274](https://github.com/Kapil-viahwa/abhyas/actions/runs/44034502274) (`e2e` 5m31s,
+`gitleaks` 6s) and pull_request run
+[44034508093](https://github.com/Kapil-viahwa/abhyas/actions/runs/44034508093) (`e2e` 5m32s,
+`gitleaks` 10s), eighteen green checks. PR #28 was marked ready and merged with a normal merge
+commit as [`574fb346506b11a397a8128805ba8b1cd1467b5e`](https://github.com/Kapil-viahwa/abhyas/commit/574fb346506b11a397a8128805ba8b1cd1467b5e);
+`main`'s CI on it is [44035329876](https://github.com/Kapil-viahwa/abhyas/actions/runs/44035329876),
+nine jobs green, `e2e` 6m03s and `gitleaks` 7s — no re-run was made, the job simply finished well
+inside its 20-minute cap. This queue close is merged back to `main` under the same normal-merge
+rule.
 
 [ ] A7 STOP and report. Results, analytics and dashboards (phase 8) start only on the owner's
 prompt.
