@@ -1,5 +1,5 @@
 # API image. Build context is the repository root (pnpm workspace).
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -21,7 +21,7 @@ RUN pnpm install --frozen-lockfile
 ENV DATABASE_URL=postgresql://build:build@127.0.0.1:5432/build
 RUN pnpm --filter @abhyas/shared run build && pnpm --filter @abhyas/api run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /repo
