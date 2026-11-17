@@ -816,9 +816,9 @@ describe('a published paper pins the question version it froze', () => {
     expect(after.questionVersionId).toBe(placed.questionVersionId);
   }, 120_000);
 
-  it('keeps an archived paper pinned, and cannot be published unpinned by direct SQL', async () => {
-    // A paper seeded as a draft and published through the shared helper: the shape every fixture
-    // uses, proving publishTestVersion and the database agree on the order.
+  it('keeps an archived paper pinned', async () => {
+    // A paper published through the shared helper — the shape every fixture uses, proving the
+    // helper and the database agree on the pin-then-stamp order and that the test row goes live.
     const question = await newQuestion({
       contentHtml: 'Archive stem',
       explanationHtml: 'Archive explanation',

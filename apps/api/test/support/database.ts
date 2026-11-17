@@ -108,9 +108,10 @@ export async function createMigratedTestDatabase(label: string): Promise<TestDat
 
 /**
  * Publishes a draft paper the way `TestsService.publish` does: every placement is pinned to its
- * question's current version first, then the version is stamped (A5b). The order matters —
- * `test_versions_pinned_before_publish` refuses a paper that still has an unpinned row, and
- * `test_questions_frozen` refuses a placement written into a published version.
+ * question's current version first, then the version is stamped, then the test itself moves to
+ * `PUBLISHED` (A5b). The order matters — `test_versions_pinned_before_publish` refuses a paper that
+ * still has an unpinned row, and `test_questions_frozen` refuses a placement written into a
+ * published version. The last statement is what lets the paper be archived and listed as live.
  */
 export async function publishTestVersion(client: PrismaClient, versionId: string): Promise<void> {
   await client.$executeRawUnsafe(
@@ -127,6 +128,12 @@ export async function publishTestVersion(client: PrismaClient, versionId: string
 
   await client.$executeRawUnsafe(
     `UPDATE "test_versions" SET "published_at" = now() WHERE "id" = $1::uuid`,
+    versionId,
+  );
+
+  await client.$executeRawUnsafe(
+    `UPDATE "tests" SET "status" = 'PUBLISHED', "published_at" = COALESCE("published_at", now())
+      WHERE "id" = (SELECT "test_id" FROM "test_versions" WHERE "id" = $1::uuid)`,
     versionId,
   );
 }

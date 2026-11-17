@@ -36,6 +36,15 @@ function runSql(sql: string): void {
   );
 }
 
+/** One `psql` call that returns a single value, for a fixture that has to read an id back. */
+function querySql(sql: string): string {
+  return execFileSync(
+    'docker',
+    ['compose', 'exec', '-T', 'postgres', 'psql', '-U', 'abhyas', '-d', 'abhyas', '-tAc', sql],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  ).trim();
+}
+
 export function seedBuilderFixture(input: {
   readonly editorId: string;
   readonly marker: string;
