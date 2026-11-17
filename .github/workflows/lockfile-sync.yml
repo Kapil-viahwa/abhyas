@@ -34,7 +34,7 @@ jobs:
       # No `cache: pnpm`: setup-node derives its cache key from the very lockfile this
       # job is about to replace, and fails when the file is out of date.
       - name: Setup node
-        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
