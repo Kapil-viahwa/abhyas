@@ -566,8 +566,18 @@ export class TestsService {
         throw new BadRequestException('A test needs at least one question before it can be published');
       }
 
+      // A5b: the paper freezes the content it is being published with, in the same transaction
+      // and before the version is stamped. The pin is what the start response, the scoring and
+      // the review read from then on; the question's own current version can move afterwards
+      // and this paper will not (decision 0082).
+      const pinned = await this.pinQuestions(tx, current.id);
+      if (pinned !== count) {
+        throw new ConflictException('Every question on the paper needs a current version before it can be published');
+      }
+
       // Inside the publishing transaction: nothing unscorable is ever frozen into a version.
-      await this.assertScorablePaper(tx, current.id);
+      // Validated against the versions just pinned, so what is checked is what will be read.
+      await this.assertScorablePaper(tx, current.id, { requirePinned: true });
 
       const stamped = await tx.testVersion.updateMany({
         where: { id: current.id, publishedAt: null },
@@ -628,28 +638,71 @@ export class TestsService {
   }
 
   /**
-   * Every question on the paper must still be scorable — an option-based question with exactly
-   * one correct option — read from each question's *current* version, because a question can be
-   * edited after it was placed (decision 0077). Runs inside the caller's transaction, so a
-   * refusal leaves the paper exactly as it was.
+   * A5b: writes the version each placement is being frozen with — the question's current version
+   * at the moment of publishing. One statement, so it is atomic with the rest of the publishing
+   * transaction, and `IS NULL` so a placement that already carries a pin is left alone. Returns
+   * how many rows it pinned: the caller compares it with the paper's size, because a question
+   * with no current version would otherwise be published unpinned.
    */
-  private async assertScorablePaper(tx: Prisma.TransactionClient, testVersionId: string): Promise<void> {
+  private async pinQuestions(tx: Prisma.TransactionClient, testVersionId: string): Promise<number> {
+    return tx.$executeRaw`
+      UPDATE "test_questions" tq
+      SET "question_version_id" = qv."id"
+      FROM "questions" q, "question_versions" qv
+      WHERE qv."question_id" = q."id"
+        AND qv."version" = q."current_version"
+        AND tq."question_id" = q."id"
+        AND tq."test_version_id" = ${testVersionId}::uuid
+        AND tq."question_version_id" IS NULL
+    `;
+  }
+
+  /**
+   * Every question on the paper must still be scorable — an option-based question with exactly
+   * one correct option. Runs inside the caller's transaction, so a refusal leaves the paper
+   * exactly as it was.
+   *
+   * A5b: the content checked is the version the placement is pinned to when that pin exists, and
+   * the question's current version only for a paper that has none (a draft, or a paper written
+   * before the pin). `requirePinned` is how publish refuses an unpinned row outright.
+   */
+  private async assertScorablePaper(
+    tx: Prisma.TransactionClient,
+    testVersionId: string,
+    options: { readonly requirePinned: boolean } = { requirePinned: false },
+  ): Promise<void> {
     const placed = await tx.testQuestion.findMany({
       where: { testVersionId },
       orderBy: { position: 'asc' },
-      select: { position: true, question: { select: { id: true, currentVersion: true } } },
+      select: {
+        position: true,
+        questionVersionId: true,
+        question: { select: { id: true, currentVersion: true } },
+      },
     });
 
     for (const row of placed) {
-      const version = await tx.questionVersion.findUnique({
-        where: {
-          questionId_version: { questionId: row.question.id, version: row.question.currentVersion },
-        },
-        select: { questionType: true, options: { select: { isCorrect: true } } },
-      });
+      const version =
+        row.questionVersionId !== null
+          ? await tx.questionVersion.findUnique({
+              where: { id: row.questionVersionId },
+              select: { questionType: true, options: { select: { isCorrect: true } } },
+            })
+          : options.requirePinned
+            ? null
+            : await tx.questionVersion.findUnique({
+                where: {
+                  questionId_version: { questionId: row.question.id, version: row.question.currentVersion },
+                },
+                select: { questionType: true, options: { select: { isCorrect: true } } },
+              });
 
       if (version === null) {
-        throw new ConflictException(`Question ${String(row.position)} has no current version`);
+        throw new ConflictException(
+          row.questionVersionId === null && options.requirePinned
+            ? `Question ${String(row.position)} is not pinned to a question version`
+            : `Question ${String(row.position)} has no current version`,
+        );
       }
 
       const reason = notSingleCorrectReason(version);

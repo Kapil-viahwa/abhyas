@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { createMigratedTestDatabase, type TestDatabase } from './support/database';
+import { createMigratedTestDatabase, publishTestVersion, type TestDatabase } from './support/database';
 
 /**
  * Phase 7, A1: the attempt model is constrained by the database, not only by the API that will
@@ -208,11 +208,8 @@ describe('phase 7 attempt model', () => {
       ],
     });
 
-    // First publication is the one update `test_versions_frozen` allows.
-    await db.client.$executeRawUnsafe(
-      `UPDATE "test_versions" SET "published_at" = now() WHERE "id" = $1::uuid`,
-      version.id,
-    );
+    // First publication is the one update `test_versions_frozen` allows; A5b pins first.
+    await publishTestVersion(db.client, version.id);
 
     return {
       testId: test.id,

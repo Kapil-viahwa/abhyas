@@ -10,7 +10,7 @@ import { AttemptsService } from '../src/attempts/attempts.service';
 import { hashPassword } from '../src/auth/password';
 import { SESSIONS_SERVICE, type SessionsService } from '../src/auth/sessions.service';
 
-import { createMigratedTestDatabase, type TestDatabase } from './support/database';
+import { createMigratedTestDatabase, publishTestVersion, type TestDatabase } from './support/database';
 
 /**
  * Phase 7, A3b: the internal expiry sweeper over real HTTP and Postgres.
@@ -257,10 +257,8 @@ describe('the attempt expiry sweeper', () => {
       })),
     });
 
-    await db.client.$executeRawUnsafe(
-      `UPDATE "test_versions" SET "published_at" = now() WHERE "id" = $1::uuid`,
-      version.id,
-    );
+    // A5b: pin each placement to its question's current version, then stamp the version.
+    await publishTestVersion(db.client, version.id);
 
     return { testId: test.id, versionId: version.id, questions };
   }

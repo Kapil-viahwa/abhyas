@@ -211,6 +211,19 @@ export class AttemptsService {
         });
       }
 
+      // A5b: a paper is started only when every placement is pinned to a question version.
+      // Publishing writes those pins; this refuses a row that somehow reached a published
+      // version without one, rather than delivering content that could move under the attempt.
+      const unpinned = await tx.testQuestion.count({
+        where: { testVersionId: enrollment.test_version_id, questionVersionId: null },
+      });
+      if (unpinned > 0) {
+        throw new ConflictException({
+          code: 'paper_not_pinned',
+          message: 'That paper is not complete, so it cannot be started',
+        });
+      }
+
       const created = await this.insertAttempt(tx, enrollment, actor, version.id, version.durationMinutes);
 
       const paper = await this.loadPaper(tx, enrollment.test_version_id);
@@ -517,18 +530,26 @@ export class AttemptsService {
   // Reads
   // -------------------------------------------------------------------------
 
+  /**
+   * The paper an attempt is given, scored on and reviewed from. A5b: each placement names the
+   * question version the paper froze at publish, and that is what is read — the question's
+   * current version moves when an editor edits the bank and must not follow. A row with no pin
+   * (a draft, or a paper written before the pin existed) still reads the current version.
+   */
   private async loadPaper(tx: Prisma.TransactionClient, testVersionId: string): Promise<PaperRow[]> {
     const rows = await tx.testQuestion.findMany({
       where: { testVersionId },
       orderBy: { position: 'asc' },
       select: {
         position: true,
+        questionVersionId: true,
         question: {
           select: {
             id: true,
             currentVersion: true,
             versions: {
               select: {
+                id: true,
                 version: true,
                 questionType: true,
                 contentHtml: true,
@@ -554,9 +575,17 @@ export class AttemptsService {
     });
 
     return rows.map((row) => {
-      const version = row.question.versions.find((entry) => entry.version === row.question.currentVersion);
+      const version =
+        row.questionVersionId === null
+          ? row.question.versions.find((entry) => entry.version === row.question.currentVersion)
+          : row.question.versions.find((entry) => entry.id === row.questionVersionId);
+
       if (version === undefined) {
-        throw new ConflictException('A question on this paper has no current version');
+        throw new ConflictException(
+          row.questionVersionId === null
+            ? 'A question on this paper has no current version'
+            : 'A question on this paper has no pinned version',
+        );
       }
 
       return {
