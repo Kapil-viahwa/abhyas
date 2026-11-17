@@ -1272,6 +1272,11 @@ commit does not normally force — the job still finished in 6m03s.
   `@nestjs/swagger` 12 (which needs Nest 12) are parked, with Dependabot's major updates for them
   ignored and minor/patch still on. Each is its own planned unit; see decision 0083. A green CI on a
   Dependabot PR is not proof of compatibility.
+- **Deferred upgrades — the Node runtime.** The `node` image stays on 22. Dependabot's three
+  `26-bookworm-slim` PRs (#40 api, #41 web, #42 worker) failed `docker`, `compose-smoke` and `e2e` at
+  `corepack enable` ("corepack: not found", exit 127) while lint, typecheck, unit, database, gitleaks
+  and audit passed. A Node move is a runtime upgrade unit that moves `.nvmrc`, the three Dockerfiles,
+  CI and `engines` together; the image majors are ignored. See decision 0084.
 - **Secret scanning scope.** The per-push `gitleaks` job scans only the pushed commit or the pull
   request's own range ("1 commits scanned" on a PR, "0" on a merge commit), even though its checkout
   fetches full history. A new weekly, manually triggerable `Secret scan (full history)` workflow runs

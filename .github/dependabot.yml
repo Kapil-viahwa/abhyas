@@ -47,3 +47,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # The Node runtime is the LTS line this repository builds and tests on: `.nvmrc`, the three
+    # Dockerfiles, CI's setup-node and `engines` in package.json all say 22. A `node` image major
+    # is therefore a runtime upgrade unit (decision 0084), never a bot merge — on
+    # `node:26-bookworm-slim` the docker, compose-smoke and e2e jobs failed at `corepack enable`
+    # with "corepack: not found".
+    ignore:
+      - dependency-name: 'node'
+        update-types: ['version-update:semver-major']
