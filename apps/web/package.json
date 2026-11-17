@@ -13,7 +13,7 @@
     "test": "vitest run src"
   },
   "dependencies": {
-    "@tiptap/pm": "2.10.3",
+    "@tiptap/pm": "3.34.0",
     "@tiptap/react": "2.10.3",
     "@tiptap/starter-kit": "2.10.3",
     "katex": "0.19.1",
