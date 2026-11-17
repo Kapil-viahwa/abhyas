@@ -24,9 +24,9 @@
     "compose:down": "docker compose down -v"
   },
   "devDependencies": {
-    "@playwright/test": "^1.49.1",
-    "@typescript-eslint/eslint-plugin": "^8.18.1",
-    "@typescript-eslint/parser": "^8.18.1",
+    "@playwright/test": "^1.65.1",
+    "@typescript-eslint/eslint-plugin": "^8.72.2",
+    "@typescript-eslint/parser": "^8.72.2",
     "eslint": "^8.57.1",
     "typescript": "^5.7.2",
     "vite": "^6.4.4",
