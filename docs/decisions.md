@@ -2669,3 +2669,59 @@ owner decides otherwise; the last is the backfill rule.
 7. **The pinning backfill rule** (0082): a paper published before A5b is pinned to each question's
    current version at migration time — exact where the question was never edited after publishing,
    an approximation where it was.
+
+
+## 0083 — Deferred upgrades, and the scope of the secret scan
+
+**Decided while clearing the Dependabot queue.** Four majors and one framework package are parked
+instead of merged, and `.github/dependabot.yml` now ignores their majors while leaving minor and patch
+updates on. Each is its own planned unit with its own tests; none is a bot merge.
+
+- **ESLint 10 (`#9`).** This repository is on ESLint 8 with `.eslintrc.cjs`. ESLint 9 removed the
+  legacy config by default and ESLint 10 finishes the job: the upgrade needs the flat-config migration
+  (`eslint.config.mjs`), the plugin/parser compatibility check (`@typescript-eslint` v8 supports it),
+  and a re-run of `pnpm lint` over the whole workspace. Its own unit.
+- **Prisma 7 (`#10`) and `@prisma/client` 7 (`#11`).** They must land together — the CLI and the
+  client are one version line — and the upgrade needs `prisma.config.ts`, the datasource `url` moved
+  out of `schema.prisma`, and a driver adapter (Prisma 7's client no longer ships the query engine the
+  same way). Every database test, the seed scripts and `prisma migrate deploy` run under it. Its own
+  unit, with the migration path rehearsed on a copy.
+- **TailwindCSS 4 (`#12`).** Tailwind 4 replaces the PostCSS plugin with `@tailwindcss/postcss` and the
+  `@tailwind base/components/utilities` directives with a single `@import "tailwindcss"`, plus a CSS-first
+  config. The screens must be re-checked visually and by the Playwright suite. Its own unit.
+- **`@nestjs/swagger` 12 (`#8`).** Not a normal major: 12 declares `@nestjs/common` and `@nestjs/core`
+  peers of `^12.0.0` and is ESM-only, needing Node ≥22.12. This repository is on Nest 11, so it
+  belongs to a **NestJS 12 upgrade unit** that moves `@nestjs/*` together (hence the `@nestjs/*` major
+  ignore rule: framework majors move as a set, never one package at a time).
+
+**The lesson.** A Dependabot pull request with a green CI is not proof of compatibility. The swagger
+PR's nine jobs were green against Nest 11 — because `pnpm` installed the package and every test still
+passed — while its own release notes say the package requires Nest 12. Read the peer dependencies and
+the release notes before merging a major; CI proves the code it ran, not the claim the version makes.
+
+### The scope of the secret scan
+
+**The finding.** The per-push `gitleaks` job does **not** rescan history. Its checkout already sets
+`fetch-depth: 0`, so the whole history is present, but the action scans only the event's own range —
+its log reads `gitleaks detect ... --log-opts=--no-merges --first-parent <head>^..<head>` and reports
+"1 commits scanned" on a pull request and "0 commits scanned" on a merge commit. A secret committed
+earlier and removed later is therefore invisible to the per-push check.
+
+**The full-history scan in this session was not executed.** This session has no toolchain, no Docker
+and no shell, so `gitleaks` could not be run over the history. What was checked, and is weaker than a
+scan: the working tree searched for private-key headers, AWS key ids, GitHub/OpenAI-shaped tokens and
+connection strings with embedded passwords (21 matches, all development defaults — `abhyas`/`abhyas`
+compose credentials, `build`/`build` in the Dockerfiles, the compose-check fixtures in the tests and
+the `.env.example` placeholders, all documented as such and refused in production by
+`packages/shared/src/env.ts`); and `.gitleaks.toml`, which allow-lists only the throwaway browser-suite
+passwords. None of these is a real credential. **History itself remains unscanned until the scheduled
+job below runs.**
+
+**The fix.** A new workflow, `.github/workflows/secret-scan.yml`, runs the official gitleaks container
+(`zricethezav/gitleaks:8.24.3`, the version the CI action currently installs) in `git` mode over the
+whole repository — every branch, every tag, every commit — weekly and on demand, with `--redact`,
+`--exit-code=2` and the repository's `.gitleaks.toml`. It fails the job on any finding, uses
+`contents: read` and passes no secrets, and the per-push CI is unchanged and stays fast. Its first run
+must report a commit count in the hundreds; a count of 0 or 1 means the mount or the history is wrong.
+If it reports a finding, that finding is a live incident: the value is compromised even if later
+removed, and rotation belongs to the owner before anything else merges.
