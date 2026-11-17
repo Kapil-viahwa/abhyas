@@ -177,12 +177,15 @@ every existing spec. The claim table and the red rounds are in `PROGRESS.md`; th
 owner-to-confirm in decision 0082, and the deploy note (the migration must own `test_questions`) is
 recorded there. The item was ticked in a docs-only commit, so its own runs are the pair above.
 
-[ ] A6 Docs and merge: `docs/permissions.md` (the four routes and who may call them),
-`docs/decisions.md` (0074's assumptions confirmed or corrected), the known gaps (no autosave by
-decision, closing the browser scores zero, no resume, no refund), `docs/ROADMAP.md`, the README
-link, the `PROGRESS.md` claim table with run links, the PR description; then mark ready and merge
-with a normal merge commit **only** when all nine jobs are green in both runs of the exact head;
-then read `main` CI. Never push to `main`.
+[ ] A6 Docs and merge — **in progress, docs done in the A6 part 1 session; not merged.** Done there:
+`docs/permissions.md` brought to the final state (every Phase 7 route, screen, guard and no-store
+rule, plus the A5b pinning section), decision 0082's status and deploy note, the owner-to-confirm
+list collected at the end of 0074–0082, the known gaps, `docs/ROADMAP.md`, the README links, the
+`PROGRESS.md` phase-wide claim table with run links, the rewritten PR #28 description, and the CI
+hygiene change (the `gitleaks` job capped at five minutes). `main` was unmoved at `1133d76`, so no
+merge commit was made and no migration was renamed. **Not done, by instruction:** marking the PR
+ready and merging. That waits for both runs fully green on the final docs head, then a normal merge
+commit (**never** a push to `main`), then a read of `main`'s CI.
 
 [ ] A7 STOP and report. Results, analytics and dashboards (phase 8) start only on the owner's
 prompt.

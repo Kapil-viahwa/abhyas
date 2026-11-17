@@ -325,7 +325,7 @@ authenticates (401) before any handler runs.
 
 | Route | What it does | Refusals |
 | --- | --- | --- |
-| `POST /v1/enrollments/:id/attempt` | starts the one attempt the enrollment bought, in one transaction, and returns the attempt plus the paper **once**; `deadline_at` is the database's `now()` plus the version's duration | 400 for a body, a field, a query value or a `userId`; 401; 404 for an unknown enrollment or another student's; **409** for an enrollment that is not `OPEN`, a paper that is not published, or a second start (`attempt_already_started`, which re-delivers nothing) |
+| `POST /v1/enrollments/:id/attempt` | starts the one attempt the enrollment bought, in one transaction, and returns the attempt plus the paper **once**; `deadline_at` is the database's `now()` plus the version's duration | 400 for a body, a field, a query value or a `userId`; 401; 404 for an unknown enrollment or another student's; **409** for an enrollment that is not `OPEN`, a paper that is not published, a paper with an unpinned placement (`paper_not_pinned`, A5b), or a second start (`attempt_already_started`, which re-delivers nothing) |
 | `GET /v1/attempts/:id` | the caller's own attempt: status, `started_at`, `deadline_at`, the server's `now`, the remaining seconds and, once ended, the submit source and time — **never the paper** | 400 for a query value or `userId`; 401; 404 unknown or another student's |
 | `POST /v1/attempts/:id/submit` | validates every answer against the frozen paper, inserts the answers, ends the attempt (`SUBMITTED`, source `STUDENT`), scores it and completes the enrollment, in one transaction; a replay returns the first result unchanged | 400 for a malformed body, a duplicate question (`duplicate_answer`), a question not on the paper (`unknown_question`) or an option that is not that question's (`unknown_option`); 401; 404; **409** `attempt_expired` when the grace window has passed — the attempt is then ended with an empty result and the answers are discarded |
 | `GET /v1/attempts/:id/result` | the caller's own result and per-question review, once the attempt has ended; this is the **only** response that carries `isCorrect`, the correct option and the explanation | 400; 401; 404; **409** `attempt_in_progress` before the end, with no data |
@@ -451,3 +451,28 @@ until the attempt has ended.
 The submit route handler still answers `{ ok: true }` and never the API's result body; the API's
 `POST /v1/attempts/:id/submit` answers the result **summary** only — `GET /v1/attempts/:id/result`
 is the single response that carries the review, the correct option and the explanation.
+
+
+
+## Phase 7, A5b: the paper a student sat is pinned
+
+No route, permission or screen is added by A5b. What changes is the content every existing route
+reads, so the rules above keep holding with a stronger source:
+
+- **Publishing pins.** `POST /v1/admin/tests/:id/publish` still requires `tests.publish`, and inside
+  its transaction it now pins every placement to the question's current version and re-validates
+  single-correct against those pinned versions before stamping the version. A `DRAFT` or `SUBMITTED`
+  paper keeps null pins and the builder keeps showing each question's current version.
+- **Starting refuses an unpinned paper.** `POST /v1/enrollments/:id/attempt` answers **409**
+  `paper_not_pinned` if any placement of the enrollment's version has no pin — the same 409 class as
+  `paper_not_frozen`, and no attempt row is written.
+- **The start response, the scoring and the review read the pin.** `loadPaper` resolves each
+  placement through `question_version_id` when it is set, so the paper delivered once, the answers
+  scored and the review rendered after the end are the same bytes even if an editor edits the
+  question in the bank afterwards. The whitelists are unchanged: the start response still carries no
+  key, and `GET /v1/attempts/:id/result` is still the only response that does.
+- **A question edit needs no new refusal.** `PATCH /v1/questions/:id` and
+  `POST /v1/questions/:id/publish` work as before; the edit reaches drafts and papers published
+  later, never a published paper or an attempt on it.
+- **Editing the pin is impossible from the API.** There is no route for `test_questions`; the
+  database refuses any change to a row of a published paper.

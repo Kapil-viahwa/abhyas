@@ -2645,3 +2645,27 @@ in `20270301000000_test_question_pinning`.
   `gitleaks` 17s). The `database` jobs ran `apps/api/test/attempts-pinning.test.ts` in full and the
   `e2e` jobs ran the sixth `attempt-review` case; the claim table is in `PROGRESS.md`.
 
+
+
+### Owner to confirm — the whole phase, in one list
+
+Seven items in 0074–0082 were assumed while the phase was built. Each is a one-line change if the
+owner decides otherwise; the last is the backfill rule.
+
+1. **The score is not floored at zero** (0076). A paper with heavy negative marking stores a negative
+   `results.score`; the column and every CHECK allow it.
+2. **A late submit is accepted within `attempt_submit_grace_seconds`** (default 5, bounds 0–60) and
+   refused after it with `attempt_expired`, the attempt having already been ended (0074).
+3. **Expiry runs twice on purpose**: the page auto-submits at the deadline, the worker's sweeper
+   looks every 30 seconds, and any read or submit of an expired attempt finalises it lazily (0074,
+   0078, 0079).
+4. **A reload or a closed browser ends access**, with no refund; an attempt auto-submitted with no
+   answers scores zero, because answers are saved only on submit (0074).
+5. **A lost start response means a lost attempt**: the paper is delivered once and its id lives only
+   in that response; the enrollment's state route can say an attempt exists but cannot re-deliver it
+   (0074, 0078).
+6. **Tests contain single-correct option questions only** — settled in 0077, enforced on set, submit
+   and publish, and listed here so the whole set of rules reads in one place.
+7. **The pinning backfill rule** (0082): a paper published before A5b is pinned to each question's
+   current version at migration time — exact where the question was never edited after publishing,
+   an approximation where it was.

@@ -1208,3 +1208,53 @@ section that downloads gitleaks 8.16.1 and scans), never red and never finishing
 A6 push, **not changed here**: a `timeout-minutes` of a few minutes on the `gitleaks` job, so a hang
 fails fast instead of lingering on a check list. The action stays pinned by full commit SHA.
 
+
+
+
+## Phase 7 — the whole phase, claim by claim
+
+Branch `phase-7`, pull request #28 (draft, unmerged). Every row below was seen passing in a finished
+CI run on the head named; nothing here is claimed from reading alone.
+
+| Unit | Claim | Run | Proving file |
+| --- | --- | --- | --- |
+| A1 | The attempt model and its guards: one attempt per enrollment, the database's clock, one-way ending, answers only for placed questions, an immutable result, and the grace setting | [42437445709](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437445709), [42437449335](https://github.com/Kapil-viahwa/abhyas/actions/runs/42437449335) | `apps/api/test/attempts-model.test.ts` (database job) |
+| A2 | Scoring: marks × correct − negative × wrong, unattempted zero, accuracy correct ÷ attempted, hundredths in integers, refusal over ignoring | [42440488533](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440488533), [42440491591](https://github.com/Kapil-viahwa/abhyas/actions/runs/42440491591) | `apps/api/src/attempts/scoring.spec.ts` (unit job, 23 tests) |
+| A2b | Only single-correct option questions reach a paper, refused on set, submit and publish inside the transaction | [43805423670](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805423670), [43805427751](https://github.com/Kapil-viahwa/abhyas/actions/runs/43805427751) | `apps/api/src/questions/single-correct.spec.ts`, `apps/api/test/tests-builder.test.ts` |
+| A3a | The start, state, submit and result routes: the server's deadline, the paper once, no key before the end, one submit, the grace window, lazy expiry, one result under parallel reads | [43809120061](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809120061), [43809127073](https://github.com/Kapil-viahwa/abhyas/actions/runs/43809127073) | `apps/api/test/attempts-api.test.ts` (database job) |
+| A3b | The sweeper: the internal route's guard, `SKIP LOCKED` claims, one finalisation path, the real worker ending a seeded expired attempt | [43814445045](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814445045), [43814450079](https://github.com/Kapil-viahwa/abhyas/actions/runs/43814450079) | `apps/api/test/attempts-sweeper.test.ts`, `apps/worker/src/jobs/attempt-sweeper.spec.ts`, `e2e/attempt-sweeper.spec.ts` |
+| A4 | The taking page: start once, submit, the exact result, a reload cannot show the paper, auto-submit at the deadline, a late submit refused, access checks | [43841325606](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841325606), [43841317370](https://github.com/Kapil-viahwa/abhyas/actions/runs/43841317370) | `e2e/attempt-take.spec.ts` |
+| A5 | The result and review page: exact summary decimals, per-question markers and explanation, the three filters, in-progress shows nothing, an auto-submitted 0.00, the back button, another student and a malformed id not found, no-store | [43857637203](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857637203), [43857648539](https://github.com/Kapil-viahwa/abhyas/actions/runs/43857648539) | `e2e/attempt-review.spec.ts`, `apps/api/test/attempts-api.test.ts`, `apps/web/src/lib/security-headers.spec.ts` |
+| A5b | The published paper pins the question version it froze: publish pins and re-validates, all readers use the pin, an in-flight submit still scores, the pin is frozen, a draft stays unpinned | [44002634499](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002634499) (push, `gitleaks` re-run once), [44002642601](https://github.com/Kapil-viahwa/abhyas/actions/runs/44002642601) | `apps/api/test/attempts-pinning.test.ts` (7 cases), sixth case in `e2e/attempt-review.spec.ts` |
+
+**The phase's own head so far:** both runs of `475710d93d0e699bda43e63844a8d617894c70da` are green
+([44032983162](https://github.com/Kapil-viahwa/abhyas/actions/runs/44032983162), push, `e2e` 5m22s,
+`gitleaks` 13s; [44032993204](https://github.com/Kapil-viahwa/abhyas/actions/runs/44032993204),
+pull_request, `e2e` 5m59s, `gitleaks` 10s), 18 checks green.
+
+**Main sync:** `origin/main` was still `1133d76c24efba107dd707109e4ec8b0e456b988` when this session
+fetched, so no merge was made and nothing was renamed; both Phase 7 migrations sort after every
+migration on `main` (`20270201000000_attempts`, `20270301000000_test_question_pinning`).
+
+**CI hygiene:** the `gitleaks` job hung twice on this branch (`cf50ca4` pull_request run, and the
+`015bf33` push run where it was re-run once and passed in 9s); its `timeout-minutes` is now 5 instead
+of 10, so a hang fails fast. Every other job already carried a timeout before this session.
+
+**Pending:** the runs on the final A6 docs head — the merge waits for both to be fully green, and
+this session does not merge.
+
+### Known gaps, stated plainly
+
+- **No autosave.** Answers live only in the browser's memory until submit; a closed browser or a
+  reload scores zero. `attempt_answers` exists so autosave can be added later as a write path.
+- **No shuffling** and no per-section patterns; questions come in the version's order.
+- **No refund** for a lost or auto-submitted attempt; a retake is a new enrollment and a new fee.
+- **The paper lives only in browser memory**; a lost start response means a lost attempt (the
+  enrollment's state route says an attempt exists but cannot re-deliver it).
+- **Production's migration role must own `test_questions`** (or be able to disable
+  `test_questions_frozen` for one statement), and the A5b backfill is exact only where a question was
+  never edited after its paper was published.
+- **The `gitleaks` job has hung twice** on this branch; the five-minute cap is the fix, not a cure.
+- **`e2e/catalog.spec.ts:237`** flaked once in Phase 7 (job 133204755164) and passed on retry; it is
+  unrelated to the attempt engine and is recorded above, not fixed.
+- **The Dependabot major upgrades are parked** (PRs #2–#12, untouched); the cleanup has not run.

@@ -134,8 +134,18 @@ browses published papers at `/tests` and enrolls for the platform's price
 (`default_enrollment_cost`, 100 coins by default); the balance and the `ENROLLMENT` ledger row
 then show on `/wallet`. The rules are in [docs/PHASE-6.md](docs/PHASE-6.md), the routes in
 [docs/permissions.md](docs/permissions.md#phase-6-p2-building-a-test) and the decisions in
-[docs/decisions.md](docs/decisions.md) 0068–0073. Taking an attempt — timers, autosave,
-submission — is phase 7 and is not built yet.
+[docs/decisions.md](docs/decisions.md) 0068–0073.
+
+Phase 7 adds the attempt engine on top. A student starts the attempt an open enrollment bought at
+`/attempt/<enrollmentId>`; the server owns the clock, answers are saved only on submit, and an
+attempt the server ends at its deadline is auto-submitted with an empty answer set — closing the
+browser scores zero, by decision. The result and the per-question review are server-rendered at
+`/attempt/result/<attemptId>` once the attempt has ended, and that page is the only one that carries
+an answer key. A published paper pins the question version it froze, so editing the bank afterwards
+cannot change what an attempt was given, scored on or reviewed from. The rules are in
+[docs/PHASE-7.md](docs/PHASE-7.md), the routes in
+[docs/permissions.md](docs/permissions.md#phase-7-a3a-the-attempt-api) and the decisions in
+[docs/decisions.md](docs/decisions.md) 0074–0082.
 
 Local commands (each one is what CI runs):
 
