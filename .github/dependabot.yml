@@ -36,8 +36,14 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
 
+  # There is no Dockerfile at the repository root: the three that exist are the build of each app.
+  # Dependabot's docker ecosystem reports `dependency_file_not_found` for a directory with no
+  # Dockerfile, which is the error the updater raised for this entry on `cc909f6`.
   - package-ecosystem: docker
-    directory: /
+    directories:
+      - /apps/api
+      - /apps/web
+      - /apps/worker
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
