@@ -1,5 +1,5 @@
 # Web image. Build context is the repository root (pnpm workspace).
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 
 ENV PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
@@ -13,7 +13,7 @@ COPY . .
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @abhyas/web run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
