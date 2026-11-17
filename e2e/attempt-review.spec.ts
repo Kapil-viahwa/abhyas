@@ -801,11 +801,14 @@ test.describe.serial('the result and the review', () => {
       await step('the new attempt gets the original paper', async () => {
         await startAttempt(later);
 
-        const question = later.getByTestId('attempt-question');
-        await expect(question).toContainText(alphaText);
-        await expect(question).toContainText(ALPHA_OPTIONS[1]);
+        // `attempt-question` is the heading above the paper; the stem and the options are the
+        // page's own text, so they are read there.
+        await expect(later.getByTestId('attempt-question')).toHaveText('Question 1');
 
         const view = await readPage(later);
+        expect(view.text).toContain(alphaText);
+        expect(view.text).toContain(ALPHA_OPTIONS[0]);
+        expect(view.text).toContain(ALPHA_OPTIONS[1]);
         expect(view.text).not.toContain(editedStem);
         expect(view.html).not.toContain(editedOption);
       });
