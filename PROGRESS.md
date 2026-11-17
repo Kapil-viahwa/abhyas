@@ -1240,8 +1240,19 @@ migration on `main` (`20270201000000_attempts`, `20270301000000_test_question_pi
 `015bf33` push run where it was re-run once and passed in 9s); its `timeout-minutes` is now 5 instead
 of 10, so a hang fails fast. Every other job already carried a timeout before this session.
 
-**Pending:** the runs on the final A6 docs head — the merge waits for both to be fully green, and
-this session does not merge.
+**Merged.** PR #28 was marked ready and merged with a normal merge commit as
+[`574fb346506b11a397a8128805ba8b1cd1467b5e`](https://github.com/Kapil-viahwa/abhyas/commit/574fb346506b11a397a8128805ba8b1cd1467b5e),
+after both runs of `0a39795b57591501a0cb839aadfd3c77e41e6d5f` came back green — push run
+[44034502274](https://github.com/Kapil-viahwa/abhyas/actions/runs/44034502274) (`e2e` 5m31s,
+`gitleaks` 6s) and pull_request run
+[44034508093](https://github.com/Kapil-viahwa/abhyas/actions/runs/44034508093) (`e2e` 5m32s,
+`gitleaks` 10s), eighteen checks. `main`'s CI on the merge commit is
+[run 44035329876](https://github.com/Kapil-viahwa/abhyas/actions/runs/44035329876): **all nine jobs
+green** — `e2e` 6m03s (job 133876746426, which one session read as "in progress" and which finished
+well inside its 20-minute cap; nothing was re-run), `gitleaks` 7s, database 2m27s, docker 1m26s,
+compose-smoke 1m48s, audit 19s, lint 36s, typecheck 35s, unit 39s. The Playwright browser cache
+**missed** on the merge commit and was saved fresh (`playwright-Linux-1.64.1`), which a brand-new
+commit does not normally force — the job still finished in 6m03s.
 
 ### Known gaps, stated plainly
 
