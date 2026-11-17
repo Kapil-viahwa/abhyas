@@ -1106,3 +1106,56 @@ first, and middleware sends a signed-in visitor from `/register` to `/account`, 
 rendered. Fixed in `0637d14`: the second student gets a browser context of its own, with its own client
 address, closed in a `finally`. No assertion was loosened — the not-available screen, the anonymous
 redirect and the malformed id are checked exactly as before.
+
+
+
+## Phase 7, A5b (built — runs queued, not read)
+
+**The paper pins the question version it froze.** A published paper no longer resolves a question's
+content through `questions.current_version`, so editing the bank cannot change what an attempt was
+given, what it was scored on, or what its review shows.
+
+- `apps/api/prisma/migrations/20270301000000_test_question_pinning/migration.sql` —
+  `test_questions.question_version_id` (nullable, foreign key to `question_versions`, `ON DELETE
+  RESTRICT`, indexed), the backfill of every `PUBLISHED`/`ARCHIVED` version's rows to each question's
+  current version, `test_questions_version_matches` (the pin names a version of the same question),
+  `test_versions_pinned_before_publish` (a version cannot be stamped published with an unpinned
+  row), a tightened `test_questions_frozen` (a row cannot leave a published paper either), and two
+  post-backfill assertions.
+- `apps/api/prisma/schema.prisma` — `TestQuestion.questionVersionId` and its relation;
+  `QuestionVersion.pinnedIn`.
+- `apps/api/src/tests/tests.service.ts` — `pinQuestions`, called inside `publish` before the stamp,
+  and `assertScorablePaper(…, { requirePinned: true })` against the versions just pinned.
+- `apps/api/src/attempts/attempts.service.ts` — `loadPaper` reads the pinned version (the current
+  version only when there is no pin), and `start` refuses `paper_not_pinned`.
+- `apps/api/test/support/database.ts` — `publishTestVersion`, the pin-then-stamp order every
+  fixture now uses; the three attempt seed helpers and `e2e/tests-fixture.ts` use the same order.
+- `e2e/tests-fixture.ts` — `editQuestionFixture` writes what `saveDraft` + question `publish` leave
+  behind, because the e2e editor is seeded in SQL and never signs in; and `seedBuilderFixture` takes
+  optional option texts so a spec can scan for them.
+
+**Proof.** `apps/api/test/attempts-pinning.test.ts` (database job, seven cases) — publish pins every
+row; a non-scorable current version is refused `question_not_single_correct` with the version,
+status and pins unchanged; after a real `PATCH` + publish of the question, a new attempt gets the
+original content and option ids and the ended attempt's review shows the original stem, explanation
+and correct option beside its `4.00`; an in-flight submit after the edit is accepted and scored
+`-0.50` (the withdrawn `unknown_option`); a paper published after the edit pins the new version; a
+draft keeps null pins and cannot be stamped published; the pin cannot be changed, deleted or moved
+out of a published paper and cannot name another question's version. `e2e/attempt-review.spec.ts`
+adds the sixth serial test: sit, submit, edit, and the result and a second student's attempt both
+still show the paper as it was.
+
+**The reviewer's own in-progress check.** The same spec's in-progress test now scans the result URL
+for every option text of the fixture's three questions, the "Correct answer" marker and both
+explanations, as well as the stems, and proves both scanners against a planted string before
+trusting their emptiness.
+
+**Known limitation, owner to confirm.** The backfill pins an already-published paper to the
+question's current version at migration time. That is exact for a paper whose questions were never
+edited after publishing and an approximation for one that was edited (the old content is not in the
+database); decision 0082 records the rule.
+
+**Not yet verified.** Nothing here has been compiled, migrated or run: no `pnpm lint`, `pnpm
+typecheck`, `pnpm test:unit`, `pnpm test:db`, `pnpm test:e2e` or Docker, and no Postgres, so the
+migration has been read as SQL but never executed. The queue item stays `[ ]` until the runs on the
+pushed commit are read.

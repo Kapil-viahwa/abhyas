@@ -167,7 +167,9 @@ Stopgap if the merge cannot wait: refuse a new version of a question that is ins
 paper or a live attempt, with a stable `question_in_use` code, and point the editor at
 archive-and-replace. Tests: a published paper's content and key survive an edit; a live attempt
 still submits and is scored against the paper it was given; the review shows the pinned content.
-Not started.
+Built in this session — the migration, schema, publish, readers, database tests and one Playwright
+case are in `PROGRESS.md` under "Phase 7, A5b"; the backfill rule waits for the owner's confirmation.
+The item stays `[ ]` until the runs on the pushed commits are read and green.
 
 [ ] A6 Docs and merge: `docs/permissions.md` (the four routes and who may call them),
 `docs/decisions.md` (0074's assumptions confirmed or corrected), the known gaps (no autosave by

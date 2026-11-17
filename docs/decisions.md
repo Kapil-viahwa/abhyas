@@ -2515,7 +2515,7 @@ another student, an anonymous visitor and a malformed id.
 
 
 
-## 0082 — Question versioning in attempts (open, owner to decide)
+## 0082 — Question versioning in attempts (implemented, owner to confirm the backfill rule)
 
 **Why this exists.** A5 reads a review's question list, order and marks from the attempt's frozen
 test version, but each question's *content* — stem, options, the correct option and the explanation
@@ -2576,4 +2576,57 @@ each question's current version — correct for every paper nobody has edited si
 a student sat and the paper their result reviews the same bytes. (2) only if the merge cannot wait
 for one migration.
 
-**Status: open, owner to decide.** The A5b queue item in `docs/NEXT-TASKS.md` is not started.
+**Implemented in A5b — option (1), the pin.** `test_questions` gained
+`question_version_id` (nullable, foreign key to `question_versions`, `ON DELETE RESTRICT`, indexed)
+in `20270301000000_test_question_pinning`.
+
+- **A draft follows the bank; a published paper is pinned.** A `DRAFT` or `SUBMITTED` version keeps
+  the column null, and the builder keeps showing each question's current version, exactly as
+  before. `TestsService.publish` pins every placement to the question's **current** version with a
+  single `UPDATE ... FROM "questions" q, "question_versions" qv WHERE qv."question_id" = q."id" AND
+  qv."version" = q."current_version"`, inside the publishing transaction and **before**
+  `test_versions.published_at` is stamped. It then re-runs `assertScorablePaper` against the
+  versions just pinned (`requirePinned: true`), so publishing freezes nothing unscorable and
+  nothing unpinned.
+- **All three readers use the pin.** `AttemptsService.loadPaper` selects `questionVersionId` and
+  resolves the version by that id when it is set, falling back to `currentVersion` only when it is
+  null. The start response (`paperQuestion`), the scoring (`scoreAttempt(scoringQuestions(paper),
+  …)`) and the review (`reviewQuestion`) all take their stem, options, correct option, marks and
+  explanation from that one read, so they cannot disagree. `start` also refuses
+  `paper_not_pinned` when any placement of the enrollment's version is unpinned.
+- **The pin is frozen, and a published paper cannot be unpinned.** The existing
+  `test_questions_frozen` trigger already refused every insert, update and delete on a row of a
+  published version; it was tightened to check the row's **previous** parent as well on an update,
+  so a row can no longer be moved out of a published paper. A new
+  `test_versions_pinned_before_publish` trigger refuses to set `published_at` while any placement of
+  that version has a null pin, and `test_questions_version_matches` refuses a pin naming a version
+  of another question.
+- **Editing a question needs no new block.** `saveDraft` still opens a new version and moves
+  `currentVersion`; a published paper and every attempt on it keep reading their pin, so the edit
+  reaches only drafts and papers published later. The old 400 `unknown_option` on an in-flight
+  submit is gone, because the option the student saw is still in the pinned version.
+- **The backfill, and its limitation.** Every row of a `PUBLISHED` or `ARCHIVED` test version was
+  pinned to the question's current version at migration time. That is exact for a paper whose
+  questions were never edited after it was published, and an **approximation** for a paper whose
+  question was edited after publishing: the pin there is the content as of the migration, which is
+  what every reader was already seeing, because the prior version cannot be reconstructed from the
+  data. **The owner should confirm that rule**; nothing in the migration invents a history.
+  `DRAFT` and `SUBMITTED` rows were left null. The backfill needed the `test_questions_frozen`
+  trigger off for one statement, done with `ALTER TABLE "test_questions" DISABLE TRIGGER
+  "test_questions_frozen"` and re-enabled immediately after — table ownership, not a superuser,
+  which is why it is not `session_replication_role`. The migration asserts afterwards that no
+  published row is unpinned and no pin names another question, so a silent miss fails the deploy.
+- **Tested.** `apps/api/test/attempts-pinning.test.ts` (database job): publish pins every row;
+  publishing a paper whose current version is numerical is refused `question_not_single_correct`
+  with nothing changed; after an edit through the real `PATCH`/`POST /v1/questions` routes, a new
+  attempt gets the original content and option ids, submits and scores `4.00` on the original key,
+  and the review shows the original stem, explanation and correct option; an in-flight submit after
+  the edit is accepted (no `unknown_option`) and scored `-0.50` on the paper the student saw; a
+  paper published after the edit pins the new version and delivers it; a draft keeps null pins and
+  cannot be stamped published while unpinned; the pin cannot be changed, deleted or moved out of a
+  published paper, and a pin of another question is refused. `e2e/attempt-review.spec.ts` adds
+  "the paper a student sat keeps its content after the question is edited": a student sits and
+  submits, the editor's edit is written through `editQuestionFixture`, the result still shows the
+  original review text and score, and a second student starting the same paper gets the original
+  stem and options.
+
