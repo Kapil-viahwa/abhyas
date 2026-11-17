@@ -5,7 +5,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 import { expireAttempt } from './attempts-fixture';
 import { setCoinSetting } from './coin-settings';
-import { publishSeededPaper, seedAuthor, seedBuilderFixture } from './tests-fixture';
+import { editQuestionFixture, publishSeededPaper, seedAuthor, seedBuilderFixture } from './tests-fixture';
 
 /**
  * Phase 7, A5: the result and the per-question review.
@@ -41,6 +41,10 @@ const gammaText = `Review gamma question ${marker}`;
 
 let longTest = '';
 let shortTest = '';
+/** A5b: a one-question paper whose question is edited after the student has sat it. */
+let freezeTest = '';
+let alphaQuestionId = '';
+const freezeTitle = `Review freeze paper ${marker}`;
 
 const STEP_LOG = '[attempt-review]';
 const DEFAULT_STEP_LIMIT_MS = 20_000;
@@ -384,6 +388,18 @@ test.describe.serial('the result and the review', () => {
       maxAttempts: 5,
     }).testId;
 
+    // A paper of one question, kept apart from the ones above so the edit below cannot disturb a
+    // later test's paper and its attempt cap.
+    freezeTest = publishSeededPaper({
+      authorId: author.authorId,
+      examId: bankA.examId,
+      questionIds: [bankA.alphaQuestionId],
+      title: freezeTitle,
+      durationMinutes: 30,
+      maxAttempts: 10,
+    }).testId;
+    alphaQuestionId = bankA.alphaQuestionId;
+
     setCoinSetting('signup_coins', 1_000);
     setCoinSetting('daily_reward_coins', 0);
     setCoinSetting('default_enrollment_cost', 100);
@@ -705,5 +721,96 @@ test.describe.serial('the result and the review', () => {
 
       await anonymousContext.close();
     });
+  });
+
+  test('the paper a student sat keeps its content after the question is edited', async ({ page, browser }) => {
+    test.setTimeout(240_000);
+    await useClientIp(page, 67);
+
+    const email = `e2e-review-freeze-${marker}@example.com`;
+    await step('enroll and open the entry page', async () =>
+      enrollAndOpen(page, email, 'Review Freeze Student', { testId: freezeTest, title: freezeTitle }),
+    );
+
+    const attemptId = await startAttempt(page);
+
+    await step('answer the only question right and submit', async () => {
+      await expect(page.getByTestId('attempt-option').nth(1)).toBeVisible();
+      await page.getByTestId('attempt-option').nth(1).click();
+
+      await expect(page.getByTestId('submit-attempt')).toBeVisible();
+      await page.getByTestId('submit-attempt').click();
+      await expect(page.getByTestId('submit-confirm')).toBeVisible();
+      await page.getByTestId('confirm-submit').click();
+      await expect(page.getByTestId('attempt-result')).toBeVisible();
+    });
+
+    // The editor edits the question in the bank: a new stem, new options, a different correct
+    // option and a different explanation. This is the shape the editor's own screen leaves behind.
+    const editedStem = `Edited alpha stem ${marker}`;
+    const editedOption = `Edited alpha option one ${marker}`;
+    const editedExplanation = `Edited alpha explanation ${marker}`;
+
+    await step('edit the question in the bank', async () => {
+      const edited = editQuestionFixture({
+        questionId: alphaQuestionId,
+        contentHtml: editedStem,
+        explanationHtml: editedExplanation,
+        options: [
+          editedOption,
+          `Edited alpha option two ${marker}`,
+          `Edited alpha option three ${marker}`,
+        ],
+        correctPosition: 1,
+      });
+      expect(edited.versionId).not.toBe('');
+    });
+
+    await step('the result still shows the paper that was sat', async () => {
+      await page.goto(`/attempt/result/${attemptId}`);
+      await expect(page.getByTestId('attempt-result')).toBeVisible();
+
+      // One right answer on a 2-mark paper: the score is the one written before the edit.
+      await expect(page.getByTestId('result-score')).toHaveText('2.00 of 2.00');
+      await expect(page.getByTestId('result-correct')).toHaveText('1');
+
+      const first = page.getByTestId('review-question').nth(0);
+      await expect(first).toContainText(alphaText);
+      await expect(first).toContainText(ALPHA_OPTIONS[0]);
+      await expect(first).toContainText(ALPHA_OPTIONS[1]);
+      await expect(first).toContainText(ALPHA_OPTIONS[2]);
+      await expect(first).toContainText(ALPHA_EXPLANATION);
+
+      const view = await readPage(page);
+      expect(view.text).not.toContain(editedStem);
+      expect(view.html).not.toContain(editedOption);
+      expect(view.html).not.toContain(editedExplanation);
+    });
+
+    // A new student on the same paper is started on the frozen paper, not the edited bank.
+    const laterEmail = `e2e-review-freeze-later-${marker}@example.com`;
+    const laterContext = await browser.newContext();
+    const later = await laterContext.newPage();
+    await later.context().setExtraHTTPHeaders({ 'x-forwarded-for': '198.18.0.68' });
+
+    try {
+      await step('a new student enrolls', async () =>
+        enrollAndOpen(later, laterEmail, 'Review Later Student', { testId: freezeTest, title: freezeTitle }),
+      );
+
+      await step('the new attempt gets the original paper', async () => {
+        await startAttempt(later);
+
+        const question = later.getByTestId('attempt-question');
+        await expect(question).toContainText(alphaText);
+        await expect(question).toContainText(ALPHA_OPTIONS[1]);
+
+        const view = await readPage(later);
+        expect(view.text).not.toContain(editedStem);
+        expect(view.html).not.toContain(editedOption);
+      });
+    } finally {
+      await laterContext.close();
+    }
   });
 });
