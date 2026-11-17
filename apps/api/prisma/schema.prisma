@@ -364,6 +364,7 @@ model QuestionVersion {
   question Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
   author   User             @relation("QuestionVersionAuthor", fields: [createdBy], references: [id], onDelete: Restrict)
   options  QuestionOption[]
+  pinnedIn TestQuestion[]   @relation("PinnedQuestionVersion")
 
   @@unique([questionId, version], map: "question_versions_question_version_key")
   @@map("question_versions")
@@ -683,17 +684,22 @@ model TestVersion {
 /// A question's place in a paper. Ordering is unique per version, and so is the question:
 /// the same question cannot be asked twice in one paper.
 model TestQuestion {
-  id            String @id @default(uuid()) @db.Uuid
-  testVersionId String @map("test_version_id") @db.Uuid
-  questionId    String @map("question_id") @db.Uuid
-  position      Int
+  id                String  @id @default(uuid()) @db.Uuid
+  testVersionId     String  @map("test_version_id") @db.Uuid
+  questionId        String  @map("question_id") @db.Uuid
+  /// A5b: the question version this placement froze at publish. Null on a draft, which
+  /// follows the question's current version as the builder expects.
+  questionVersionId String? @map("question_version_id") @db.Uuid
+  position          Int
 
-  version  TestVersion @relation(fields: [testVersionId], references: [id], onDelete: Cascade)
-  question Question    @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  version         TestVersion      @relation(fields: [testVersionId], references: [id], onDelete: Cascade)
+  question        Question         @relation(fields: [questionId], references: [id], onDelete: Restrict)
+  questionVersion QuestionVersion? @relation("PinnedQuestionVersion", fields: [questionVersionId], references: [id], onDelete: Restrict)
 
   @@unique([testVersionId, position], map: "test_questions_version_position_key")
   @@unique([testVersionId, questionId], map: "test_questions_version_question_key")
   @@index([questionId], map: "test_questions_question_id_idx")
+  @@index([questionVersionId], map: "test_questions_question_version_id_idx")
   @@map("test_questions")
 }
 
