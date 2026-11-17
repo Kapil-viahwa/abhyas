@@ -15,7 +15,7 @@
   "dependencies": {
     "@tiptap/pm": "2.10.3",
     "@tiptap/react": "2.10.3",
-    "@tiptap/starter-kit": "2.10.3",
+    "@tiptap/starter-kit": "3.34.0",
     "katex": "0.19.1",
     "next": "^15.1.0",
     "react": "^19.0.0",
