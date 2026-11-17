@@ -12,6 +12,23 @@ updates:
         update-types:
           - minor
           - patch
+    # Majors that are their own planned units, never a bot merge. Minor and patch updates for
+    # these packages stay enabled. The reasons and the migration each needs are decision 0083.
+    ignore:
+      - dependency-name: 'eslint'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'prisma'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@prisma/client'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'tailwindcss'
+        update-types: ['version-update:semver-major']
+      - dependency-name: '@nestjs/swagger'
+        update-types: ['version-update:semver-major']
+      # NestJS majors move together: a @nestjs/* major belongs to one framework upgrade unit,
+      # never to a single package's pull request.
+      - dependency-name: '@nestjs/*'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /

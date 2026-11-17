@@ -1268,4 +1268,13 @@ commit does not normally force — the job still finished in 6m03s.
 - **The `gitleaks` job has hung twice** on this branch; the five-minute cap is the fix, not a cure.
 - **`e2e/catalog.spec.ts:237`** flaked once in Phase 7 (job 133204755164) and passed on retry; it is
   unrelated to the attempt engine and is recorded above, not fixed.
-- **The Dependabot major upgrades are parked** (PRs #2–#12, untouched); the cleanup has not run.
+- **Deferred upgrades.** The majors for ESLint 10, Prisma 7/`@prisma/client` 7, TailwindCSS 4 and
+  `@nestjs/swagger` 12 (which needs Nest 12) are parked, with Dependabot's major updates for them
+  ignored and minor/patch still on. Each is its own planned unit; see decision 0083. A green CI on a
+  Dependabot PR is not proof of compatibility.
+- **Secret scanning scope.** The per-push `gitleaks` job scans only the pushed commit or the pull
+  request's own range ("1 commits scanned" on a PR, "0" on a merge commit), even though its checkout
+  fetches full history. A new weekly, manually triggerable `Secret scan (full history)` workflow runs
+  gitleaks over every branch and commit with `--redact` and fails on any finding. No full-history scan
+  had been run before it; the working tree was checked in this session and held only development
+  defaults.
