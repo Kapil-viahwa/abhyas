@@ -191,10 +191,12 @@ async function capture(
 
     const row: Row = { index, area, screen, viewport: viewport.name, file, ...metrics, consoleErrors: logs.drain() };
     rows.push(row);
-    // One line per picture, so the run's log is readable on its own.
+    // One line per picture, so the run's log is readable on its own: the numbers, the smallest
+    // tap target by name, and the text of each console error (trimmed) — the review is written
+    // from this line and from report.json, never from a guess.
     // eslint-disable-next-line no-console
     console.log(
-      `GALLERY ${file} | overflow=${String(metrics.horizontalOverflow)} | tap=${String(metrics.smallestTap?.width ?? 0)}x${String(metrics.smallestTap?.height ?? 0)} | alt=${String(metrics.imagesWithoutAlt)} | labels=${String(metrics.inputsWithoutLabel)} | errors=${String(row.consoleErrors.length)}`,
+      `GALLERY ${file} | title=${metrics.title} | overflow=${String(metrics.horizontalOverflow)} | tap=${String(metrics.smallestTap?.width ?? 0)}x${String(metrics.smallestTap?.height ?? 0)} "${metrics.smallestTap?.label ?? ''}" | alt=${String(metrics.imagesWithoutAlt)} | labels=${String(metrics.inputsWithoutLabel)} | errors=${String(row.consoleErrors.length)}: ${row.consoleErrors.map((entry) => entry.replace(/\s+/g, ' ').slice(0, 140)).join(' || ')}`,
     );
   }
 }

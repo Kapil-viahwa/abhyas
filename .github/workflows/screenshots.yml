@@ -18,6 +18,7 @@ on:
       - e2e/screenshots.spec.ts
       - e2e/screenshots-fixture.ts
       - playwright.config.ts
+      - docs/UI-REVIEW.md
 
 permissions:
   contents: read
