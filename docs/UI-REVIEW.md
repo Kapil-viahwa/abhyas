@@ -131,3 +131,71 @@ not a regression.
 
 The Turnstile `400020` console errors remain on the auth pages, as expected with the always-pass test key
 (`docs/deployment.md`, "Turnstile keys"). No new console errors appeared.
+
+
+
+
+## After F2
+
+The numbers come from the gallery run on `fe/f2-targets-focus` (head `a82c550`). Its log prints, verbatim:
+
+```
+GALLERY-SUMMARY 70 shots, 0 skipped
+GALLERY-A11Y    captures=70, unlabeled inputs=0, images without alt=0, overflow=0, phone screens under 44x44=4
+GALLERY-A11Y2   phone: controls without a focus style=26 of 407,
+                error fields without aria-describedby=0 of 6;
+                pages: not exactly one h1=2, not exactly one main=2
+```
+
+The stand-alone-under-44 count is 23 across the 35 phone screens, summed from the per-screen
+`GALLERY` lines (the same lines that name the controls); those per-screen lines are the list.
+
+| Count | Before (main) | After F1 | After F2 |
+| --- | --- | --- | --- |
+| Screenshots captured | 68 of 70 | 70 of 70 | **70 of 70** |
+| Screens skipped | 2 | 0 | **0** |
+| Inputs without a label | 7 | 0 | **0** |
+| Images without `alt` | 0 | 0 | **0** |
+| Horizontal overflow | 0 | 0 | **0** |
+| Phone screens whose smallest target is under 44×44 | 27 | 24 | **4** |
+| Stand-alone controls under 44×44 on the phone | not measured | not measured | **23, on 9 of 35 screens** |
+| Controls with no visible focus style | not measured | not measured | **26 of 407** (all on `05-admin/catalog`) |
+| Error fields without `aria-describedby` | not measured | not measured | **0 of 6** |
+| Pages without exactly one `h1` / one `main` | not measured | not measured | **2 / 2** (the 404 screen only) |
+
+**What still fails, and why.** All 23 remaining stand-alone targets are in two places:
+
+- **The surfaces that were not part of this unit.** `03-student/account` (and the same page when an
+  editor is refused) 1, `05-admin/users` 5, `05-admin/user-detail` 1, `05-admin/catalog` 4, the
+  editor question list 2, the question editor 6, and the test builder 1 on each of its two states.
+  These are the row buttons and the secondary form controls of screens whose actions are mostly
+  `<button>`s inside forms rather than links; several are 38px high (the `px-3 py-2` form buttons).
+- **Three single links.** `03-student/attempt-unavailable`'s "Back to your tests" (127×20), and the
+  test builder's "Back to the list" (105×20) on both its states — the only below-44 elements on
+  those screens, and both are the sort of link the next pass should give the shared class.
+
+The two inline exemptions are the two paragraph links on `04-editor/home` ("Open the catalog" and
+"Open the tests"), which are prose and stay prose by this unit's own rule.
+
+**Focus:** 381 of the 407 controls the phone screens measured changed their computed outline or
+box-shadow when focused with `focus({ focusVisible: true })`. The 26 that did not are all on
+`05-admin/catalog`, and the same 26 of 43 appear on its desktop capture: the catalog tree's own
+controls, which the walk could not make focusable. That is the one number this review cannot yet
+call fixed, and it needs a look at the catalog tree's controls by hand.
+
+**Landmarks and headings:** every screen has exactly one `h1` except the two captures of the 404
+screen, which Next renders with its own `h1` and no `<main>`. Every other page has exactly one
+`<main id="main">`, and the root layout now opens with a "Skip to main content" link that targets it.
+
+**Form errors:** the gallery reaches the auth forms' error state through their `?error=` URLs (no
+new picture — the same 70 captures) and finds `role="alert"` on the message and `aria-invalid` +
+`aria-describedby` on the six fields that produce it. The reset-password and the mobile OTP forms
+carry the same wiring but the tour could not reach them without a real token or an OTP stack, so
+they are not counted here.
+
+**The e2e run on this head is red, and not for a UI reason.** `e2e/otp-enabled.spec.ts:107` expects
+`/account?mobile=linked` after submitting the add-a-number confirmation and receives
+`/account?sent=1&destination=%2B919697033080&resend=60`; it failed on the retry too. Nothing in this
+unit's diff touches the account page's forms, the OTP routes or the API — the account page gained a
+`main` id, an import and a link class. It is recorded here rather than hidden: until it is green the
+branch is not mergeable, and the next session starts with that test.
