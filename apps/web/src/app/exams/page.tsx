@@ -34,7 +34,7 @@ export default async function ExamsPage() {
       <nav aria-label="Breadcrumb" className="text-xs text-slate-500">
         <ol className="flex gap-2">
           <li>
-            <Link href="/" className="hover:text-slate-300">
+            <Link href="/" className="inline-flex min-h-11 items-center px-1 hover:text-slate-300 sm:min-h-0 sm:px-0">
               Abhyas
             </Link>
           </li>

@@ -60,13 +60,13 @@ export default async function CategoryPage({ params }: PageProps) {
       <nav aria-label="Breadcrumb" className="text-xs text-slate-500">
         <ol className="flex flex-wrap gap-2">
           <li>
-            <Link href="/" className="hover:text-slate-300">
+            <Link href="/" className="inline-flex min-h-11 items-center px-1 hover:text-slate-300 sm:min-h-0 sm:px-0">
               Abhyas
             </Link>
           </li>
           <li aria-hidden="true">/</li>
           <li>
-            <Link href="/exams" className="hover:text-slate-300">
+            <Link href="/exams" className="inline-flex min-h-11 items-center px-1 hover:text-slate-300 sm:min-h-0 sm:px-0">
               Exams
             </Link>
           </li>

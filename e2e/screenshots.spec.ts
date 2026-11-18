@@ -414,7 +414,7 @@ test('captures every screen the fixtures can reach', async ({ browser }) => {
       thirdEnrollmentId = (href ?? '').split('/').pop() ?? '';
       closeEnrollment(thirdEnrollmentId);
       await student.page.goto(`/attempt/${thirdEnrollmentId}`);
-      await capture(student.page, student.logs, '03-student', 'attempt-unavailable', '[data-testid="attempt-unavailable"]');
+      await capture(student.page, student.logs, '03-student', 'attempt-unavailable', '[data-testid="attempt-missing"]');
     });
 
     // ----------------------------------------------------------------------
@@ -541,6 +541,27 @@ test.afterAll(() => {
 
   // eslint-disable-next-line no-console
   console.log(`GALLERY-SUMMARY ${String(rows.length)} shots, ${String(skipped.length)} skipped`);
+  // Observation only, never an assertion: the accessibility counts the review tracks, across the
+  // whole tour, plus the phone screens whose smallest tap target is under 44x44.
+  const unlabeled = rows.reduce((sum, row) => sum + row.inputsWithoutLabel, 0);
+  const noAlt = rows.reduce((sum, row) => sum + row.imagesWithoutAlt, 0);
+  const overflow = rows.filter((row) => row.horizontalOverflow).length;
+  const phone = rows.filter((row) => row.viewport === 'phone');
+  const smallTaps = phone.filter(
+    (row) => row.smallestTap !== null && (row.smallestTap.width < 44 || row.smallestTap.height < 44),
+  );
+  const a11y = `GALLERY-A11Y captures=${String(rows.length)}, unlabeled inputs=${String(unlabeled)}, images without alt=${String(noAlt)}, overflow=${String(overflow)}, phone screens under 44x44=${String(smallTaps.length)}`;
+  // eslint-disable-next-line no-console
+  console.log(a11y);
+  if (summaryFile !== undefined && summaryFile !== '') {
+    appendFileSync(summaryFile, `${a11y}\n`);
+    if (smallTaps.length > 0) {
+      appendFileSync(
+        summaryFile,
+        `\nUnder 44x44 on the phone: ${smallTaps.map((row) => `${row.area}/${row.screen}`).join(', ')}\n`,
+      );
+    }
+  }
   for (const entry of skipped) {
     // eslint-disable-next-line no-console
     console.log(`GALLERY-SKIPPED ${entry.screen}: ${entry.reason}`);
