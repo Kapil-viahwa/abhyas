@@ -29,7 +29,7 @@
     "@typescript-eslint/parser": "^8.72.2",
     "eslint": "^8.57.1",
     "typescript": "^5.7.2",
-    "vite": "^6.4.4",
+    "vite": "^6.4.6",
     "vitest": "^3.2.6"
   },
   "pnpm": {
