@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AttemptCountdown } from '../../../../components/attempt-countdown';
+import { StudentNav } from '../../../../components/student-shell';
 import { accuracyPercent, attemptResult, attemptState, type ReviewQuestion } from '../../../../lib/attempts-api';
 import { renderLatex } from '../../../../lib/latex';
 import { loadSession } from '../../../../lib/session';
@@ -212,14 +213,7 @@ export default async function AttemptResultPage({ params, searchParams }: PagePr
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
           <h1 className="text-2xl font-semibold text-white">Result</h1>
         </div>
-        <nav className="flex flex-wrap gap-3 text-sm">
-          <Link href="/tests" className="text-sky-400 hover:text-sky-300">
-            Tests
-          </Link>
-          <Link href="/wallet" className="text-sky-400 hover:text-sky-300">
-            Wallet
-          </Link>
-        </nav>
+        <StudentNav current="/tests" />
       </header>
 
       {result.status === 404 || result.status === 400 ? (

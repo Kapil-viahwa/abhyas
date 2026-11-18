@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { Notice } from '../../components/auth-shell';
+import { StudentNav } from '../../components/student-shell';
 import { loadSession } from '../../lib/session';
 import {
   enrollmentLabel,
@@ -26,22 +27,6 @@ function pageNumber(value: string): number {
   const parsed = Number.parseInt(value, 10);
 
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 10_000 ? parsed : 1;
-}
-
-function StudentNav(): ReactElement {
-  return (
-    <nav className="flex flex-wrap gap-3 text-sm">
-      <Link href="/account" className="text-sky-400 hover:text-sky-300">
-        Account
-      </Link>
-      <Link href="/wallet" className="text-sky-400 hover:text-sky-300">
-        Wallet
-      </Link>
-      <Link href="/tests" className="text-slate-200">
-        Tests
-      </Link>
-    </nav>
-  );
 }
 
 /**
@@ -72,7 +57,7 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
           <h1 className="text-2xl font-semibold text-white">Mock tests</h1>
           <p className="text-sm text-slate-400">{session.profile.fullName}</p>
         </div>
-        <StudentNav />
+        <StudentNav current="/tests" />
       </header>
 
       <Notice message={one(params.enrolled) === '1' ? 'Enrolled. Your attempt is ready in “Your tests”.' : undefined} />

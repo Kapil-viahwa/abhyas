@@ -178,12 +178,19 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
         <label className={labelClass}>
           Marks / negative
           <span className="flex gap-2">
-            <input className={inputClass} value={marks} onChange={(event) => setMarks(event.target.value)} inputMode="decimal" />
+            <input
+              className={inputClass}
+              value={marks}
+              onChange={(event) => setMarks(event.target.value)}
+              inputMode="decimal"
+              aria-label="Marks"
+            />
             <input
               className={inputClass}
               value={negativeMarks}
               onChange={(event) => setNegativeMarks(event.target.value)}
               inputMode="decimal"
+              aria-label="Negative marks"
             />
           </span>
         </label>
@@ -226,6 +233,7 @@ export function QuestionEditor({ action, csrfToken, catalog, question, cancelHre
                 className={`${inputClass} flex-1`}
                 value={option.optionHtml}
                 placeholder="Option text"
+                aria-label={`Option ${String.fromCharCode(65 + index)} text`}
                 onChange={(event) =>
                   setOptions((current) =>
                     current.map((entry, position) =>

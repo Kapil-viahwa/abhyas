@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../components/auth-shell';
+import { StudentNav } from '../../components/student-shell';
 import { TurnstileField } from '../../components/turnstile-field';
 import { webConfig } from '../../lib/config';
 import { csrfFromCookies, loadSession, loadSessions } from '../../lib/session';
@@ -48,17 +49,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
         </form>
       </header>
 
-      <nav className="flex flex-wrap gap-3 text-sm">
-        <Link href="/account" className="text-slate-200">
-          Account
-        </Link>
-        <Link href="/wallet" className="text-sky-400 hover:text-sky-300">
-          Wallet
-        </Link>
-        <Link href="/tests" className="text-sky-400 hover:text-sky-300">
-          Tests
-        </Link>
-      </nav>
+      <StudentNav current="/account" />
 
       <Notice message={params.denied === '1' ? 'You do not have access to that page.' : undefined} />
       <Notice message={params.password === 'changed' ? 'Password changed. Other devices were signed out.' : undefined} />

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { FieldError, Notice, buttonClass } from '../../../components/auth-shell';
+import { StudentNav } from '../../../components/student-shell';
 import { csrfFromCookies, loadSession } from '../../../lib/session';
 import { getStudentTest, myBalance, refusalCode, refusalMessage } from '../../../lib/student-tests-api';
 
@@ -51,17 +52,7 @@ export default async function StudentTestPage({ params, searchParams }: PageProp
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
           <h1 className="text-2xl font-semibold text-white">Mock tests</h1>
         </div>
-        <nav className="flex flex-wrap gap-3 text-sm">
-          <Link href="/account" className="text-sky-400 hover:text-sky-300">
-            Account
-          </Link>
-          <Link href="/wallet" className="text-sky-400 hover:text-sky-300">
-            Wallet
-          </Link>
-          <Link href="/tests" className="text-slate-200">
-            Tests
-          </Link>
-        </nav>
+        <StudentNav current="/tests" />
       </header>
 
       {test === null ? (

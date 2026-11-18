@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { FieldError } from '../../components/auth-shell';
+import { StudentNav } from '../../components/student-shell';
 import { loadSession } from '../../lib/session';
 import { apiCall, errorMessage } from '../../lib/upstream';
 
@@ -79,17 +80,7 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
           <h1 className="text-2xl font-semibold text-white">Your coins</h1>
           <p className="text-sm text-slate-400">{session.profile.fullName}</p>
         </div>
-        <nav className="flex flex-wrap gap-3 text-sm">
-          <Link href="/account" className="text-sky-400 hover:text-sky-300">
-            Account
-          </Link>
-          <Link href="/wallet" className="text-slate-200">
-            Wallet
-          </Link>
-          <Link href="/tests" className="text-sky-400 hover:text-sky-300">
-            Tests
-          </Link>
-        </nav>
+        <StudentNav current="/wallet" />
       </header>
 
       <FieldError message={overview.status === 200 ? undefined : errorMessage(overview.body)} />

@@ -102,3 +102,32 @@ Open the 68 PNGs. Nothing above replaces looking at them: the review can say tha
 that the tap targets are small and that the home page has no way out — it cannot say whether the result page
 reads well, whether the review page's filters are where a student would look for them, or whether the admin
 screens feel like one product. That judgement is the owner's, and the artifact is there for it.
+
+
+## After F1
+
+The numbers come from the gallery run on the F1 branch (`fe/f1-structure`, head `8c435bf`), the same run whose
+`GALLERY-A11Y` line reads: captures=70, unlabeled inputs=0, images without alt=0, overflow=0, phone screens
+under 44×44=24.
+
+| Count | Before (main) | After F1 |
+| --- | --- | --- |
+| Screenshots captured | 68 of 70 | **70 of 70** |
+| Screens skipped | 2 (`attempt-unavailable`, both viewports — wrong test id) | **0** |
+| Inputs without a label | 4 (question list) + 3 (question editor) | **0** |
+| Images without `alt` | 0 | 0 |
+| Horizontal overflow | 0 | 0 |
+| Home page interactive elements | none | Sign in (87×44), Register, Browse the exams |
+| Student "Tests" link on a phone | 35×20 on 18 screens | **51×44**; one shared `StudentNav` |
+| `/exams` breadcrumb on a phone | 44×14 | **52×44** |
+| Phone screens still under 44×44 | 27 | **24** |
+
+**What is still under 44×44 on the phone**, from the run's log: the public auth pages' small "Abhyas" and
+"Sign in" links (76×14, 48×16); `03-student/catalog`'s "View" (59×30) and `03-student/wallet`'s "Filter"
+(56×26); the review page's filter chips (43×44 — 1px short in width); and the editor and admin navigation
+rows, whose links are 37×20 to 59×32 (`04-editor/*`, `05-admin/*`), plus `05-admin/catalog`'s `/exams`
+(44×14). Those live in `AdminNav` and in the auth shell, which F1 did not change — they are the next unit,
+not a regression.
+
+The Turnstile `400020` console errors remain on the auth pages, as expected with the always-pass test key
+(`docs/deployment.md`, "Turnstile keys"). No new console errors appeared.

@@ -160,3 +160,19 @@ counter: the limits still apply, they just apply to everyone at once. That is de
 unsafe. The unsafe direction — believing whatever header arrives — is refused at boot in
 production, and the browser suite is the only thing allowed to choose an address, through
 `TRUST_FORWARDED_IP_FOR_TESTS`, which production also refuses.
+
+
+## Turnstile keys, and the 400020 error in the gallery
+
+The screenshot gallery loads sign-in, registration and password-reset pages against the CI stack, which
+runs Cloudflare's always-pass **test** site key (`TURNSTILE_SITE_KEY=1x0000000000000000000000000000000AA`,
+set in `.env.example`, `docker-compose.yml` and `.github/workflows/ci.yml`). With the test key the widget
+still tries to reach Cloudflare and logs `Failed to load resource: 400` and `[Cloudflare Turnstile] Error:
+400020` in the browser console. **That is expected in development and CI**: the specs pre-fill the test
+token, and the form submits.
+
+Production must set the real `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. `apps/web/src/lib/config.ts`
+refuses a Cloudflare test site key in production, and the API's environment validator refuses the test
+secret, so a production deploy cannot carry these values by accident. With a real key the widget renders
+normally and the console errors should not appear; if they do in production, the site key and the secret
+belong to different Turnstile widgets or the domain is not allow-listed for that widget.

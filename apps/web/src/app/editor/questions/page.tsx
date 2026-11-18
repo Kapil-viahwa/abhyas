@@ -44,20 +44,36 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
             name="search"
             defaultValue={filters.search}
             placeholder="Search text"
+            aria-label="Search questions"
             className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm text-slate-100"
           />
-          <select name="status" defaultValue={filters.status} className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm">
+          <select
+            name="status"
+            defaultValue={filters.status}
+            aria-label="Filter by status"
+            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+          >
             <option value="">Any status</option>
             <option value="DRAFT">Draft</option>
             <option value="PUBLISHED">Published</option>
           </select>
-          <select name="difficulty" defaultValue={filters.difficulty} className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm">
+          <select
+            name="difficulty"
+            defaultValue={filters.difficulty}
+            aria-label="Filter by difficulty"
+            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+          >
             <option value="">Any difficulty</option>
             <option value="EASY">Easy</option>
             <option value="MEDIUM">Medium</option>
             <option value="HARD">Hard</option>
           </select>
-          <select name="language" defaultValue={filters.language} className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm">
+          <select
+            name="language"
+            defaultValue={filters.language}
+            aria-label="Filter by language"
+            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+          >
             <option value="">Any language</option>
             <option value="EN">English</option>
             <option value="HI">Hindi</option>
