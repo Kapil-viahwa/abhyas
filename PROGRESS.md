@@ -1283,6 +1283,12 @@ commit does not normally force — the job still finished in 6m03s.
   (`postgres:16-alpine`, `redis:7-alpine`) are tracked from now on by a `docker-compose` entry, with
   their majors ignored because a Postgres or Redis major is a data-format change that needs a restore
   test. See decision 0085.
+- **Quarterly upgrade review.** Major upgrades no longer arrive as Dependabot pull requests: the npm
+  entry ignores `update-types: [version-update:semver-major]` for every dependency, security updates
+  still come through, and the parked majors — Next 16, Vite 8, ioredis 6, BullMQ 6, TypeScript 6,
+  Vitest 5, `@types/node` 26, TipTap 3, ESLint 10, Prisma 7/`@prisma/client` 7, Tailwind 4,
+  `@nestjs/swagger` 12 and the Node 26 image — are reviewed together once a quarter, one framework per
+  unit with its own tests. See decision 0086.
 - **Secret scanning scope.** The per-push `gitleaks` job scans only the pushed commit or the pull
   request's own range ("1 commits scanned" on a PR, "0" on a merge commit), even though its checkout
   fetches full history. A new weekly, manually triggerable `Secret scan (full history)` workflow runs
