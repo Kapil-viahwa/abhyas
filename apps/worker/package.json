@@ -18,7 +18,7 @@
     "@prisma/client": "^5.22.0",
     "bullmq": "^5.34.0",
     "exceljs": "4.4.0",
-    "ioredis": "^5.4.2",
+    "ioredis": "^6.0.0",
     "sharp": "0.35.5",
     "yauzl": "3.4.0"
   },
