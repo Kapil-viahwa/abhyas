@@ -14,8 +14,8 @@ updates:
           - patch
     # Majors that are their own planned units, never a bot merge. Minor and patch updates for
     # these packages stay enabled. The reasons and the migration each needs are decisions 0083
-    # (the framework and tooling majors) and 0085 (the TypeScript, Vitest, @types/node and TipTap
-    # majors).
+    # (the framework and tooling majors), 0085 (the TypeScript, Vitest, @types/node and TipTap
+    # majors) and 0086 (the wildcard below, and the quarterly review that replaces it).
     ignore:
       - dependency-name: 'eslint'
         update-types: ['version-update:semver-major']
@@ -45,6 +45,12 @@ updates:
       # TipTap 3 changes the question editor and the stored rich-content format that the
       # sanitiser and the renderer depend on, so it needs its own unit with the sanitiser specs.
       - dependency-name: '@tiptap/*'
+        update-types: ['version-update:semver-major']
+      # Major upgrades are deliberate: reviewed together once a quarter as planned units with
+      # their own tests (see docs/decisions.md). Minor, patch and security updates continue.
+      # `update-types` "only affects version updates, not security updates" (Dependabot options
+      # reference), so an advisory on a major version still opens a security update.
+      - dependency-name: '*'
         update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions

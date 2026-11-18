@@ -2783,3 +2783,51 @@ compose files' image tags, which no ecosystem was reading until now, are tracked
 - **The rule, restated.** A Dependabot pull request that upgrades a tool the whole repository is built,
   tested or run with — a compiler, a test runner, the DOM types, a rich-text editor, a database image —
   is a planned unit, not a bump. The ignore list is where that judgement is written down.
+
+
+## 0086 — Majors are a quarterly review, not a queue of bot PRs
+
+**Decided after three sessions spent clearing one major Dependabot PR at a time.** Every major that
+arrived so far needed its own migration or broke something, and each one cost a session to triage:
+
+| Major | What it needed, or broke |
+| --- | --- |
+| `@nestjs/swagger` 12 | Nest 12 (ESM-only, Node ≥ 22.12); a green CI against Nest 11 proved nothing (0083) |
+| Node 26 images | `corepack: not found` in the build stage; docker, compose-smoke and e2e red (0084) |
+| TypeScript 6 | the compiler every package and the shared `tsconfig.base.json` |
+| Vitest 5 | every spec and every `vitest.config.ts` |
+| TipTap 3 | the editor's document model and the stored rich-content format (0085) |
+| Prisma 7 | `prisma.config.ts`, the datasource url out of `schema.prisma`, a driver adapter |
+| Tailwind 4 | `@tailwindcss/postcss` and the `@import "tailwindcss"` directives |
+| ESLint 10 | the flat-config migration |
+| Next 16 | the web tier: middleware, caching, the security-headers module and cookie handling |
+| Vite 8 | a direct dev dependency, used through Vitest's Vite pipeline |
+| ioredis 6 and BullMQ 6 | the worker: repeatable jobs, the sweeper and the coin drain |
+
+The explicit per-package ignores of 0083 and 0085 named each one as it arrived, and the list kept
+growing. This replaces that treadmill with one rule.
+
+- **The config.** The npm entry in `.github/dependabot.yml` now ignores `version-update:semver-major`
+  for `dependency-name: '*'`. The explicit entries stay, with their reasons, because they explain
+  *why* a given major is parked; the wildcard is what stops a new one from arriving unannounced.
+  Minor and patch updates, and the `npm-minor-and-patch` group, are untouched.
+- **Security updates are unaffected.** The reference says, under `allow` → `update-types`: "`update-types`
+  only affects version updates, not security updates. Security updates will always be created
+  regardless of the `update-types` setting." An advisory against a package at a major version still
+  opens a security update, so the wildcard cannot hide a vulnerability. (`dependency-name` on its own
+  *can* filter security updates — this rule uses only `update-types`, which cannot.)
+- **The policy.** Once a quarter, the parked majors are reviewed together as planned units: read the
+  changelogs for the whole set at once, group the bumps that move together (`@nestjs/*`, Prisma with
+  `@prisma/client`, `@tiptap/*`, ioredis with BullMQ, the Node image with `.nvmrc`/`engines`/CI), and
+  upgrade **one framework per unit** with its own tests and a green run before the next. The quarterly
+  review is a session of its own; it is not folded into a feature phase.
+- **The currently parked majors, and what each needs.** Next 16: re-verify the web tier — the
+  middleware, the caching behaviour, `apps/web/src/lib/security-headers.ts` and the cookie handling.
+  Vite 8: a direct dev dependency of the root package, reached only through Vitest's Vite pipeline, so
+  it moves with the Vitest unit. ioredis 6 and BullMQ 6: the worker's repeatable jobs
+  (`apps/worker/src/queues/schedule.ts`), the attempt sweeper and the coin drain, so they upgrade
+  together with the worker specs (`*.spec.ts` beside each job) and the e2e worker proof. TypeScript 6,
+  Vitest 5, `@types/node` 26, TipTap 3, ESLint 10, Prisma 7/`@prisma/client` 7, Tailwind 4,
+  `@nestjs/swagger` 12 and the Node 26 image keep the reasons written in 0083, 0084 and 0085.
+- **The rule, restated.** A major is a planned unit with tests, never a bot merge; the wildcard makes
+  the queue silent between quarterly reviews, and a security advisory still comes through.
