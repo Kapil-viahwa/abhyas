@@ -147,8 +147,8 @@ GALLERY-A11Y2   phone: controls without a focus style=26 of 407,
                 pages: not exactly one h1=2, not exactly one main=2
 ```
 
-The stand-alone-under-44 count is 23 across the 35 phone screens, summed from the per-screen
-`GALLERY` lines (the same lines that name the controls); those per-screen lines are the list.
+The stand-alone-under-44 count is 23 across the 35 phone screens, on 10 of them, summed from the
+per-screen `GALLERY` lines (the same lines that name the controls); those per-screen lines are the list.
 
 | Count | Before (main) | After F1 | After F2 |
 | --- | --- | --- | --- |
@@ -158,7 +158,7 @@ The stand-alone-under-44 count is 23 across the 35 phone screens, summed from th
 | Images without `alt` | 0 | 0 | **0** |
 | Horizontal overflow | 0 | 0 | **0** |
 | Phone screens whose smallest target is under 44×44 | 27 | 24 | **4** |
-| Stand-alone controls under 44×44 on the phone | not measured | not measured | **23, on 9 of 35 screens** |
+| Stand-alone controls under 44×44 on the phone | not measured | not measured | **23, on 10 of 35 screens** |
 | Controls with no visible focus style | not measured | not measured | **26 of 407** (all on `05-admin/catalog`) |
 | Error fields without `aria-describedby` | not measured | not measured | **0 of 6** |
 | Pages without exactly one `h1` / one `main` | not measured | not measured | **2 / 2** (the 404 screen only) |
