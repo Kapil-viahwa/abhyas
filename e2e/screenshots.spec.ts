@@ -179,8 +179,18 @@ async function measure(page: Page): Promise<Metrics> {
     for (const element of focusable) {
       (element as HTMLElement).blur();
     }
+    // Focusing can scroll the page or a scrollable panel; put every scroller back so the screenshot
+    // is taken exactly as the tour found the screen.
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>('*'))) {
+      if (element.scrollLeft !== 0) {
+        element.scrollLeft = 0;
+      }
+      if (element.scrollTop !== 0) {
+        element.scrollTop = 0;
+      }
+    }
 
     // F2: is the error state programmatically attached to its field?
     const invalid = Array.from(document.querySelectorAll('[aria-invalid="true"]'));
