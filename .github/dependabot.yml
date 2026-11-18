@@ -13,7 +13,9 @@ updates:
           - minor
           - patch
     # Majors that are their own planned units, never a bot merge. Minor and patch updates for
-    # these packages stay enabled. The reasons and the migration each needs are decision 0083.
+    # these packages stay enabled. The reasons and the migration each needs are decisions 0083
+    # (the framework and tooling majors) and 0085 (the TypeScript, Vitest, @types/node and TipTap
+    # majors).
     ignore:
       - dependency-name: 'eslint'
         update-types: ['version-update:semver-major']
