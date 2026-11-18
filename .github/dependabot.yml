@@ -13,7 +13,9 @@ updates:
           - minor
           - patch
     # Majors that are their own planned units, never a bot merge. Minor and patch updates for
-    # these packages stay enabled. The reasons and the migration each needs are decision 0083.
+    # these packages stay enabled. The reasons and the migration each needs are decisions 0083
+    # (the framework and tooling majors) and 0085 (the TypeScript, Vitest, @types/node and TipTap
+    # majors).
     ignore:
       - dependency-name: 'eslint'
         update-types: ['version-update:semver-major']
@@ -28,6 +30,21 @@ updates:
       # NestJS majors move together: a @nestjs/* major belongs to one framework upgrade unit,
       # never to a single package's pull request.
       - dependency-name: '@nestjs/*'
+        update-types: ['version-update:semver-major']
+      # TypeScript majors change the compiler every package is built with and the tsconfig the
+      # workspace shares, so they are one planned unit with a workspace-wide typecheck.
+      - dependency-name: 'typescript'
+        update-types: ['version-update:semver-major']
+      # Vitest majors touch every test file, its config and the reporters; a planned unit.
+      - dependency-name: 'vitest'
+        update-types: ['version-update:semver-major']
+      # @types/node follows the Node 22 runtime (decision 0084): it moves only with a planned
+      # Node upgrade that moves .nvmrc, the Dockerfiles and engines with it.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # TipTap 3 changes the question editor and the stored rich-content format that the
+      # sanitiser and the renderer depend on, so it needs its own unit with the sanitiser specs.
+      - dependency-name: '@tiptap/*'
         update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
@@ -54,4 +71,26 @@ updates:
     # with "corepack: not found".
     ignore:
       - dependency-name: 'node'
+        update-types: ['version-update:semver-major']
+
+  # The image tags in the compose files. Dependabot's `docker` ecosystem reads Dockerfiles and
+  # Kubernetes YAML only — it never opens a compose file — so this is a separate ecosystem:
+  # docker-compose.yml (postgres:16-alpine, redis:7-alpine, the S3Mock image) and
+  # docker-compose.prod.yml (postgres:16-alpine and redis:7-alpine, pinned by tag and digest).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    # A Postgres or Redis major is a data-format change: it needs a planned upgrade with a
+    # restore test, never a bot merge. Inside the pinned tag, digest updates (the sha256 pins on
+    # the production images) still arrive as patch updates for security fixes.
+    ignore:
+      - dependency-name: 'postgres'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'redis'
+        update-types: ['version-update:semver-major']
+      # The S3 mock is development and CI only; a major may change the API surface the tests
+      # exercise, so it is reviewed by hand too.
+      - dependency-name: 'adobe/s3mock'
         update-types: ['version-update:semver-major']

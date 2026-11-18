@@ -2749,3 +2749,37 @@ ignored in `.github/dependabot.yml` the way the package majors were in 0083.
   stage (Corepack is no longer shipped by the Node image) with an explicit pnpm install, and re-runs
   the compose stack and the Playwright suite before it merges. It is not a bot merge and not part of
   the minor-and-patch group.
+
+## 0085 — Four more majors parked, and the compose images tracked
+
+**Decided while clearing the rest of the Dependabot queue.** TypeScript 6, Vitest 5, `@types/node` 26
+and TipTap 3 are parked the same way the 0083 majors are: their majors are ignored in
+`.github/dependabot.yml`, minor and patch updates stay on, and each is its own planned unit. The
+compose files' image tags, which no ecosystem was reading until now, are tracked from here.
+
+- **TypeScript 6 (`#44`).** The compiler every package is built with and the shared `tsconfig.base.json`
+  it reads move together. It is one unit: bump, run `pnpm typecheck` and `pnpm lint` over the whole
+  workspace, fix what the new checks report, and only then merge. A green CI on the bump alone proves
+  the code compiled, not that the repository wants the new defaults.
+- **Vitest 5 (`#36`).** Every `*.spec.ts` and every package's `vitest.config.ts` is in scope, plus the
+  reporters CI reads. Its own unit, with the unit and database jobs re-run under it.
+- **`@types/node` 26 (`#37`).** Types for a runtime the repository is not on. It follows the Node 22
+  runtime by decision 0084: it moves only in the planned Node upgrade unit that changes `.nvmrc`, the
+  three Dockerfiles, CI and `engines` together. A `26` types package against Node 22 would let the code
+  use APIs the runtime does not have, and tsc would not notice.
+- **TipTap 3 (`#34`, `#35`).** The question editor is TipTap and the stored rich-content format is what
+  the sanitiser (`apps/api/src/questions/sanitize.ts`) and the renderer depend on. TipTap 3 changes the
+  editor's document model and extensions, so the unit is: upgrade `@tiptap/*` together, re-check the
+  sanitiser specs and the editor e2e flow against content written by the old version, and decide what
+  happens to rows already stored.
+- **The compose images.** Dependabot's `docker` ecosystem reads Dockerfiles and Kubernetes YAML only,
+  which is why the `docker` entry has always pointed at `apps/api`, `apps/web` and `apps/worker` and why
+  the image tags in the compose files were untracked. A `docker-compose` entry at `/` now covers
+  `docker-compose.yml` (`postgres:16-alpine`, `redis:7-alpine`, the S3Mock dev image) and
+  `docker-compose.prod.yml` (`postgres:16-alpine` and `redis:7-alpine`, pinned by tag and digest).
+  **A Postgres or Redis major is a data-format change**: it is a planned upgrade with a restore test on
+  a copy, its own decision, and a rehearsal of the migration path — never a bot merge. Digest updates
+  within the pinned tag still arrive, so a security patch to the pinned image is not blocked.
+- **The rule, restated.** A Dependabot pull request that upgrades a tool the whole repository is built,
+  tested or run with — a compiler, a test runner, the DOM types, a rich-text editor, a database image —
+  is a planned unit, not a bump. The ignore list is where that judgement is written down.
