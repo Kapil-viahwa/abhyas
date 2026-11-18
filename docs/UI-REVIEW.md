@@ -197,9 +197,14 @@ new picture — the same 70 captures) and finds `role="alert"` on the message an
 carry the same wiring but the tour could not reach them without a real token or an OTP stack, so
 they are not counted here.
 
-**The e2e run on this head is red, and not for a UI reason.** `e2e/otp-enabled.spec.ts:107` expects
-`/account?mobile=linked` after submitting the add-a-number confirmation and receives
-`/account?sent=1&destination=%2B919697033080&resend=60`; it failed on the retry too. Nothing in this
-unit's diff touches the account page's forms, the OTP routes or the API — the account page gained a
-`main` id, an import and a link class. It is recorded here rather than hidden: until it is green the
-branch is not mergeable, and the next session starts with that test.
+**The e2e run on this head is red, and not for a UI reason.** On `327ba37` the job fails in 5m52s
+(the OTP-disabled project is 55 passed in 2m46s; the OTP-enabled project is 5 passed, 1 failed in
+31s). `e2e/otp-enabled.spec.ts:107` expects `/account?mobile=linked` after submitting the
+add-a-number confirmation and receives
+`/account?sent=1&destination=%2B919609224492&resend=60`; it failed on the retry too, and the same
+assertion failed on `a82c550` (8m04s) with a different number. The two other forms on that page —
+the re-auth request and the send-a-link-code form — submit fine through the classes this unit
+changed, and the account page's diff is a `main` id, an import and a link class; nothing here
+touches the OTP routes or the API. It is recorded rather than hidden: until it is green the branch
+is not mergeable, and the next session starts with that test — reproducing it by hand in the
+OTP-enabled stack, not by loosening the assertion.
