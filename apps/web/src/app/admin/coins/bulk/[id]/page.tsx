@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../../../components/admin-shell';
 import { Notice, secondaryButtonClass } from '../../../../../components/auth-shell';
+import { tapTargetClass } from '../../../../../components/tap-target';
 import { bulkJob, bulkReportPath } from '../../../../../lib/coins-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../../../lib/session';
 
@@ -95,7 +96,7 @@ export default async function BulkJobPage({ params, searchParams }: PageProps): 
       {pending ? (
         <p className="text-sm text-slate-400">
           The worker credits each account within half a minute. This page reloads itself until it is done.{' '}
-          <Link href={`/admin/coins/bulk/${job.id}`} className="text-sky-400 hover:text-sky-300">
+          <Link href={`/admin/coins/bulk/${job.id}`} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Refresh now
           </Link>
         </p>
@@ -130,10 +131,10 @@ export default async function BulkJobPage({ params, searchParams }: PageProps): 
         <Link className={secondaryButtonClass} href={bulkReportPath(job.id)}>
           Download report
         </Link>
-        <Link href="/admin/coins/bulk" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/coins/bulk" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Another bulk assignment
         </Link>
-        <Link href="/admin/coins" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/coins" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Search an account
         </Link>
       </div>

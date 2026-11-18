@@ -22,7 +22,7 @@ export default async function HomePage(): Promise<ReactElement> {
   const status = health.payload?.status ?? 'unreachable';
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
+    <main id="main" className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
       <header className="space-y-3">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
         <h1 className="text-3xl font-semibold tracking-tight text-white">

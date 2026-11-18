@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 import { childCategories, getPublicCatalog, rootCategories } from '../../lib/catalog';
 import { webConfig } from '../../lib/config';
+import { tapTargetClass } from '../../components/tap-target';
 
 // Rendered per request from the tagged catalog cache. The page is not baked at build
 // time — the API is not reachable while the image is built — and the API's revalidation
@@ -30,7 +31,7 @@ export default async function ExamsPage() {
   const roots = rootCategories(catalog);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
       <nav aria-label="Breadcrumb" className="text-xs text-slate-500">
         <ol className="flex gap-2">
           <li>
@@ -79,7 +80,7 @@ export default async function ExamsPage() {
                   <ul className="mt-2 flex flex-wrap gap-2 text-xs">
                     {children.map((child) => (
                       <li key={child.id}>
-                        <Link href={`/exams/${child.slug}`} className="text-sky-400 hover:text-sky-300">
+                        <Link href={`/exams/${child.slug}`} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
                           {child.name}
                         </Link>
                       </li>

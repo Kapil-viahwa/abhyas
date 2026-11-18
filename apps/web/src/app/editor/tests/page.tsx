@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { csrfFromCookies, loadPermissionSession } from '../../../lib/session';
 import { listTests, statusTone, TEST_STATUSES, type TestView } from '../../../lib/tests-api';
 
@@ -57,7 +58,7 @@ export default async function TestsPage({ searchParams }: PageProps): Promise<Re
             <select
               name="status"
               defaultValue={status}
-              className="ml-2 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+              className="ml-2 min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm sm:min-h-0"
             >
               <option value="">Any status</option>
               {TEST_STATUSES.map((value) => (
@@ -67,7 +68,7 @@ export default async function TestsPage({ searchParams }: PageProps): Promise<Re
               ))}
             </select>
           </label>
-          <button type="submit" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200">
+          <button className="min-h-11 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 sm:min-h-0" type="submit">
             Filter
           </button>
         </form>
@@ -115,7 +116,10 @@ export default async function TestsPage({ searchParams }: PageProps): Promise<Re
             </div>
             <div className="flex items-center gap-3">
               <StatusBadge status={test.status} />
-              <Link href={`/editor/tests/${test.id}`} className="text-sm text-sky-400 hover:text-sky-300">
+              <Link
+                href={`/editor/tests/${test.id}`}
+                className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}
+              >
                 Open
               </Link>
             </div>
@@ -128,12 +132,12 @@ export default async function TestsPage({ searchParams }: PageProps): Promise<Re
       </ul>
 
       {result !== null && result.pages > 1 ? (
-        <nav className="flex gap-2 text-sm text-slate-300">
+        <nav aria-label="Test pages" className="flex flex-wrap gap-1 text-sm text-slate-300">
           {Array.from({ length: result.pages }, (_, index) => index + 1).map((value) => (
             <Link
               key={value}
               href={`/editor/tests?page=${String(value)}${status === '' ? '' : `&status=${status}`}`}
-              className={value === result.page ? 'font-semibold text-sky-400' : ''}
+              className={`${tapTargetClass} ${value === result.page ? 'font-semibold text-sky-400' : ''}`}
             >
               {value}
             </Link>

@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../../components/admin-shell';
 import { inputClass, labelClass, Notice } from '../../../../components/auth-shell';
+import { tapTargetClass } from '../../../../components/tap-target';
 import { questionPreview } from '../../../../lib/question-preview';
 import { listQuestions } from '../../../../lib/questions-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../../lib/session';
@@ -68,6 +69,8 @@ function PatternField({
   readonly max?: number | undefined;
   readonly testId: string;
 }): ReactElement {
+  const errorId = `${name}-error`;
+
   return (
     <label className={labelClass}>
       {label}
@@ -80,9 +83,15 @@ function PatternField({
         step={step}
         min={min}
         max={max}
+        aria-invalid={error !== undefined}
+        aria-describedby={error === undefined ? undefined : errorId}
         data-testid={testId}
       />
-      {error === undefined ? null : <span className="mt-1 block text-xs text-rose-300">{error}</span>}
+      {error === undefined ? null : (
+        <span id={errorId} role="alert" className="mt-1 block text-xs text-rose-300">
+          {error}
+        </span>
+      )}
     </label>
   );
 }
@@ -203,7 +212,7 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
         title="Test"
         subtitle="That paper is not there, or it belongs to another editor."
       >
-        <Link href="/editor/tests" className="text-sm text-sky-400 hover:text-sky-300">
+        <Link href="/editor/tests" className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}>
           Back to the list
         </Link>
       </AdminPage>

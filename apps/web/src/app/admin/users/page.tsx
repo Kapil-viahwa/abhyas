@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage, StatusBadge } from '../../../components/admin-shell';
 import { FieldError, inputClass, labelClass, secondaryButtonClass } from '../../../components/auth-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { USER_ROLES, USER_STATUSES, flagLabels, listUsers, type UserListQuery } from '../../../lib/admin-api';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
 
@@ -103,7 +104,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
           </label>
 
           <div className="flex items-end">
-            <button className="w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:w-auto">
+            <button className="min-h-11 w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:min-h-0 sm:w-auto">
               Filter
             </button>
           </div>
@@ -141,7 +142,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
 
       <nav className="flex items-center justify-between text-sm text-slate-400">
         {list.page > 1 ? (
-          <Link href={pageHref(query, list.page - 1)} className="text-sky-400 hover:text-sky-300">
+          <Link href={pageHref(query, list.page - 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Previous
           </Link>
         ) : (
@@ -153,7 +154,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
         </span>
 
         {list.page < list.pages ? (
-          <Link href={pageHref(query, list.page + 1)} className="text-sky-400 hover:text-sky-300">
+          <Link href={pageHref(query, list.page + 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Next
           </Link>
         ) : (

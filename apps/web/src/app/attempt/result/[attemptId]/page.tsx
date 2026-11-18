@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AttemptCountdown } from '../../../../components/attempt-countdown';
 import { StudentNav } from '../../../../components/student-shell';
+import { tapTargetClass } from '../../../../components/tap-target';
 import { accuracyPercent, attemptResult, attemptState, type ReviewQuestion } from '../../../../lib/attempts-api';
 import { renderLatex } from '../../../../lib/latex';
 import { loadSession } from '../../../../lib/session';
@@ -207,7 +208,7 @@ export default async function AttemptResultPage({ params, searchParams }: PagePr
     loaded !== null && Array.isArray(loaded.review) ? loaded.review : [];
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
+    <main id="main" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
@@ -328,7 +329,7 @@ export default async function AttemptResultPage({ params, searchParams }: PagePr
             ) : null}
 
             <p className="text-sm">
-              <Link href="/tests" className="text-sky-400 hover:text-sky-300">
+              <Link href="/tests" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
                 Back to your tests
               </Link>
             </p>
@@ -365,7 +366,7 @@ export default async function AttemptResultPage({ params, searchParams }: PagePr
                   href={`/attempt/result/${attemptId}?show=${entry.value}${lateQuery}`}
                   aria-current={filter === entry.value ? 'page' : undefined}
                   data-testid={`review-filter-${entry.value}`}
-                  className={`flex min-h-11 items-center rounded-lg border px-3 text-sm ${
+                  className={`flex min-h-11 min-w-11 items-center rounded-lg border px-3 text-sm ${
                     filter === entry.value
                       ? 'border-sky-500 bg-sky-950/40 text-white'
                       : 'border-slate-700 text-slate-200'

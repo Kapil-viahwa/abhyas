@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../components/admin-shell';
+import { tapTargetClass } from '../../components/tap-target';
 import { dashboardCounts } from '../../lib/operations-api';
 import { csrfFromCookies, loadRoleSession } from '../../lib/session';
 
@@ -50,24 +51,24 @@ export default async function AdminOverviewPage(): Promise<ReactElement> {
           audited.
         </p>
         <div className="mt-4 flex flex-wrap gap-3 text-sm">
-          <Link href="/admin/users" className="text-sky-400 hover:text-sky-300">
+          <Link href="/admin/users" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             All accounts
           </Link>
-          <Link href="/admin/users/new" className="text-sky-400 hover:text-sky-300">
+          <Link href="/admin/users/new" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Create an editor
           </Link>
           {session.profile.permissions.includes('coins.write') ? (
-            <Link href="/admin/coins" className="text-sky-400 hover:text-sky-300">
+            <Link href="/admin/coins" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
               Coins
             </Link>
           ) : null}
-          <Link href="/admin/catalog" className="text-sky-400 hover:text-sky-300">
+          <Link href="/admin/catalog" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Catalog
           </Link>
-          <Link href="/admin/settings" className="text-sky-400 hover:text-sky-300">
+          <Link href="/admin/settings" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Settings
           </Link>
-          <Link href="/admin/audit" className="text-sky-400 hover:text-sky-300">
+          <Link href="/admin/audit" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Audit trail
           </Link>
         </div>

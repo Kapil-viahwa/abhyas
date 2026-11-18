@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { CatalogManager } from '../../../components/catalog-manager';
 import { secondaryButtonClass } from '../../../components/auth-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { getCatalogTree } from '../../../lib/catalog';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
 
@@ -37,20 +38,20 @@ export default async function EditorCatalogPage({ searchParams }: PageProps): Pr
   const params = await searchParams;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-12">
-      <nav className="flex flex-wrap gap-2 text-sm">
-        <Link href="/editor" className="rounded-lg px-3 py-1.5 text-slate-300 hover:text-white">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-12">
+      <nav aria-label="Content" className="flex flex-wrap items-center gap-2 text-sm">
+        <Link href="/editor" className={`${tapTargetClass} rounded-lg px-3 py-1.5 text-slate-300 hover:text-white`}>
           Editor area
         </Link>
         <Link
           href="/editor/catalog"
           aria-current="page"
-          className="rounded-lg bg-sky-500/10 px-3 py-1.5 font-medium text-sky-300 ring-1 ring-sky-500/30"
+          className={`${tapTargetClass} rounded-lg bg-sky-500/10 px-3 py-1.5 font-medium text-sky-300 ring-1 ring-sky-500/30`}
         >
           Catalog
         </Link>
         <span className="grow" />
-        <Link href="/account" className="px-2 py-1.5 text-slate-400 hover:text-slate-200">
+        <Link href="/account" className={`${tapTargetClass} px-2 py-1.5 text-slate-400 hover:text-slate-200`}>
           Account
         </Link>
         <form action="/api/auth/logout" method="post">

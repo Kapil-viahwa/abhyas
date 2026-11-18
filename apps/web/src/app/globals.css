@@ -1,3 +1,18 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Keyboard focus is visible everywhere, on every kind of control.
+ *
+ * A 2px sky ring with a 2px offset reads on the slate-950 page and on the slate-900 panels alike,
+ * which the default UA outline does not on a dark theme. `:focus-visible` keeps mouse clicks quiet.
+ * Nothing in this app removes an outline — `outline-none` was taken out of the shared form class
+ * for exactly this reason — so a component cannot opt out by accident.
+ */
+@layer base {
+  :focus-visible {
+    outline: 2px solid #38bdf8;
+    outline-offset: 2px;
+  }
+}

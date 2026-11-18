@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 
-import { AuthShell, FieldError, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
+import { AuthShell, FieldError, authLinkClass, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
 import { TurnstileField } from '../../components/turnstile-field';
 import { webConfig } from '../../lib/config';
 import { csrfFromCookies } from '../../lib/session';
@@ -25,7 +25,7 @@ export default async function RegisterPage({ searchParams }: PageProps): Promise
       footer={
         <p>
           Already registered?{' '}
-          <Link href="/login" className="text-sky-400 hover:text-sky-300">
+          <Link href="/login" className={authLinkClass}>
             Sign in
           </Link>
         </p>
@@ -34,16 +34,32 @@ export default async function RegisterPage({ searchParams }: PageProps): Promise
       <form action="/api/auth/register" method="post" className="space-y-4">
         <input type="hidden" name="csrfToken" value={csrf} />
 
-        <FieldError message={error} />
+        <FieldError id="register-error" message={error} />
 
         <label className={labelClass}>
           Full name
-          <input className={inputClass} name="fullName" type="text" autoComplete="name" required />
+          <input
+            className={inputClass}
+            name="fullName"
+            type="text"
+            autoComplete="name"
+            required
+            aria-invalid={error !== undefined}
+            aria-describedby={error === undefined ? undefined : 'register-error'}
+          />
         </label>
 
         <label className={labelClass}>
           Email
-          <input className={inputClass} name="email" type="email" autoComplete="email" required />
+          <input
+            className={inputClass}
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            aria-invalid={error !== undefined}
+            aria-describedby={error === undefined ? undefined : 'register-error'}
+          />
         </label>
 
         <label className={labelClass}>
@@ -55,6 +71,8 @@ export default async function RegisterPage({ searchParams }: PageProps): Promise
             autoComplete="new-password"
             minLength={12}
             required
+            aria-invalid={error !== undefined}
+            aria-describedby={error === undefined ? undefined : 'register-error'}
           />
           <span className="mt-1 block text-xs text-slate-500">
             At least 12 characters, with a letter and a digit.
@@ -70,7 +88,7 @@ export default async function RegisterPage({ searchParams }: PageProps): Promise
 
       {config.otpEnabled ? (
         <p className="mt-4 text-sm text-slate-400">
-          <Link href="/register/mobile" className="text-sky-400 hover:text-sky-300">
+          <Link href="/register/mobile" className={authLinkClass}>
             Create an account with a mobile number
           </Link>
         </p>

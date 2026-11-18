@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 
-import { AuthShell, FieldError, Notice, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
+import { AuthShell, FieldError, Notice, authLinkClass, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
 import { TurnstileField } from '../../components/turnstile-field';
 import { webConfig } from '../../lib/config';
 import { csrfFromCookies } from '../../lib/session';
@@ -25,7 +25,7 @@ export default async function ForgotPasswordPage({ searchParams }: PageProps): P
       subtitle="We will email a link that lets you choose a new one. Asking for an address we do not have looks exactly the same."
       footer={
         <p>
-          <Link href="/login" className="text-sky-400 hover:text-sky-300">
+          <Link href="/login" className={authLinkClass}>
             Back to sign in
           </Link>
         </p>
@@ -37,11 +37,19 @@ export default async function ForgotPasswordPage({ searchParams }: PageProps): P
         {sent ? (
           <Notice message="If that address has an account, the reset link is on its way. It works once and expires in 30 minutes." />
         ) : null}
-        <FieldError message={error} />
+        <FieldError id="forgot-error" message={error} />
 
         <label className={labelClass}>
           Email
-          <input className={inputClass} name="email" type="email" autoComplete="email" required />
+          <input
+            className={inputClass}
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            aria-invalid={error !== undefined}
+            aria-describedby={error === undefined ? undefined : 'forgot-error'}
+          />
         </label>
 
         <TurnstileField siteKey={config.turnstileSiteKey} testMode={config.turnstileTestMode} />

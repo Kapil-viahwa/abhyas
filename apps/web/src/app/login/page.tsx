@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 
-import { AuthShell, FieldError, Notice, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
+import { AuthShell, FieldError, Notice, authLinkClass, buttonClass, inputClass, labelClass } from '../../components/auth-shell';
 import { TurnstileField } from '../../components/turnstile-field';
 import { webConfig } from '../../lib/config';
 import { csrfFromCookies } from '../../lib/session';
@@ -25,7 +25,7 @@ export default async function LoginPage({ searchParams }: PageProps): Promise<Re
       footer={
         <p>
           New here?{' '}
-          <Link href="/register" className="text-sky-400 hover:text-sky-300">
+          <Link href="/register" className={authLinkClass}>
             Create an account
           </Link>
         </p>
@@ -40,16 +40,32 @@ export default async function LoginPage({ searchParams }: PageProps): Promise<Re
           message={params.deactivated === '1' ? 'Your account is deactivated and cannot sign in.' : undefined}
         />
         <FieldError message={params.expired === '1' ? 'Your session expired. Please sign in again.' : undefined} />
-        <FieldError message={error} />
+        <FieldError id="login-error" message={error} />
 
         <label className={labelClass}>
           Email
-          <input className={inputClass} name="email" type="email" autoComplete="email" required />
+          <input
+            className={inputClass}
+            name="email"
+            type="email"
+            autoComplete="email"
+            required
+            aria-invalid={error !== undefined}
+            aria-describedby={error === undefined ? undefined : 'login-error'}
+          />
         </label>
 
         <label className={labelClass}>
           Password
-          <input className={inputClass} name="password" type="password" autoComplete="current-password" required />
+          <input
+            className={inputClass}
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+            aria-invalid={error !== undefined}
+            aria-describedby={error === undefined ? undefined : 'login-error'}
+          />
         </label>
 
         <TurnstileField siteKey={config.turnstileSiteKey} testMode={config.turnstileTestMode} />
@@ -60,14 +76,14 @@ export default async function LoginPage({ searchParams }: PageProps): Promise<Re
       </form>
 
       <p className="mt-4 text-sm text-slate-400">
-        <Link href="/forgot-password" className="text-sky-400 hover:text-sky-300">
+        <Link href="/forgot-password" className={authLinkClass}>
           Forgot your password?
         </Link>
       </p>
 
       {config.otpEnabled ? (
         <p className="mt-2 text-sm text-slate-400">
-          <Link href="/login/mobile" className="text-sky-400 hover:text-sky-300">
+          <Link href="/login/mobile" className={authLinkClass}>
             Sign in with a mobile number
           </Link>
         </p>

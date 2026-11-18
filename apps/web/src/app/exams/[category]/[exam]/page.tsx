@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 
 import { examsInCategory, getPublicCatalog } from '../../../../lib/catalog';
 import { webConfig } from '../../../../lib/config';
+import { tapTargetClass } from '../../../../components/tap-target';
 
 // Rendered per request from the tagged catalog cache, as /exams is: the API's
 // revalidation call drops that cache after every catalog write.
@@ -51,7 +52,7 @@ export default async function ExamPage({ params }: PageProps) {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
       <nav aria-label="Breadcrumb" className="text-xs text-slate-500">
         <ol className="flex flex-wrap gap-2">
           <li>
@@ -91,7 +92,7 @@ export default async function ExamPage({ params }: PageProps) {
           phase; the syllabus is ready before them.
         </p>
         <p className="mt-4 text-sm">
-          <Link href={`/exams/${category.slug}`} className="text-sky-400 hover:text-sky-300">
+          <Link href={`/exams/${category.slug}`} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             All {category.name} exams
           </Link>
         </p>

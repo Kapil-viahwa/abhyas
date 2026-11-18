@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 
-import { AuthShell, Notice, buttonClass } from '../../components/auth-shell';
+import { AuthShell, Notice, authLinkClass, buttonClass } from '../../components/auth-shell';
 import { AutoSubmit } from '../../components/auto-submit';
 import { csrfFromCookies } from '../../lib/session';
 
@@ -58,7 +58,7 @@ export default async function VerifyEmailPage({ searchParams }: PageProps): Prom
       }
       footer={
         <p>
-          <Link href="/login" className="text-sky-400 hover:text-sky-300">
+          <Link href="/login" className={authLinkClass}>
             Back to sign in
           </Link>
         </p>

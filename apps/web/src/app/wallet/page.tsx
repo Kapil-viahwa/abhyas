@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { FieldError } from '../../components/auth-shell';
 import { StudentNav } from '../../components/student-shell';
+import { tapTargetClass } from '../../components/tap-target';
 import { loadSession } from '../../lib/session';
 import { apiCall, errorMessage } from '../../lib/upstream';
 
@@ -73,7 +74,7 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
   const current = history.body?.page ?? 1;
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
+    <main id="main" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
@@ -134,7 +135,7 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
               id="type"
               name="type"
               defaultValue={type}
-              className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+              className="min-h-11 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100 sm:min-h-0"
             >
               {TYPES.map((value) => (
                 <option key={value} value={value}>
@@ -142,7 +143,10 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
                 </option>
               ))}
             </select>
-            <button type="submit" className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200">
+            <button
+              type="submit"
+              className={`${tapTargetClass} rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200`}
+            >
               Apply
             </button>
           </form>
@@ -185,9 +189,9 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
           </table>
         </div>
 
-        <nav className="mt-4 flex items-center justify-between text-sm">
+        <nav aria-label="Wallet history pages" className="mt-4 flex items-center justify-between text-sm">
           {current > 1 ? (
-            <Link href={`/wallet?page=${String(current - 1)}${type === '' ? '' : `&type=${type}`}`} className="text-sky-400">
+            <Link href={`/wallet?page=${String(current - 1)}${type === '' ? '' : `&type=${type}`}`} className={`${tapTargetClass} text-sky-400`}>
               Previous
             </Link>
           ) : (
@@ -197,7 +201,7 @@ export default async function WalletPage({ searchParams }: PageProps): Promise<R
             Page {current} of {pageCount}
           </span>
           {current < pageCount ? (
-            <Link href={`/wallet?page=${String(current + 1)}${type === '' ? '' : `&type=${type}`}`} className="text-sky-400">
+            <Link href={`/wallet?page=${String(current + 1)}${type === '' ? '' : `&type=${type}`}`} className={`${tapTargetClass} text-sky-400`}>
               Next
             </Link>
           ) : (
