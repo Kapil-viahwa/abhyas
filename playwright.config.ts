@@ -15,8 +15,10 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   expect: { timeout: 10_000 },
-  // A hung browser fails the run instead of holding the job open; the job has a cap too.
-  globalTimeout: process.env.CI ? 8 * 60_000 : 0,
+  // A hung browser fails the run instead of holding the job open; the job has a cap too. The
+  // screenshot gallery is the one run that needs longer: it walks every screen at two viewports,
+  // so its project gets a five-minute test timeout and no global cap of its own.
+  globalTimeout: process.env.CI && process.env.E2E_SCREENSHOTS !== '1' ? 8 * 60_000 : 0,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list'], ['html', { open: 'never' }]],
@@ -27,9 +29,10 @@ export default defineConfig({
   },
   projects: [
     {
-      // Everything except the spec that needs OTP switched on.
+      // Everything except the specs that need their own setup: OTP switched on, and the
+      // screenshot gallery, which runs only in `.github/workflows/screenshots.yml`.
       name: 'chromium',
-      testIgnore: /otp-enabled\.spec\.ts/,
+      testIgnore: [/otp-enabled\.spec\.ts/, /screenshots\.spec\.ts/],
       use: { ...devices['Desktop Chrome'] },
     },
     ...(process.env.E2E_OTP === '1'
@@ -39,6 +42,18 @@ export default defineConfig({
             testMatch: /otp-enabled\.spec\.ts/,
             // One stack, one browser, one worker: these flows share its limits.
             timeout: 60_000,
+            expect: { timeout: 10_000 },
+            use: { ...devices['Desktop Chrome'] },
+          },
+        ]
+      : []),
+    ...(process.env.E2E_SCREENSHOTS === '1'
+      ? [
+          {
+            name: 'gallery',
+            testMatch: /screenshots\.spec\.ts/,
+            // One test walks every screen at two viewports; the per-screen waits are short.
+            timeout: 300_000,
             expect: { timeout: 10_000 },
             use: { ...devices['Desktop Chrome'] },
           },

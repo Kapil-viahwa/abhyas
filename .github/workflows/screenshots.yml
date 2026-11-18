@@ -1,0 +1,123 @@
+name: Screenshots
+
+# A gallery of every screen, at two viewports, as an artifact. It is an observation job, not a
+# test: it asserts almost nothing and never changes product code. It runs only when this file,
+# the gallery spec, its fixture (or the Playwright config that defines the `gallery` project)
+# changes, and by hand from the Actions tab. The normal `CI` workflow never runs it.
+#
+# The specs on their own are inert: `e2e/screenshots.spec.ts` skips every test unless
+# `E2E_SCREENSHOTS=1`, and the `gallery` project in `playwright.config.ts` exists only when that
+# variable is set. `e2e/screenshots.spec.ts` is also in the `chromium` project's `testIgnore`, so
+# the nine-job CI run never picks it up.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/screenshots.yml
+      - e2e/screenshots.spec.ts
+      - e2e/screenshots-fixture.ts
+      - playwright.config.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    name: screenshots
+    runs-on: ubuntu-24.04
+    # The tour is about a minute of Playwright; the stack boot is the slow part. Twenty minutes
+    # is the same ceiling the e2e job carries, and Playwright's own timeout still fails a stall.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          run_install: false
+      - name: Setup node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Read the Playwright version
+        id: playwright-version
+        shell: bash
+        run: |
+          version="$(pnpm exec playwright --version 2>/dev/null | awk '{print $NF}')"
+          echo "version=${version:-unknown}" >> "$GITHUB_OUTPUT"
+      - name: Restore the Playwright browser cache
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+      - name: Install Playwright browsers
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+              echo "browser cache hit for Playwright ${{ steps.playwright-version.outputs.version }}: installing only the OS dependencies"
+              pnpm exec playwright install-deps chromium
+            elif ! pnpm exec playwright install --with-deps chromium; then
+              echo "::warning title=playwright::the Chromium download failed once; retrying once"
+              sleep 5
+              pnpm exec playwright install --with-deps chromium
+            fi
+          } 2>&1 | tee "$RUNNER_TEMP/playwright-install.log"
+      # The same stack the e2e job boots: one-shot migrations first, then the API, web and worker,
+      # with `--wait` returning only once every healthcheck is green.
+      - name: Bring the stack up (migrations first) and wait for health
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -o pipefail
+          docker compose up -d --build --wait --wait-timeout 300 2>&1 | tee "$RUNNER_TEMP/compose-up.log"
+      - name: Capture the screens
+        shell: bash
+        env:
+          E2E_SCREENSHOTS: '1'
+        run: |
+          set -o pipefail
+          pnpm exec playwright test --project=gallery 2>&1 | tee "$RUNNER_TEMP/playwright-gallery.log"
+      # The screenshots are the deliverable, so they are uploaded even when a later step fails.
+      - name: Upload the gallery
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots
+          path: screenshots
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Collect container logs
+        if: failure()
+        shell: bash
+        run: |
+          docker compose ps -a > "$RUNNER_TEMP/compose-ps.log" 2>&1 || true
+          for service in api web worker; do
+            docker compose logs --no-color --tail 80 "$service" > "$RUNNER_TEMP/$service-logs.log" 2>&1 || true
+          done
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: logs-screenshots
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Tear the stack down
+        if: always()
+        shell: bash
+        run: docker compose down -v > "$RUNNER_TEMP/compose-down.log" 2>&1 || true
