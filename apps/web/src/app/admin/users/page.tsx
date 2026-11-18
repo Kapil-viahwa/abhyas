@@ -140,7 +140,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
         {list.items.length === 0 ? <li className="p-4 text-sm text-slate-400">No accounts match that filter.</li> : null}
       </ul>
 
-      <nav className="flex items-center justify-between text-sm text-slate-400">
+      <nav aria-label="User pages" className="flex items-center justify-between text-sm text-slate-400">
         {list.page > 1 ? (
           <Link href={pageHref(query, list.page - 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Previous

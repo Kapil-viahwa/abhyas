@@ -143,7 +143,7 @@ export default async function AuditPage({ searchParams }: PageProps): Promise<Re
         </table>
       </div>
 
-      <nav className="flex items-center justify-between text-sm text-slate-400">
+      <nav aria-label="Audit pages" className="flex items-center justify-between text-sm text-slate-400">
         {audit.page > 1 ? (
           <Link href={pageHref(filters, audit.page - 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Previous
