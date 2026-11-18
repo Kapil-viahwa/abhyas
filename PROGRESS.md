@@ -1277,6 +1277,12 @@ commit does not normally force — the job still finished in 6m03s.
   `corepack enable` ("corepack: not found", exit 127) while lint, typecheck, unit, database, gitleaks
   and audit passed. A Node move is a runtime upgrade unit that moves `.nvmrc`, the three Dockerfiles,
   CI and `engines` together; the image majors are ignored. See decision 0084.
+- **Deferred upgrades — four more majors, and the compose images.** TypeScript 6, Vitest 5,
+  `@types/node` 26 and TipTap 3 are parked, with their majors ignored and minor/patch still on; each is
+  a planned unit, and `@types/node` moves only with the planned Node upgrade (0084). The compose images
+  (`postgres:16-alpine`, `redis:7-alpine`) are tracked from now on by a `docker-compose` entry, with
+  their majors ignored because a Postgres or Redis major is a data-format change that needs a restore
+  test. See decision 0085.
 - **Secret scanning scope.** The per-push `gitleaks` job scans only the pushed commit or the pull
   request's own range ("1 commits scanned" on a PR, "0" on a merge commit), even though its checkout
   fetches full history. A new weekly, manually triggerable `Secret scan (full history)` workflow runs
