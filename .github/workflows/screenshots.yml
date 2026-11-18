@@ -63,14 +63,23 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
       - name: Install Playwright browsers
-        timeout-minutes: 8
+        # The e2e job caps this at eight minutes; here it gets twelve and a fallback, because the
+        # step has stalled once at exactly eight minutes on a warm cache (run 44236680053,
+        # "The action 'Install Playwright browsers' has timed out after 8 minutes") while the
+        # same step took 15s in the e2e job of the same commit. A hit runs only `install-deps`;
+        # if that fails, the full install is attempted once before the step gives up.
+        timeout-minutes: 12
         shell: bash
         run: |
           set -o pipefail
           {
             if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
               echo "browser cache hit for Playwright ${{ steps.playwright-version.outputs.version }}: installing only the OS dependencies"
-              pnpm exec playwright install-deps chromium
+              if ! pnpm exec playwright install-deps chromium; then
+                echo "::warning title=playwright::install-deps failed once; retrying with a full install"
+                sleep 5
+                pnpm exec playwright install --with-deps chromium
+              fi
             elif ! pnpm exec playwright install --with-deps chromium; then
               echo "::warning title=playwright::the Chromium download failed once; retrying once"
               sleep 5
