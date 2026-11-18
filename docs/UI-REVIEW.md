@@ -161,7 +161,7 @@ per-screen `GALLERY` lines (the same lines that name the controls); those per-sc
 | Stand-alone controls under 44×44 on the phone | not measured | not measured | **23, on 10 of 35 screens** |
 | Controls with no visible focus style | not measured | not measured | **26 of 407** (all on `05-admin/catalog`) |
 | Error fields without `aria-describedby` | not measured | not measured | **0 of 6** |
-| Pages without exactly one `h1` / one `main` | not measured | not measured | **2 / 2** (the 404 screen only) |
+| Pages without exactly one `h1` / one `main` | not measured | not measured | **2 / 2** (`attempt-unavailable` has no `h1`; the 404 has no `main`) |
 
 **What still fails, and why.** All 23 remaining stand-alone targets are in two places:
 
@@ -183,9 +183,13 @@ box-shadow when focused with `focus({ focusVisible: true })`. The 26 that did no
 controls, which the walk could not make focusable. That is the one number this review cannot yet
 call fixed, and it needs a look at the catalog tree's controls by hand.
 
-**Landmarks and headings:** every screen has exactly one `h1` except the two captures of the 404
-screen, which Next renders with its own `h1` and no `<main>`. Every other page has exactly one
-`<main id="main">`, and the root layout now opens with a "Skip to main content" link that targets it.
+**Landmarks and headings:** every screen has exactly one `h1` and exactly one `<main>` except two,
+and the run names both. `03-student/attempt-unavailable` (both viewports) renders its message with
+no `h1` at all, inside the `<main>`: the screen a student reaches from a closed enrollment is the
+one heading this pass missed. `01-public/not-found` (both viewports) is Next's own 404 — one `h1`
+and no `<main>`, because the repository still has no `not-found.tsx`. Every other page has exactly
+one `<main id="main">`, and the root layout now opens with a "Skip to main content" link that
+targets it.
 
 **Form errors:** the gallery reaches the auth forms' error state through their `?error=` URLs (no
 new picture — the same 70 captures) and finds `role="alert"` on the message and `aria-invalid` +
