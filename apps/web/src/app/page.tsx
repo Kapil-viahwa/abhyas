@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { apiBaseUrl, fetchHealth } from '../lib/api';
@@ -32,6 +33,26 @@ export default async function HomePage(): Promise<ReactElement> {
           dependencies are reachable.
         </p>
       </header>
+
+      {/* The visitor's way into the platform. The links are the whole of it — no claim the
+          app cannot stand behind. */}
+      <nav aria-label="Get started" className="flex flex-wrap items-center gap-3 text-sm">
+        <Link
+          href="/login"
+          className="inline-flex min-h-11 items-center rounded-lg bg-sky-500 px-4 py-2 font-semibold text-slate-950 hover:bg-sky-400 sm:min-h-0"
+        >
+          Sign in
+        </Link>
+        <Link
+          href="/register"
+          className="inline-flex min-h-11 items-center rounded-lg border border-slate-700 px-4 py-2 text-slate-200 hover:border-slate-500 sm:min-h-0"
+        >
+          Register
+        </Link>
+        <Link href="/exams" className="inline-flex min-h-11 items-center px-1 text-sky-400 hover:text-sky-300 sm:min-h-0 sm:px-0">
+          Browse the exams
+        </Link>
+      </nav>
 
       <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
         <div className="flex items-center justify-between gap-4">
