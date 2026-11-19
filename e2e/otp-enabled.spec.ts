@@ -102,38 +102,7 @@ test('links a second number from the account page, proving it with a confirmatio
   await confirm.locator('input[name="destination"]').fill(added);
   await confirm.locator('input[name="code"]').fill(CODE);
   await confirm.locator('input[name="reauthCode"]').fill(CODE);
-
-  // TEMPORARY: name the real click target, whether a submit event fires, and whether the page
-  // moves under the click. Removed in the commit that fixes the failure.
-  await page.evaluate(() => {
-    const form = document.querySelector('form[action="/api/account/mobile/link/verify"]');
-    window.addEventListener(
-      'click',
-      (event) => {
-        const target = event.target as HTMLElement | null;
-        // eslint-disable-next-line no-console
-        console.log(
-          `OTP-DIAG-CLICK ${target?.tagName ?? 'none'}: ${(target?.textContent ?? '').trim().slice(0, 20)}`,
-        );
-      },
-      true,
-    );
-    form?.addEventListener('submit', () => {
-      // eslint-disable-next-line no-console
-      console.log('OTP-DIAG-SUBMIT fired');
-    });
-  });
-
   await confirm.locator('button[type="submit"]').click();
-
-  // TEMPORARY: what took focus, and how tall the page is now.
-  const afterClick = await page.evaluate(() => ({
-    active: (document.activeElement as HTMLElement | null)?.outerHTML.slice(0, 120) ?? null,
-    height: document.body.scrollHeight,
-    url: location.href,
-  }));
-  // eslint-disable-next-line no-console
-  console.log(`OTP-DIAG-AFTER ${JSON.stringify(afterClick)}`);
 
   await expect(page).toHaveURL(/\/account\?mobile=linked/);
   await expect(page.getByText('Your mobile number was added.')).toBeVisible();
