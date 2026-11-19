@@ -38,8 +38,27 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     # A Redis with no password inside the compose network is one misconfigured proxy away
     # from being an open queue; the API and the worker reach it with the same secret.
+    #
+    # The append-only file is what makes a restart survivable: queued jobs, the repeatable
+    # job declarations, throttle buckets and failure counters are all Redis keys. `everysec`
+    # is the documented trade-off (at most a second of writes lost on a hard crash, never a
+    # corrupt file); `FLUSHALL` or dropping the volume throws all four away, and the
+    # repeatable jobs are re-declared by the worker at its next boot while queued work is not.
     command:
-      ['redis-server', '--appendonly', 'yes', '--save', '60', '1', '--requirepass', '${REDIS_PASSWORD:?REDIS_PASSWORD is required}']
+      [
+        'redis-server',
+        '--appendonly',
+        'yes',
+        '--appendfsync',
+        'everysec',
+        '--save',
+        '60',
+        '1',
+        '--requirepass',
+        '${REDIS_PASSWORD:?REDIS_PASSWORD is required}',
+      ]
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
       interval: 10s
@@ -115,6 +134,27 @@ services:
       TRUST_CLIENT_IP_HEADER: 'x-real-ip'
       # The web container's own address: never route a cache drop through the public edge.
       REVALIDATE_URL: http://web:3000/api/revalidate
+      # Mobile OTP stays off unless an operator turns it on, and the API's validator is what
+      # enforces the rest: with OTP_ENABLED=true in production it refuses a boot without
+      # OTP_HMAC_SECRET (32+ characters), OTP_SENDER_ID, OTP_DLT_ENTITY_ID, OTP_TEMPLATE_ID,
+      # and — because SMS_PROVIDER must be "http" — an https OTP_GATEWAY_URL, a
+      # OTP_GATEWAY_BODY_TEMPLATE and a OTP_GATEWAY_AUTH_VALUE. Passing them empty keeps the
+      # off case clean and makes the on case fail at boot, naming the variable.
+      OTP_ENABLED: ${OTP_ENABLED:-false}
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:-}
+      OTP_SENDER_ID: ${OTP_SENDER_ID:-}
+      OTP_DLT_ENTITY_ID: ${OTP_DLT_ENTITY_ID:-}
+      OTP_TEMPLATE_ID: ${OTP_TEMPLATE_ID:-}
+      OTP_GATEWAY_URL: ${OTP_GATEWAY_URL:-}
+      OTP_GATEWAY_AUTH_HEADER: ${OTP_GATEWAY_AUTH_HEADER:-}
+      OTP_GATEWAY_AUTH_VALUE: ${OTP_GATEWAY_AUTH_VALUE:-}
+      OTP_GATEWAY_BODY_TEMPLATE: ${OTP_GATEWAY_BODY_TEMPLATE:-}
+      OTP_GATEWAY_TIMEOUT_MS: ${OTP_GATEWAY_TIMEOUT_MS:-5000}
+      OTP_SMS_DAILY_BUDGET: ${OTP_SMS_DAILY_BUDGET:-100}
+      OTP_ALLOWED_COUNTRY_CODES: ${OTP_ALLOWED_COUNTRY_CODES:-+91}
+      # Required only when EMAIL_PROVIDER=smtp, which the API's SMTP sender refuses to
+      # construct without; empty otherwise.
+      SMTP_URL: ${SMTP_URL:-}
     expose:
       - '3001'
     depends_on:
@@ -164,6 +204,13 @@ services:
       WEB_URL: ${WEB_URL:?WEB_URL is required}
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:?TURNSTILE_SITE_KEY is required}
       REVALIDATE_SECRET: ${REVALIDATE_SECRET:?REVALIDATE_SECRET is required}
+      # The web tier hides the mobile screens and answers 404 on their routes when this is
+      # false, so the switch has to be the same value the API reads.
+      OTP_ENABLED: ${OTP_ENABLED:-false}
+      # The origin the browser policy allows for media (presigned S3 URLs). An empty value
+      # keeps the policy strict; a value must be a bare origin (no path, no credentials) and
+      # the web tier refuses anything else at boot.
+      MEDIA_ORIGIN: ${MEDIA_ORIGIN:-}
       # One hop in front of this tier: Nginx, on the host, which overwrites X-Real-IP with
       # $remote_addr (docs/deployment.md). A count, not "true": the browser can send both
       # headers itself (decision 0052).
@@ -228,6 +275,21 @@ services:
       # Its own secret for the API's internal routes, and never the revalidation one.
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET is required}
       INTERNAL_ALLOWED_ADDRESSES: '172.31.0.20/32'
+      # The worker boots through the same validator as the API (which refuses to start with
+      # OTP on and the DLT/gateway values missing), so it is handed the same names.
+      OTP_ENABLED: ${OTP_ENABLED:-false}
+      OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:-}
+      OTP_SENDER_ID: ${OTP_SENDER_ID:-}
+      OTP_DLT_ENTITY_ID: ${OTP_DLT_ENTITY_ID:-}
+      OTP_TEMPLATE_ID: ${OTP_TEMPLATE_ID:-}
+      OTP_GATEWAY_URL: ${OTP_GATEWAY_URL:-}
+      OTP_GATEWAY_AUTH_HEADER: ${OTP_GATEWAY_AUTH_HEADER:-}
+      OTP_GATEWAY_AUTH_VALUE: ${OTP_GATEWAY_AUTH_VALUE:-}
+      OTP_GATEWAY_BODY_TEMPLATE: ${OTP_GATEWAY_BODY_TEMPLATE:-}
+      OTP_GATEWAY_TIMEOUT_MS: ${OTP_GATEWAY_TIMEOUT_MS:-5000}
+      OTP_SMS_DAILY_BUDGET: ${OTP_SMS_DAILY_BUDGET:-100}
+      OTP_ALLOWED_COUNTRY_CODES: ${OTP_ALLOWED_COUNTRY_CODES:-+91}
+      SMTP_URL: ${SMTP_URL:-}
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
@@ -238,6 +300,11 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      # The coin-bulk and reconciliation ticks call the API's internal routes, and the
+      # attempt sweeper finalises through them: the worker has nothing to do until the API
+      # is answering, so it waits for its healthcheck like the web tier does.
+      api:
         condition: service_healthy
     # A fixed address, so the API can name exactly this container as the one allowed to
     # present the internal secret.
@@ -276,6 +343,9 @@ services:
 
 volumes:
   pgdata:
+  # Redis' append-only file lives here: the queue, the repeatable jobs, the rate-limit
+  # buckets and the failure counters all survive a restart with this volume present.
+  redisdata:
 
 # The default network is pinned so the web container can hold a fixed address: the API
 # trusts that one address, not a subnet, as the only source of a forwarded client address.

@@ -8,7 +8,7 @@ import { drainCoinBulkJobs } from './jobs/coin-bulk';
 import { reconcileCoinWallets } from './jobs/coin-reconciliation';
 import { runMaintenanceJob } from './queues/dispatch';
 import { MAINTENANCE_QUEUE, PING_JOB } from './queues/maintenance';
-import { registerRepeatableJobs } from './queues/schedule';
+import { registerRepeatableJobs, REPEATABLE_JOBS } from './queues/schedule';
 
 async function main(): Promise<void> {
   // Same gate as the API: production refuses test keys, fake SMS and dev login.
@@ -125,9 +125,20 @@ async function main(): Promise<void> {
   );
 
   // The repeatable jobs: BullMQ keeps the schedule in Redis, so a restart does not double it.
+  //
+  // One line with names and intervals only, so a deploy can confirm from `docker compose
+  // logs worker` that all four are declared — and how often each one runs — without
+  // reading the queue.
   const registered = await registerRepeatableJobs(queue);
+  if (registered.length !== REPEATABLE_JOBS.length) {
+    throw new Error('the worker registered fewer repeatable jobs than it declares');
+  }
   // eslint-disable-next-line no-console
-  console.log(`repeatable jobs registered: ${registered.join(', ')}`);
+  console.log(
+    `repeatable jobs registered: ${REPEATABLE_JOBS.map(
+      (job) => `${job.name} every ${String(Math.round(job.every / 1000))}s`,
+    ).join(', ')}`,
+  );
 
   // eslint-disable-next-line no-console
   console.log(`worker listening on "${MAINTENANCE_QUEUE}" (${config.NODE_ENV})`);
