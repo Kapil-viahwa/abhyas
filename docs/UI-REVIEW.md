@@ -137,14 +137,14 @@ The Turnstile `400020` console errors remain on the auth pages, as expected with
 
 ## After F2
 
-The last full measurement on this branch is the gallery run on `168c9af`, whose log prints, verbatim:
+The last full measurement on this branch is the gallery run on `e834a72`, whose log prints, verbatim:
 
 ```
 GALLERY-SUMMARY 70 shots, 0 skipped
 GALLERY-A11Y    captures=70, unlabeled inputs=0, images without alt=0, overflow=0, phone screens under 44x44=1
-GALLERY-A11Y2   phone: stand-alone below 44x44=5, inline exempt=2, controls without a focus style=0 of 382
-                that took focus (26 could not be focused), error fields without aria-describedby=0 of 6;
-                pages: not exactly one h1=0, not exactly one main=0
+GALLERY-A11Y2   phone: stand-alone below 44x44=0, inline exempt=2, controls without a focus style=0 of 382
+                that took focus (26 counted apart), error fields without aria-describedby=0 of 6;
+                not exactly one h1=0, not exactly one main=0
 ```
 
 | Count | Before (main) | After F1 | After F2 |
@@ -154,17 +154,18 @@ GALLERY-A11Y2   phone: stand-alone below 44x44=5, inline exempt=2, controls with
 | Inputs without a label | 7 | 0 | **0** |
 | Images without `alt` | 0 | 0 | **0** |
 | Horizontal overflow | 0 | 0 | **0** |
-| Phone screens whose smallest target is under 44×44 | 27 | 24 | **1** |
-| Stand-alone controls under 44×44 on the phone | not measured | not measured | **5** (was **23** before the last fixes) |
+| Stand-alone controls under 44×44 on the phone | not measured | not measured | **0** (23 before the repair pass) |
+| Phone screens whose smallest target is under 44×44 | 27 | 24 | **1** — `04-editor/home`, whose smallest is the paragraph link "Open the tests" (103×16), the exemption this unit names |
 | Controls with no visible focus style | not measured | not measured | **0 of 382** that took focus |
 | Error fields without `aria-describedby` | not measured | not measured | **0 of 6** |
 | Pages without exactly one `h1` / one `main` | not measured | not measured | **0 / 0** |
 
-**The five that run still found**, named by its own per-screen lines: the account page's
-"Deactivate" button (117×36, a raw class no shared component owned) on `03-student/account` and on
-the same page when an editor is refused, and the three row links on `05-admin/users`
-(`281×20`, the email of each account). All five got the shared height in the commit that follows
-that run; the next gallery run is the one that measures them at 0.
+**Nothing is left under the target except the named exemption.** The two inline exemptions are the
+two paragraph links on `04-editor/home` ("Open the catalog" and "Open the tests"), prose that stays
+prose by this unit's own rule. The five the previous run still found — the account page's
+"Deactivate" button (117×36) on `03-student/account` and on the same page when an editor is refused,
+and the three `05-admin/users` row links (281×20) — took the shared height in `e834a72` and measure
+above the target here.
 
 **Focus: nothing left to call unfixed.** Every one of the 382 controls that the phone screens could
 actually focus changed its computed outline or box-shadow when focused with
