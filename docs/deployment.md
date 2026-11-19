@@ -1,179 +1,260 @@
-# Deployment
+# Deploying Abhyas
 
-Two compose files, one topology. Development is for people; production is for the platform, and
-it refuses to start without its secrets.
+An ordered runbook for a clean Linux host with Docker and Docker Compose. Nothing in this
+document is a secret: every value is something the operator generates or is given by a provider,
+and secrets are referred to by **name** only.
 
-## Development
+Production topology is `docker-compose.prod.yml`: Postgres, Redis, a one-shot migrations
+container, the API, the web tier and the worker. It publishes one port, on loopback only, and
+requires every secret from the environment by name.
 
-```mermaid
-flowchart TB
-  subgraph host["Developer machine"]
-    browser["Browser<br/>localhost:3000"]
-    shell["pnpm commands<br/>lint, typecheck, tests, db:migrate"]
-  end
+**D1 is this document and the compose fixes.** Nginx/TLS (D2) and backups (D3) are *not* in it;
+the sections that mention them say what D1 assumes and what those units will add.
 
-  subgraph compose["docker compose up — project abhyas"]
-    web["web<br/>:3000 published"]
-    api["api<br/>:3001 published"]
-    worker["worker"]
-    pg[("postgres:16-alpine<br/>:5432 published<br/>volume pgdata")]
-    redis[("redis:7-alpine<br/>:6379 published")]
-  end
+## 1. Prerequisites
 
-  browser --> web
-  web -->|API_INTERNAL_URL| api
-  api --> pg
-  api --> redis
-  worker --> pg
-  worker --> redis
-  shell -->|DATABASE_URL=localhost:5432| pg
+- A Linux host with Docker Engine 24+ and the Compose v2 plugin (`docker compose version`).
+- 4 GB RAM (the compose memory limits add up to about 3.4 GB), 2 vCPU, 40 GB disk.
+- A DNS name pointing at the host, and a TLS certificate for it (D2 terminates TLS).
+- An external S3-compatible bucket over **https**, with a key pair. Production refuses the
+  in-memory store, a non-https endpoint and the development credentials.
+- A Cloudflare Turnstile widget (site key and secret key) allow-listed for the host name.
+- An SMTP endpoint **if** `EMAIL_PROVIDER=smtp`. The SMTP sender in this build validates its
+  configuration and then refuses to deliver (decision 0027): real delivery is launch blocker #4.
+- For OTP only: a DLT-registered sender id, entity id and template id, and an https SMS gateway
+  that accepts a JSON body and an auth header.
+
+## 2. Environment
+
+The full set the compose file hands the services. `docker-compose.prod.yml` fails at
+`docker compose config` when a `${VAR:?}` is missing, so start by satisfying every required row.
+
+| Name | Required | Default | What it is | Read by | Must differ from CI/dev |
+| --- | --- | --- | --- | --- | --- |
+| `POSTGRES_USER` | yes | — | database owner role (migrations run as it) | postgres, migrations | yes |
+| `POSTGRES_PASSWORD` | yes | — | that role's password | postgres | yes |
+| `POSTGRES_DB` | yes | — | database name | postgres | no |
+| `MIGRATION_DATABASE_URL` | yes | — | owner connection string used only by the migrations container | migrations | yes |
+| `DATABASE_URL` | yes | — | runtime connection string for the non-owner `abhyas_app` role | api, worker | yes |
+| `REDIS_PASSWORD` | yes | — | Redis `requirepass`; the API and worker embed it in `REDIS_URL` | redis, api, worker | yes |
+| `AUTH_SECRET` | yes | — | 32+ chars; signs session material | api, worker | yes |
+| `REVALIDATE_SECRET` | yes | — | 16+ chars; API → web cache drop | api, web, worker | yes |
+| `INTERNAL_API_SECRET` | yes | — | worker → API internal routes | api, worker | yes |
+| `INTERNAL_ALLOWED_ADDRESSES` | yes | `172.31.0.20/32` | the only source allowed to present the internal secret | api | no (fixed address) |
+| `TRUST_PROXY` (api) | yes | `172.31.0.10/32` | the single proxy hop the API reads a client address from | api | no (fixed address) |
+| `TRUST_PROXY` (web) | yes | `1` | one hop (Nginx) in front of the web tier | web | no |
+| `TRUST_CLIENT_IP_HEADER` | yes | `x-real-ip` | the one header each tier reads | api, web | no |
+| `WEB_URL` | yes | — | public https origin; the only origin trusted for cookie writes and CSRF | api, web | yes |
+| `WEB_PORT` | no | `3000` | host loopback port for the web tier | web | no |
+| `TURNSTILE_SITE_KEY` | yes | — | public widget key; a Cloudflare **test** key is refused in production | web | yes |
+| `TURNSTILE_SECRET_KEY` | yes | — | server verification key; a test secret is refused in production | api, worker | yes |
+| `SMS_PROVIDER` | yes | — | `http` when OTP is on (no vendor adapter exists yet); otherwise a real provider name | api, worker | yes |
+| `EMAIL_PROVIDER` | yes | — | `smtp` in production (`console` is refused) | api, worker | yes |
+| `SMTP_URL` | only when `EMAIL_PROVIDER=smtp` | empty | the mail transport; the SMTP sender refuses to construct without it | api, worker | yes |
+| `S3_ENDPOINT` | yes | — | https endpoint of the object store | api, worker | yes |
+| `S3_REGION` | no | `us-east-1` | bucket region | api, worker | no |
+| `S3_BUCKET` | yes | — | media bucket; a public-read bucket is refused | api, worker | no |
+| `S3_ACCESS_KEY_ID` | yes | — | bucket key id; development credentials are refused | api, worker | yes |
+| `S3_SECRET_ACCESS_KEY` | yes | — | bucket secret, 16+ chars | api, worker | yes |
+| `MEDIA_ORIGIN` | no | empty | bare origin the CSP allows for images; empty means no third-party host | web | yes |
+| `OTP_ENABLED` | no | `false` | the mobile OTP switch, for the API and the web screens alike | api, web, worker | no |
+| `OTP_HMAC_SECRET` | when OTP on | empty | 32+ chars in production; hashes stored codes | api, worker | yes |
+| `OTP_SENDER_ID` | when OTP on | empty | DLT sender id | api, worker | yes |
+| `OTP_DLT_ENTITY_ID` | when OTP on | empty | DLT entity id | api, worker | yes |
+| `OTP_TEMPLATE_ID` | when OTP on | empty | DLT template id | api, worker | yes |
+| `OTP_GATEWAY_URL` | when OTP on | empty | https SMS gateway | api, worker | yes |
+| `OTP_GATEWAY_AUTH_HEADER` | no | empty | header name the gateway takes its key in | api, worker | yes |
+| `OTP_GATEWAY_AUTH_VALUE` | when OTP on | empty | that header's value | api, worker | yes |
+| `OTP_GATEWAY_BODY_TEMPLATE` | when OTP on | empty | JSON body template with the destination and code placeholders | api, worker | yes |
+| `OTP_GATEWAY_TIMEOUT_MS` | no | `5000` | gateway timeout, 1000–30000 | api, worker | no |
+| `OTP_SMS_DAILY_BUDGET` | no | `100` | daily send ceiling, 1–100000 | api, worker | no |
+| `OTP_ALLOWED_COUNTRY_CODES` | no | `+91` | comma-separated E.164 prefixes | api, worker | no |
+| `SEED_ADMIN_EMAIL` | one-off | — | the first administrator's address (§5) | seed command | yes |
+| `SEED_ADMIN_PASSWORD` | one-off | — | 12+ chars, a letter and a digit, not a known default | seed command | yes |
+| `SEED_ADMIN_NAME` | no | `Abhyas Administrator` | display name | seed command | no |
+| `SEED_ADMIN_CONFIRM` | one-off | — | must be `create-first-admin` in production | seed command | no |
+
+### Generating secrets
+
+Run these on the host and paste the results into `.env.prod` by hand; never in a shell history
+that is shared, never in this repository, never in a chat.
+
+```
+openssl rand -hex 32     # AUTH_SECRET, OTP_HMAC_SECRET
+openssl rand -hex 24     # REVALIDATE_SECRET, INTERNAL_API_SECRET, POSTGRES_PASSWORD, REDIS_PASSWORD
 ```
 
-- Every service has a healthcheck; `docker compose up --wait` blocks until the stack is actually
-  serving, which is exactly what the `compose-smoke` and `e2e` CI jobs rely on.
-- Database ports are published in development only, so host-side `pnpm db:migrate` and
-  `pnpm test:db` work.
-- Two database roles (decision 0023): migrations connect as the owner
-  (`MIGRATION_DATABASE_URL`), while the API and the worker connect as `abhyas_app`
-  (`DATABASE_URL`, `APP_DATABASE_URL` for tests) — not a superuser, with `UPDATE`, `DELETE`
-  and `TRUNCATE` on `audit_logs` revoked. Development and CI create the role from
-  `docker/postgres-init/01-app-role.sql`; production creates it out of band with its own secret.
-- `ALLOW_DEV_LOGIN`, a Turnstile test key, the `fake` SMS provider and the console email outbox
-  are set here — and are refused by the boot gate when `NODE_ENV=production`.
+`.env.prod` is `chmod 600`, owned by the deploy user, and outside the repository. `.gitignore`
+already ignores `.env*` except `.env.example`.
 
-## Production
+### Checking it before you start
 
-```mermaid
-flowchart TB
-  users["Clients"] --> web["web<br/>published ${WEB_PORT:-3000}"]
+The same validators the API and the worker boot through can be run against the file, without
+starting the stack. It prints **only variable names and the validator's messages**:
 
-  subgraph compose["docker compose -f docker-compose.prod.yml"]
-    web --> api["api<br/>expose 3001 only"]
-    migrations["migrations<br/>one-shot: prisma migrate deploy"]
-    api --> pg[("postgres<br/>no published port<br/>named volume")]
-    api --> redis[("redis<br/>no published port")]
-    worker["worker"] --> pg
-    worker --> redis
-    migrations --> pg
-  end
-
-  api -.->|phase 4: presigned URLs| s3[("S3-compatible storage")]
-  nginx["Nginx — hardening phase<br/>edge TLS and rate limiting"] -.-> web
+```
+PROD_ENV_FILE=./.env.prod pnpm exec vitest run packages/shared/src/env-file.spec.ts
 ```
 
-Production invariants, asserted by `scripts/validate-compose-prod.mjs` in the `docker` CI job:
+### OTP: how the two compose files combine
 
-- Postgres, Redis and the API publish **no** host ports; only the web tier is reachable.
-- `NODE_ENV=production` in every service; no `ALLOW_DEV_LOGIN`, no `fake`/`console` SMS, no
-  console email outbox.
-- Migrations run as the owner role (`MIGRATION_DATABASE_URL`); the API and the worker run as
-  `abhyas_app`, which cannot rewrite or erase `audit_logs`.
-- `EMAIL_PROVIDER` is required and cannot be `console`; `EMAIL_PROVIDER=smtp` additionally
-  requires `SMTP_URL`, and the transport still refuses to send until real delivery is wired.
-- Every secret is required by name (`${VAR:?message}`), so rendering the file without one fails
-  before any container starts. A default secret is therefore impossible to deploy.
-- Named volumes only; no bind mounts of host paths.
-- The web port is published on **loopback only** (`127.0.0.1:${WEB_PORT:-3000}:3000`).
-  Docker writes its own iptables rules for a published port, so a port bound on `0.0.0.0` is
-  reachable from the internet even when `ufw` says otherwise — the firewall never sees that
-  traffic. Only the host's Nginx may reach the web tier, and it connects to `127.0.0.1`.
-  `scripts/validate-compose-prod.mjs` fails the `docker` job for any published port that is
-  not loopback.
-- Migrations run as a one-shot service that the API waits on, so a replica never serves against
-  an unmigrated schema.
+`docker-compose.otp.yml` is the *development and CI* overlay that turns OTP on with a fake
+provider and a fixed code; it is never used in production (`scripts/validate-compose-prod.mjs`
+refuses it, and the API refuses the fake provider in production at boot). In production OTP is
+turned on with `OTP_ENABLED=true` in `.env.prod` plus the DLT and gateway values above; the prod
+compose passes all of them to the API, the web tier and the worker. Leave `OTP_ENABLED` unset or
+`false` and the mobile screens answer 404 and no code is ever sent.
 
-## Planned edge and storage
+## 3. Migrations
 
-Nginx will terminate TLS, serve the Next.js static assets and rate-limit the auth endpoints; it
-belongs with the hardening phase. Object storage will hold question media in phase 4: the API
-issues presigned upload/download URLs and never proxies bytes. Both are drawn here because they
-change the deployment shape, and neither exists yet — they are listed as known gaps in
-`PROGRESS.md`.
+Migrations are plain SQL in `apps/api/prisma/migrations`, applied **in directory-name order**,
+**forward-only**: there is no down migration and `migrate deploy` never edits an applied one.
+They must run as the role that owns the tables (`MIGRATION_DATABASE_URL`, i.e. `POSTGRES_USER`),
+not `abhyas_app`: `20270301000000_test_question_pinning` disables and re-creates a trigger on
+`test_questions`, which needs table ownership.
 
-## CI mapping
+The full list, in order:
 
-| Concern | Job |
+```
+20250101000000_init
+20250201000000_identity_foundation
+20250301000000_auth_sessions
+20250401000000_session_access_tokens
+20250501000000_auth_lifecycle
+20250601000000_user_management
+20250701000000_exam_catalog
+20250801000000_settings_and_audit
+20250901000000_media_assets
+20251001000000_questions
+20251101000000_question_import
+20251201000000_question_option_latex
+20260101000000_otp
+20260201000000_mobile_identity
+20260401000000_reauthentication
+20260501000000_account_linking
+20260601000000_coins
+20260701000000_daily_rewards
+20260801000000_coin_ledger_hardening
+20260901000000_coin_admin_jobs
+20261001000000_email_grant_identity
+20261101000000_coin_write_permission
+20261201000000_coin_admin_requests
+20270101000000_tests_and_enrollments
+20270201000000_attempts
+20270301000000_test_question_pinning
+```
+
+`docker/postgres-init/01-app-role.sql` creates the `abhyas_app` role in development and CI. On a
+production host create that role once yourself (or run the same SQL as the owner), before the
+first `DATABASE_URL` boot; it is not superuser and cannot rewrite `audit_logs`.
+
+## 4. Order of operations
+
+1. **Back up first** (D3 will automate; for now §7).
+2. `docker compose -f docker-compose.prod.yml --env-file .env.prod config >/dev/null` — this
+   fails on any missing required variable before anything starts.
+3. `docker compose -f docker-compose.prod.yml --env-file .env.prod pull` (base images) and
+   `docker compose -f docker-compose.prod.yml --env-file .env.prod build`.
+4. `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d postgres redis` and wait
+   for both health checks to report healthy.
+5. `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm migrations`.
+6. Seed the first administrator (§5).
+7. `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d` (api, web, worker).
+8. Verify (§6).
+
+The API waits for Postgres, Redis and a successful migrations run; the web tier waits for the API
+health check; the worker waits for Postgres, Redis and the API health check. Nothing needs a
+manual sleep.
+
+## 5. The first administrator, once
+
+The seed is idempotent: if **any** administrator exists it creates nothing, and if the named
+address exists it changes nothing — it never resets a password and never creates a second
+administrator (`apps/api/src/seed/seed-admin.ts`, `admin-already-exists` / `user-already-exists`).
+That is also why the variables below must be removed afterwards: they are a one-time credential.
+
+1. Put `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` (12+ chars, a letter and a digit), optionally
+   `SEED_ADMIN_NAME`, and `SEED_ADMIN_CONFIRM=create-first-admin` in `.env.prod`.
+2. Run the seed against the API image:
+   `docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm --entrypoint sh api -c 'cd /repo/apps/api && node node_modules/prisma/build/index.js migrate deploy >/dev/null && node dist/seed/cli.js'`
+   — or, if the API image keeps the CLI entry point elsewhere, the same command as
+   `pnpm db:seed:admin` inside a one-off container with the API's environment.
+3. Sign in at `https://<host>/login` with those credentials.
+4. **Change the password** from `/account` immediately (the account page's "Change password").
+5. **Remove `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`, `SEED_ADMIN_NAME` and
+   `SEED_ADMIN_CONFIRM` from `.env.prod`**, then `docker compose ... up -d --force-recreate api`
+   so no running container holds them. Re-running the seed later is harmless, but the values
+   must not stay where a backup or a `docker inspect` can read them.
+
+## 6. Verification checklist after deploy
+
+- `curl -fsS http://127.0.0.1:${WEB_PORT:-3000}/` → 200, and the health panel shows the API.
+- `docker compose exec api node -e "fetch('http://127.0.0.1:3001/health').then(async r=>{console.log(r.status, await r.text())})"`
+  → 200 with `database` and `redis` both `ok` (`/health` answers 503 when either is down).
+- `docker compose exec worker node --input-type=module -e '...'` is already the health check;
+  read it with `docker compose ps` (worker **healthy**).
+- `docker compose logs worker | grep 'repeatable jobs registered'` — one line naming
+  `otp.purge 900s`, `coin-bulk-drain 30s`, `coin-reconciliation 86400s`,
+  `attempt-expiry-sweep 30s`.
+- `docker compose logs worker | grep 'expired swept'` — a sweep tick within 30 s of boot.
+- Sign in; the account page lists the session; the cookie is `Secure`, `HttpOnly`, `SameSite=Lax`.
+- As the administrator, create an editor; as the editor, create a question and a paper and submit
+  it; as the administrator, publish it.
+- As a student, enrol (coins are charged), take the paper on staging with the real worker, and
+  let one attempt run past its deadline with the browser closed: the result page shows
+  `Ended automatically at the deadline` and an empty answer set.
+- `curl -sI https://<host>/ | grep -i -E 'strict-transport-security|content-security-policy|x-frame-options|x-content-type-options|referrer-policy'`
+  — the headers from `apps/web/src/lib/security-headers.ts` are present.
+- The Turnstile widget renders with the real site key (not the "test mode" line), and a sign-in
+  with a wrong password is refused normally.
+- Rate limits keyed by the real client address: from two different public addresses, the same
+  limit is not shared (decision 0055). Until D2's Nginx overwrites `X-Real-IP`, per-IP limits
+  collapse onto the web container's address — secure, but shared.
+- Nothing secret in the process table: `docker inspect` shows only variable names with values,
+  so the `.env.prod` file is the only copy.
+
+## 7. Rollback
+
+- **The real rollback is restore.** Migrations are forward-only; a code rollback to an older
+  image against a newer schema is not supported and can fail at runtime.
+- Before every deploy, and before every migrations run, take a backup:
+  `docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > backup-$(date +%Y%m%dT%H%M).dump`
+  (run it as the owner role; keep it off the host). D3 automates this and adds a restore test.
+- If a deploy fails **before** migrations: `docker compose ... up -d --force-recreate` with the
+  previous image tag.
+- If it fails **after** migrations: restore the dump into a fresh database and start the previous
+  image against it. There is no partial down-migration, and `migrate resolve` only marks a
+  migration as applied — it does not undo it.
+- Redis is a queue, not a system of record: losing the volume loses queued jobs; the repeatable
+  jobs are re-declared by the worker on its next boot. The coins ledger and every exam fact live
+  in Postgres.
+
+## 8. What D2, D3 and D4 add
+
+- **D2 (edge):** Nginx in front of the web port, TLS termination, and the header rewrite this
+  document assumes (`X-Real-IP` set to `$remote_addr`, never appended). The web port is already
+  loopback-only so only that proxy can reach it.
+- **D3 (data):** scheduled `pg_dump` to off-host storage, retention, a restore test in a scratch
+  database, and the same for the Redis append-only file.
+- **D4 (launch):** real SMTP delivery, the S3 presigned-URL integration test against the real
+  provider, the OTP staging test with a real number and DLT template, monitoring and alerting,
+  and making the repository private again.
+
+## 9. Launch blockers (from `docs/ROADMAP.md`)
+
+| Blocker | State |
 | --- | --- |
-| Images build from the repository | `docker` |
-| Production topology has no shortcuts | `docker` (`validate-compose-prod.mjs`) |
-| The stack comes up and serves health and docs | `compose-smoke` |
-| A user can open the home page against the running stack | `e2e` |
+| Real SMS provider + DLT template, manual staging test (`docs/otp-enable-runbook.md` §7) | **Open** — OTP is off by default and has never sent a real message |
+| Nginx overwriting (not appending) the client-address header; `TRUST_PROXY` naming it | **Partly done** — the application rule and the compose wiring are in place (`172.31.0.10/32`, `x-real-ip`); the proxy itself is D2 |
+| Web port loopback-only | **Done** — `127.0.0.1:${WEB_PORT:-3000}:3000` in `docker-compose.prod.yml` |
+| Real SMTP delivery | **Open** — the SMTP sender validates `SMTP_URL` and then refuses to deliver (decision 0027); `SMTP_URL` is now passed by the prod compose |
+| S3 presigned URL integration test against the real provider | **Open** — no integration test against a real bucket |
 
+## 10. What D1 changed
 
-## The proxy in front of the API, and the client address
-
-Per-IP limits are only as good as the address they count, so the address is resolved in one
-place and believed only when a proxy is named (decision 0052).
-
-**The API.** `TRUST_PROXY` is unset by default, and then every forwarding header is ignored:
-the socket address is the client. It accepts a hop count (1–10) or a comma-separated list of
-addresses and CIDR blocks. `true` and `*` are refused at boot in production, and so is any
-block wider than the platform can call a proxy: `/0`, an IPv4 block below `/8`, or an IPv6
-block below `/32` is refused, because a range that big lets a caller choose the address its
-counters are keyed by. Entries are validated as real addresses with `net.isIP`, not by shape.
-
-`docker-compose.prod.yml` names **exactly one** address: the web container's fixed address on
-the compose network, as a `/32`. It never names a subnet, and `scripts/validate-compose-prod.mjs`
-fails the `docker` job if it does, or if the web service loses its fixed address.
-
-**The web tier.** Behind Nginx on the host, one hop counts as the edge:
-
-```yaml
-TRUST_PROXY: '1'    # web: exactly one proxy — the host Nginx — in front of it
-```
-
-Here `TRUST_PROXY` is a hop count and nothing else; production refuses `true`, `*` and an
-address list, because a Next.js route handler cannot see the socket's peer and therefore
-cannot check an address. **One header, named, with no fallback**: `TRUST_CLIENT_IP_HEADER`
-(`x-real-ip` by default) is the only header either tier reads, and the web tier forwards the
-address under that same name (decision 0055). Reading `X-Real-IP` *or* `X-Forwarded-For` would
-undo the choice, because the header the edge does not write is the one a browser can set
-itself. A production boot that names a proxy must name the header too. With `x-forwarded-for`
-the tier reads the entry `hops` in from the right of the chain, so the left-most entry — the
-one a browser can prepend — is never read.
-
-**Every value is validated before it is used.** Both tiers drop anything that is not exactly
-one `net.isIP` address, so garbage, a list, an oversized value, a newline or a spreadsheet
-formula never reaches a Redis key, an audit row or a log line.
-
-So the edge must both **overwrite** the headers and be **named**:
-
-```nginx
-# Nginx, on the server that fronts web:3000 and api:3001
-proxy_set_header X-Real-IP         $remote_addr;   # the one header the tiers read
-proxy_set_header X-Forwarded-For   $remote_addr;   # $remote_addr, NOT $proxy_add_x_forwarded_for
-proxy_set_header X-Forwarded-Proto $scheme;
-```
-
-The two headers are written the same way so a later switch of `TRUST_CLIENT_IP_HEADER` does
-not need an Nginx change, but only the configured one is ever read — and it must be
-`$remote_addr`, overwritten rather than appended.
-
-`$proxy_add_x_forwarded_for` appends what the browser sent, which is the one thing that must
-not happen. With `proxy_set_header X-Forwarded-For $remote_addr` the browser's own value is
-discarded and the address Nginx actually accepted the connection from is the only one either
-tier can see.
-
-**Why unset is a safe failure, and a shared one.** With `TRUST_PROXY` unset the socket address
-is used. Behind a proxy that is the proxy's own address, so every visitor shares one per-IP
-counter: the limits still apply, they just apply to everyone at once. That is degraded, not
-unsafe. The unsafe direction — believing whatever header arrives — is refused at boot in
-production, and the browser suite is the only thing allowed to choose an address, through
-`TRUST_FORWARDED_IP_FOR_TESTS`, which production also refuses.
-
-
-## Turnstile keys, and what the widget does in development
-
-`TURNSTILE_SITE_KEY` is Cloudflare's always-pass **test** site key in development and CI
-(`1x0000000000000000000000000000000AA`, set in `.env.example`, `docker-compose.yml` and
-`.github/workflows/ci.yml`). `apps/web/src/lib/config.ts` puts the web tier in test mode when it sees
-one, and in that mode `components/turnstile-field.tsx` submits the fixed development token without
-loading Cloudflare's script at all: the widget cannot add anything to an always-pass check, and in
-CI its iframe appeared late enough to move the forms below it after a click had been computed. The
-page now says "Human check is in test mode." where the widget would be.
-
-Production must set the real `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. The web tier refuses a
-Cloudflare test site key in production and the API's environment validator refuses the test secret,
-so a production deploy cannot carry these values by accident. With a real key the widget renders
-normally; if Cloudflare reports 400020 in production, the site key and the secret belong to
-different widgets or the domain is not allow-listed for that widget.
+- `docker-compose.prod.yml` now passes the OTP names (off by default), `SMTP_URL` and
+  `MEDIA_ORIGIN`, gives Redis a named volume with `appendonly yes` and `appendfsync everysec`, and
+  makes the worker wait for the API's health check.
+- The worker's boot line names each repeatable job and its interval.
+- `packages/shared/src/env-file.spec.ts` checks a candidate `.env.prod` with the real validators,
+  printing names and messages only.
