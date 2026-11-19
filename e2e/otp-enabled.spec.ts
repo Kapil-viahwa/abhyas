@@ -83,6 +83,15 @@ test('signs in with a code on a later visit, on the same session as a password w
 });
 
 test('links a second number from the account page, proving it with a confirmation code', async ({ page }) => {
+  // TEMPORARY DIAGNOSTIC (removed in the commit that fixes the failure): which form posts, and
+  // what the confirm form looks like at the moment the URL is expected to change.
+  const posts: string[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST') {
+      posts.push(new URL(request.url()).pathname);
+    }
+  });
+
   await register(page, nextNumber());
   const added = nextNumber();
 
@@ -103,6 +112,38 @@ test('links a second number from the account page, proving it with a confirmatio
   await confirm.locator('input[name="code"]').fill(CODE);
   await confirm.locator('input[name="reauthCode"]').fill(CODE);
   await confirm.locator('button[type="submit"]').click();
+
+  // TEMPORARY DIAGNOSTIC (removed once the cause is named): the page's forms, the button's own
+  // markup, what actually sits at the click point, and every control's validity.
+  const diagnostic = await page.evaluate(() => {
+    const form = document.querySelector('form[action="/api/account/mobile/link/verify"]');
+    const button = form === null ? null : form.querySelector('button[type="submit"]');
+    const rect = button === null ? null : button.getBoundingClientRect();
+    const hit =
+      rect === null
+        ? null
+        : document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    const controls = Array.from(form === null ? [] : form.querySelectorAll('input')).map((input) => ({
+      name: input.name,
+      type: input.type,
+      valueLength: input.value.length,
+      valid: input.checkValidity(),
+      message: input.validationMessage,
+    }));
+
+    return {
+      url: location.href,
+      forms: Array.from(document.forms).map((entry) => entry.getAttribute('action')),
+      formCount: document.forms.length,
+      formPresent: form !== null,
+      buttonHtml: button === null ? null : button.outerHTML,
+      hit: hit === null ? null : `${hit.tagName}: ${(hit.textContent ?? '').trim().slice(0, 30)}`,
+      controls,
+    };
+  });
+
+  // eslint-disable-next-line no-console
+  console.log(`OTP-DIAG posts=${posts.join(',')} ${JSON.stringify(diagnostic)}`);
 
   await expect(page).toHaveURL(/\/account\?mobile=linked/);
   await expect(page.getByText('Your mobile number was added.')).toBeVisible();
