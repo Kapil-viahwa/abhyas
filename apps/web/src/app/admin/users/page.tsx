@@ -118,7 +118,10 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
           return (
             <li key={user.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div className="min-w-0 space-y-1">
-                <Link href={`/admin/users/${user.id}`} className="block truncate text-sm text-sky-300 hover:text-sky-200">
+                <Link
+                  href={`/admin/users/${user.id}`}
+                  className="block min-h-11 truncate text-sm text-sky-300 hover:text-sky-200 sm:min-h-0"
+                >
                   {user.email ?? 'No email linked'}
                 </Link>
                 <p className="truncate text-xs text-slate-500">

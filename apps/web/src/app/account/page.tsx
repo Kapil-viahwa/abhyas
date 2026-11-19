@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { FieldError, Notice, authLinkClass, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../components/auth-shell';
 import { StudentNav } from '../../components/student-shell';
+import { controlTapTargetClass } from '../../components/tap-target';
 import { TurnstileField } from '../../components/turnstile-field';
 import { webConfig } from '../../lib/config';
 import { csrfFromCookies, loadSession, loadSessions } from '../../lib/session';
@@ -285,7 +286,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
           </label>
 
           <button
-            className="rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-rose-400"
+            className={`${controlTapTargetClass} rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-rose-400`}
             type="submit"
           >
             Deactivate
