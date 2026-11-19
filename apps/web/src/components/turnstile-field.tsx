@@ -54,7 +54,11 @@ export function TurnstileField({ siteKey, testMode }: { readonly siteKey: string
   return (
     <div className="space-y-2">
       <input type="hidden" name="turnstileToken" value={token} />
-      <div ref={container} data-testid="turnstile-widget" />
+      {/* The widget is an iframe about 65px tall that appears only once Cloudflare's script
+          loads. Reserving that height keeps the form below it still: without it the page grows
+          by a widget's height mid-interaction, and a click computed a moment earlier lands
+          above the button the person aimed at. */}
+      <div ref={container} data-testid="turnstile-widget" className="min-h-[65px]" />
       {testMode ? <p className="text-xs text-slate-500">Human check is in test mode.</p> : null}
     </div>
   );
