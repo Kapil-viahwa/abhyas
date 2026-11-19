@@ -24,9 +24,17 @@ export function TurnstileField({ siteKey, testMode }: { readonly siteKey: string
   const [token, setToken] = useState(testMode ? TURNSTILE_TEST_TOKEN : '');
 
   useEffect(() => {
+    // In test mode the token is the fixed development one and the widget cannot change it, so
+    // loading Cloudflare's script would only add an iframe that grows the page after it renders
+    // (and the console error the always-pass test key produces). A real site key always renders
+    // the widget.
+    if (testMode) {
+      return undefined;
+    }
+
     const mount = container.current;
     if (mount === null) {
-      return;
+      return undefined;
     }
 
     const script = document.createElement('script');
@@ -36,11 +44,7 @@ export function TurnstileField({ siteKey, testMode }: { readonly siteKey: string
       (window as unknown as TurnstileWindow).turnstile?.render(mount, {
         sitekey: siteKey,
         callback: (value: string) => {
-          // In test mode the API's verifier only knows the fixed development token, so
-          // the widget is shown but never replaces it. A real site key always wins.
-          if (!testMode) {
-            setToken(value);
-          }
+          setToken(value);
         },
       });
     };
@@ -49,13 +53,18 @@ export function TurnstileField({ siteKey, testMode }: { readonly siteKey: string
     return () => {
       script.remove();
     };
-  }, [siteKey]);
+  }, [siteKey, testMode]);
 
   return (
     <div className="space-y-2">
       <input type="hidden" name="turnstileToken" value={token} />
-      <div ref={container} data-testid="turnstile-widget" />
-      {testMode ? <p className="text-xs text-slate-500">Human check is in test mode.</p> : null}
+      {testMode ? (
+        <p className="text-xs text-slate-500">Human check is in test mode.</p>
+      ) : (
+        // The widget is an iframe about 65px tall that appears only once Cloudflare's script
+        // loads. Reserving that height keeps the form below it still while it renders.
+        <div ref={container} data-testid="turnstile-widget" className="min-h-[65px]" />
+      )}
     </div>
   );
 }

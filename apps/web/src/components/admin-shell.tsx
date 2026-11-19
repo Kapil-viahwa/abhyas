@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement, ReactNode } from 'react';
 
 import { secondaryButtonClass } from './auth-shell';
+import { tapTargetClass } from './tap-target';
 
 /**
  * The chrome every administration screen shares. It is deliberately small and wraps on
@@ -31,17 +32,17 @@ export function AdminNav({
   ];
 
   return (
-    <nav className="flex flex-wrap items-center gap-2 text-sm">
+    <nav aria-label="Administration" className="flex flex-wrap items-center gap-2 text-sm">
       {links.map((link) => (
         <Link
           key={link.href}
           href={link.href}
           aria-current={current === link.href ? 'page' : undefined}
-          className={
+          className={`${tapTargetClass} ${
             current === link.href
               ? 'rounded-lg bg-sky-500/10 px-3 py-1.5 font-medium text-sky-300 ring-1 ring-sky-500/30'
               : 'rounded-lg px-3 py-1.5 text-slate-300 hover:text-white'
-          }
+          }`}
         >
           {link.label}
         </Link>
@@ -49,7 +50,7 @@ export function AdminNav({
 
       <span className="grow" />
 
-      <Link href="/account" className="px-2 py-1.5 text-slate-400 hover:text-slate-200">
+      <Link href="/account" className={`${tapTargetClass} px-2 py-1.5 text-slate-400 hover:text-slate-200`}>
         Account
       </Link>
       <form action="/api/auth/logout" method="post">
@@ -78,7 +79,7 @@ export function AdminPage({
   readonly children: ReactNode;
 }): ReactElement {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-12">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-12">
       <AdminNav csrf={csrf} current={current} permissions={permissions} />
 
       <header className="space-y-1">

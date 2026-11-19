@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { Notice } from '../../components/auth-shell';
 import { StudentNav } from '../../components/student-shell';
+import { tapTargetClass } from '../../components/tap-target';
 import { loadSession } from '../../lib/session';
 import {
   enrollmentLabel,
@@ -50,7 +51,7 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
   const mine: readonly EnrollmentView[] = enrollments?.items ?? [];
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
+    <main id="main" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
@@ -95,7 +96,7 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
                 {enrollment.status === 'OPEN' ? (
                   <Link
                     href={`/attempt/${enrollment.id}`}
-                    className="text-sm text-sky-400 hover:text-sky-300"
+                    className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}
                     data-testid="enrollment-open-attempt"
                   >
                     Open attempt
@@ -103,7 +104,7 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
                 ) : (
                   <Link
                     href={`/attempt/${enrollment.id}`}
-                    className="text-sm text-sky-400 hover:text-sky-300"
+                    className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}
                     data-testid="enrollment-result"
                   >
                     Result
@@ -152,7 +153,7 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
                 </span>
                 <Link
                   href={`/tests/${test.id}`}
-                  className="rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-200"
+                  className={`${tapTargetClass} rounded-lg border border-slate-700 px-3 py-1 text-sm text-slate-200`}
                   data-testid="student-test-open"
                 >
                   View
@@ -169,9 +170,9 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
         </ul>
 
         {catalog !== null && catalog.pages > 1 ? (
-          <nav className="flex items-center justify-between text-sm">
+          <nav aria-label="Test pages" className="flex items-center justify-between text-sm">
             {catalog.page > 1 ? (
-              <Link href={`/tests?page=${String(catalog.page - 1)}`} className="text-sky-400 hover:text-sky-300">
+              <Link href={`/tests?page=${String(catalog.page - 1)}`} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
                 Previous
               </Link>
             ) : (
@@ -181,7 +182,7 @@ export default async function StudentTestsPage({ searchParams }: PageProps): Pro
               Page {String(catalog.page)} of {String(catalog.pages)}
             </span>
             {catalog.page < catalog.pages ? (
-              <Link href={`/tests?page=${String(catalog.page + 1)}`} className="text-sky-400 hover:text-sky-300">
+              <Link href={`/tests?page=${String(catalog.page + 1)}`} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
                 Next
               </Link>
             ) : (

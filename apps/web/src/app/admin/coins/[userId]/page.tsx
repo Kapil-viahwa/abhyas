@@ -5,6 +5,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage, StatusBadge } from '../../../../components/admin-shell';
 import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../../../components/auth-shell';
+import { tapTargetClass } from '../../../../components/tap-target';
 import { getUser } from '../../../../lib/admin-api';
 import {
   COIN_LEDGER_TYPES,
@@ -200,7 +201,7 @@ export default async function AdminAccountCoinsPage({ params, searchParams }: Pa
               id="type"
               name="type"
               defaultValue={type}
-              className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+              className="min-h-11 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100 sm:min-h-0"
             >
               {COIN_LEDGER_TYPES.map((value) => (
                 <option key={value} value={value}>
@@ -208,7 +209,10 @@ export default async function AdminAccountCoinsPage({ params, searchParams }: Pa
                 </option>
               ))}
             </select>
-            <button className="rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200" type="submit">
+            <button
+              className="min-h-11 rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 sm:min-h-0"
+              type="submit"
+            >
               Filter
             </button>
           </form>
@@ -256,7 +260,7 @@ export default async function AdminAccountCoinsPage({ params, searchParams }: Pa
 
           <div className="flex items-center gap-3">
             {page > 1 ? (
-              <Link href={pageHref(account.id, type, page - 1)} className="text-sky-400 hover:text-sky-300">
+              <Link href={pageHref(account.id, type, page - 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
                 Previous
               </Link>
             ) : (
@@ -266,7 +270,7 @@ export default async function AdminAccountCoinsPage({ params, searchParams }: Pa
               Page {page} of {pages}
             </span>
             {page < pages ? (
-              <Link href={pageHref(account.id, type, page + 1)} className="text-sky-400 hover:text-sky-300">
+              <Link href={pageHref(account.id, type, page + 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
                 Next
               </Link>
             ) : (
@@ -277,13 +281,13 @@ export default async function AdminAccountCoinsPage({ params, searchParams }: Pa
       </section>
 
       <div className="flex flex-wrap gap-3 text-sm">
-        <Link href="/admin/coins" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/coins" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Search another account
         </Link>
-        <Link href="/admin/coins/bulk" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/coins/bulk" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Bulk assignment
         </Link>
-        <Link href={`/admin/users/${account.id}`} className="text-sky-400 hover:text-sky-300">
+        <Link href={`/admin/users/${account.id}`} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Open the account
         </Link>
       </div>

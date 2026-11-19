@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../../components/admin-shell';
 import { inputClass, labelClass, Notice } from '../../../../components/auth-shell';
+import { tapTargetClass, controlTapTargetClass } from '../../../../components/tap-target';
 import { questionPreview } from '../../../../lib/question-preview';
 import { listQuestions } from '../../../../lib/questions-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../../lib/session';
@@ -68,6 +69,8 @@ function PatternField({
   readonly max?: number | undefined;
   readonly testId: string;
 }): ReactElement {
+  const errorId = `${name}-error`;
+
   return (
     <label className={labelClass}>
       {label}
@@ -80,9 +83,15 @@ function PatternField({
         step={step}
         min={min}
         max={max}
+        aria-invalid={error !== undefined}
+        aria-describedby={error === undefined ? undefined : errorId}
         data-testid={testId}
       />
-      {error === undefined ? null : <span className="mt-1 block text-xs text-rose-300">{error}</span>}
+      {error === undefined ? null : (
+        <span id={errorId} role="alert" className="mt-1 block text-xs text-rose-300">
+          {error}
+        </span>
+      )}
     </label>
   );
 }
@@ -203,7 +212,7 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
         title="Test"
         subtitle="That paper is not there, or it belongs to another editor."
       >
-        <Link href="/editor/tests" className="text-sm text-sky-400 hover:text-sky-300">
+        <Link href="/editor/tests" className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}>
           Back to the list
         </Link>
       </AdminPage>
@@ -265,7 +274,7 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
         <span data-testid="test-status" className={`rounded-full px-2 py-0.5 text-xs ring-1 ${statusTone(test.status)}`}>
           {test.status.toLowerCase()}
         </span>
-        <Link href="/editor/tests" className="text-sm text-slate-400 hover:text-slate-200">
+        <Link href="/editor/tests" className={`${controlTapTargetClass} text-sm text-slate-400 hover:text-slate-200`}>
           Back to the list
         </Link>
       </div>
@@ -393,11 +402,11 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
                 <input
                   name="search"
                   defaultValue={search}
-                  className="ml-2 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+                  className="ml-2 min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm sm:min-h-0"
                   placeholder="Search text"
                 />
               </label>
-              <button type="submit" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200">
+              <button type="submit" className={`${controlTapTargetClass} rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200`}>
                 Search
               </button>
             </form>

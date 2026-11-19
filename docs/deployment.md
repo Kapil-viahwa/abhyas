@@ -162,17 +162,18 @@ production, and the browser suite is the only thing allowed to choose an address
 `TRUST_FORWARDED_IP_FOR_TESTS`, which production also refuses.
 
 
-## Turnstile keys, and the 400020 error in the gallery
+## Turnstile keys, and what the widget does in development
 
-The screenshot gallery loads sign-in, registration and password-reset pages against the CI stack, which
-runs Cloudflare's always-pass **test** site key (`TURNSTILE_SITE_KEY=1x0000000000000000000000000000000AA`,
-set in `.env.example`, `docker-compose.yml` and `.github/workflows/ci.yml`). With the test key the widget
-still tries to reach Cloudflare and logs `Failed to load resource: 400` and `[Cloudflare Turnstile] Error:
-400020` in the browser console. **That is expected in development and CI**: the specs pre-fill the test
-token, and the form submits.
+`TURNSTILE_SITE_KEY` is Cloudflare's always-pass **test** site key in development and CI
+(`1x0000000000000000000000000000000AA`, set in `.env.example`, `docker-compose.yml` and
+`.github/workflows/ci.yml`). `apps/web/src/lib/config.ts` puts the web tier in test mode when it sees
+one, and in that mode `components/turnstile-field.tsx` submits the fixed development token without
+loading Cloudflare's script at all: the widget cannot add anything to an always-pass check, and in
+CI its iframe appeared late enough to move the forms below it after a click had been computed. The
+page now says "Human check is in test mode." where the widget would be.
 
-Production must set the real `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. `apps/web/src/lib/config.ts`
-refuses a Cloudflare test site key in production, and the API's environment validator refuses the test
-secret, so a production deploy cannot carry these values by accident. With a real key the widget renders
-normally and the console errors should not appear; if they do in production, the site key and the secret
-belong to different Turnstile widgets or the domain is not allow-listed for that widget.
+Production must set the real `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY`. The web tier refuses a
+Cloudflare test site key in production and the API's environment validator refuses the test secret,
+so a production deploy cannot carry these values by accident. With a real key the widget renders
+normally; if Cloudflare reports 400020 in production, the site key and the secret belong to
+different widgets or the domain is not allow-listed for that widget.

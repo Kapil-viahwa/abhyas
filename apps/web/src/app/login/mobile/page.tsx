@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactElement } from 'react';
 
-import { AuthShell, FieldError, Notice, buttonClass, inputClass, labelClass } from '../../../components/auth-shell';
+import { AuthShell, FieldError, Notice, authLinkClass, buttonClass, inputClass, labelClass } from '../../../components/auth-shell';
 import { ResendButton } from '../../../components/resend-button';
 import { TurnstileField } from '../../../components/turnstile-field';
 import { webConfig } from '../../../lib/config';
@@ -44,7 +44,7 @@ export default async function MobileLoginPage({ searchParams }: PageProps): Prom
       subtitle={sent ? `We sent a six-digit code to ${destination}.` : 'We will text you a single-use code.'}
       footer={
         <p>
-          Prefer your password? <Link href="/login">Sign in with email</Link>
+          Prefer your password? <Link href="/login" className={authLinkClass}>Sign in with email</Link>
         </p>
       }
     >
@@ -54,7 +54,7 @@ export default async function MobileLoginPage({ searchParams }: PageProps): Prom
           <input type="hidden" name="destination" value={destination} />
           <Notice message={`A code was sent to ${destination}.`} />
           <Notice message={typeof params.resent === 'string' ? 'A new code is on its way.' : undefined} />
-          <FieldError message={error} />
+          <FieldError id="mobile-login-error" message={error} />
 
           <label className={labelClass}>
             Six-digit code
@@ -67,6 +67,8 @@ export default async function MobileLoginPage({ searchParams }: PageProps): Prom
               pattern="[0-9]{6}"
               maxLength={6}
               required
+              aria-invalid={error !== undefined}
+              aria-describedby={error === undefined ? undefined : 'mobile-login-error'}
             />
           </label>
 
@@ -82,11 +84,19 @@ export default async function MobileLoginPage({ searchParams }: PageProps): Prom
       ) : (
         <form action="/api/auth/mobile/login" method="post" className="space-y-4">
           <input type="hidden" name="csrfToken" value={csrf} />
-          <FieldError message={error} />
+          <FieldError id="mobile-login-error" message={error} />
 
           <label className={labelClass}>
             Mobile number
-            <input className={inputClass} name="destination" type="tel" autoComplete="tel" required />
+            <input
+              className={inputClass}
+              name="destination"
+              type="tel"
+              autoComplete="tel"
+              required
+              aria-invalid={error !== undefined}
+              aria-describedby={error === undefined ? undefined : 'mobile-login-error'}
+            />
           </label>
 
           <TurnstileField siteKey={config.turnstileSiteKey} testMode={config.turnstileTestMode} />

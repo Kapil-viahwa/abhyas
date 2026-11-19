@@ -131,3 +131,59 @@ not a regression.
 
 The Turnstile `400020` console errors remain on the auth pages, as expected with the always-pass test key
 (`docs/deployment.md`, "Turnstile keys"). No new console errors appeared.
+
+
+
+
+## After F2
+
+The last full measurement on this branch is the gallery run on `e834a72`, whose log prints, verbatim:
+
+```
+GALLERY-SUMMARY 70 shots, 0 skipped
+GALLERY-A11Y    captures=70, unlabeled inputs=0, images without alt=0, overflow=0, phone screens under 44x44=1
+GALLERY-A11Y2   phone: stand-alone below 44x44=0, inline exempt=2, controls without a focus style=0 of 382
+                that took focus (26 counted apart), error fields without aria-describedby=0 of 6;
+                not exactly one h1=0, not exactly one main=0
+```
+
+| Count | Before (main) | After F1 | After F2 |
+| --- | --- | --- | --- |
+| Screenshots captured | 68 of 70 | 70 of 70 | **70 of 70** |
+| Screens skipped | 2 | 0 | **0** |
+| Inputs without a label | 7 | 0 | **0** |
+| Images without `alt` | 0 | 0 | **0** |
+| Horizontal overflow | 0 | 0 | **0** |
+| Stand-alone controls under 44×44 on the phone | not measured | not measured | **0** (23 before the repair pass) |
+| Phone screens whose smallest target is under 44×44 | 27 | 24 | **1** — `04-editor/home`, whose smallest is the paragraph link "Open the tests" (103×16), the exemption this unit names |
+| Controls with no visible focus style | not measured | not measured | **0 of 382** that took focus |
+| Error fields without `aria-describedby` | not measured | not measured | **0 of 6** |
+| Pages without exactly one `h1` / one `main` | not measured | not measured | **0 / 0** |
+
+**Nothing is left under the target except the named exemption.** The two inline exemptions are the
+two paragraph links on `04-editor/home` ("Open the catalog" and "Open the tests"), prose that stays
+prose by this unit's own rule. The five the previous run still found — the account page's
+"Deactivate" button (117×36) on `03-student/account` and on the same page when an editor is refused,
+and the three `05-admin/users` row links (281×20) — took the shared height in `e834a72` and measure
+above the target here.
+
+**Focus: nothing left to call unfixed.** Every one of the 382 controls that the phone screens could
+actually focus changed its computed outline or box-shadow when focused with
+`focus({ focusVisible: true })`. The 26 the walk could not focus are the catalog tree's edit forms,
+which sit inside closed `<details>` and cannot take focus until the row is opened — a rendering
+choice, not a missing style, and the walk now counts them apart instead of failing them.
+
+**Landmarks and headings: no page violates either rule.** `attempt-unavailable` now renders an `h1`
+like the rest of the attempt page, and `app/not-found.tsx` gives the 404 the `<main id="main">` that
+Next's built-in page omitted (same wording, same status).
+
+**The OTP e2e was red for a real reason, and it is fixed.** A temporary diagnostic in the spec
+printed the confirm form's state at the failure: every control valid, the click point resolving to
+the button, and **no POST to `/api/account/mobile/link/verify` at all** — the click never reached
+the form. Cloudflare's Turnstile widget is an iframe that appears only when its script loads, and
+the account page carries two of them above the confirm form; they grew the page under a click that
+had been computed a moment earlier. `components/turnstile-field.tsx` now does not load the widget at
+all in test mode (the always-pass key cannot add anything to the token it already has), which
+removes both the shift and the `400020` console noise; a real site key still renders the widget.
+That is a product fix: the diagnostic is deleted and `e2e/otp-enabled.spec.ts` is back to what it
+was before this unit.

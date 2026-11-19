@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { secondaryButtonClass } from '../../components/auth-shell';
+import { tapTargetClass } from '../../components/tap-target';
 import { csrfFromCookies, loadRoleSession } from '../../lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +16,7 @@ export default async function EditorPage(): Promise<ReactElement> {
   const csrf = await csrfFromCookies();
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-12">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-12">
       <header className="space-y-1">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Content</p>
         <h1 className="text-2xl font-semibold text-white">Editor area</h1>
@@ -44,8 +45,8 @@ export default async function EditorPage(): Promise<ReactElement> {
         <p className="mt-3 text-xs text-slate-500">Permissions: {session.profile.permissions.join(', ') || 'none'}</p>
       </section>
 
-      <div className="flex gap-4 text-sm">
-        <Link href="/account" className="text-sky-400 hover:text-sky-300">
+      <nav aria-label="Your account" className="flex items-center gap-4 text-sm">
+        <Link href="/account" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Your account
         </Link>
         <form action="/api/auth/logout" method="post">
@@ -54,7 +55,7 @@ export default async function EditorPage(): Promise<ReactElement> {
             Sign out
           </button>
         </form>
-      </div>
+      </nav>
     </main>
   );
 }

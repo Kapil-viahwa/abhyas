@@ -56,7 +56,7 @@ export default async function CategoryPage({ params }: PageProps) {
     category.parentId === null ? undefined : catalog.categories.find((row) => row.id === category.parentId);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
       <nav aria-label="Breadcrumb" className="text-xs text-slate-500">
         <ol className="flex flex-wrap gap-2">
           <li>

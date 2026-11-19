@@ -46,6 +46,19 @@ interface Metrics {
   readonly inputsWithoutLabel: number;
   readonly horizontalOverflow: boolean;
   readonly smallestTap: { readonly width: number; readonly height: number; readonly label: string } | null;
+  // F2: the structural checks the review now tracks, all measured in the rendered page.
+  readonly h1Count: number;
+  readonly mainCount: number;
+  readonly below44: number;
+  readonly below44Labels: readonly string[];
+  readonly inlineExempt: number;
+  readonly focusChecked: number;
+  readonly focusUnfocusable: number;
+  readonly focusWithoutStyle: number;
+  readonly focusSample: readonly string[];
+  readonly alerts: number;
+  readonly errorFields: number;
+  readonly errorFieldsWithoutDescription: number;
 }
 
 interface Row extends Metrics {
@@ -62,8 +75,16 @@ interface Skipped {
   readonly reason: string;
 }
 
+interface ErrorState {
+  readonly where: string;
+  readonly alerts: number;
+  readonly fields: number;
+  readonly withoutDescription: number;
+}
+
 const rows: Row[] = [];
 const skipped: Skipped[] = [];
+const errorStates: ErrorState[] = [];
 
 test.describe.configure({ mode: 'serial' });
 
@@ -115,12 +136,114 @@ async function measure(page: Page): Promise<Metrics> {
       }
     }
 
+    // F2: stand-alone controls below 44x44. A link inside a paragraph is prose — the exemption the
+    // review names — and is counted separately rather than as a target that failed.
+    const targets = Array.from(document.querySelectorAll('a[href], button, [role="button"], select')).filter(visible);
+    const below = targets.filter((element) => {
+      const box = element.getBoundingClientRect();
+      return box.width < 44 || box.height < 44;
+    });
+    const inline = below.filter((element) => element.tagName === 'A' && element.closest('p') !== null);
+    const standalone = below.filter((element) => !inline.includes(element));
+    const describe = (element: Element): string => {
+      const text = (element.textContent ?? '').trim().replace(/\s+/g, ' ').slice(0, 30);
+      const box = element.getBoundingClientRect();
+      return `${element.tagName.toLowerCase()} "${text}" ${String(Math.round(box.width))}x${String(Math.round(box.height))}`;
+    };
+
+    // F2: does every control draw something when it takes keyboard focus? The style is sampled
+    // before and after `focus({ focusVisible: true })` — the state a Tab key produces — and the
+    // element is blurred again so the screenshot is taken exactly as the tour found it.
+    const focusable = Array.from(
+      document.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+    )
+      .filter(visible)
+      .filter((element) => !(element as HTMLInputElement).disabled)
+      .slice(0, 150);
+    const styleOf = (element: Element): string => {
+      const computed = window.getComputedStyle(element);
+      return `${computed.outlineStyle}|${computed.outlineWidth}|${computed.outlineColor}|${computed.boxShadow}`;
+    };
+    const focusSample: string[] = [];
+    let focusChecked = 0;
+    let focusUnfocusable = 0;
+    let focusWithoutStyle = 0;
+    for (const element of focusable) {
+      const before = styleOf(element);
+      (element as HTMLElement).focus({ focusVisible: true } as unknown as FocusOptions);
+      // A control inside a closed `<details>` cannot take focus at all; counting it as "no focus
+      // style" would report a rendering choice as an accessibility defect. Only what really took
+      // focus is measured, and the rest is counted apart.
+      if (document.activeElement !== element) {
+        focusUnfocusable += 1;
+        continue;
+      }
+      focusChecked += 1;
+      const after = styleOf(element);
+      if (before === after) {
+        focusWithoutStyle += 1;
+        if (focusSample.length < 10) {
+          focusSample.push(describe(element));
+        }
+      }
+    }
+    for (const element of focusable) {
+      (element as HTMLElement).blur();
+    }
+    // Focusing can scroll the page or a scrollable panel; put every scroller back so the screenshot
+    // is taken exactly as the tour found the screen.
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>('*'))) {
+      if (element.scrollLeft !== 0) {
+        element.scrollLeft = 0;
+      }
+      if (element.scrollTop !== 0) {
+        element.scrollTop = 0;
+      }
+    }
+
+    // F2: is the error state programmatically attached to its field?
+    const invalid = Array.from(document.querySelectorAll('[aria-invalid="true"]'));
+    const errorFieldsWithoutDescription = invalid.filter((field) => {
+      const target = (field.getAttribute('aria-describedby') ?? '').split(/\s+/).filter((id) => id !== '');
+      return target.length === 0 || target.some((id) => document.getElementById(id) === null);
+    }).length;
+
     return {
       title: document.title,
       imagesWithoutAlt,
       inputsWithoutLabel: fields.length - labelled,
       horizontalOverflow: root.scrollWidth > root.clientWidth + 1,
       smallestTap: smallestWidth === 0 ? null : { width: smallestWidth, height: smallestHeight, label: smallestLabel },
+      h1Count: document.querySelectorAll('h1').length,
+      mainCount: document.querySelectorAll('main').length,
+      below44: standalone.length,
+      below44Labels: standalone.slice(0, 10).map(describe),
+      inlineExempt: inline.length,
+      focusChecked,
+      focusUnfocusable,
+      focusWithoutStyle,
+      focusSample,
+      alerts: document.querySelectorAll('[role="alert"]').length,
+      errorFields: invalid.length,
+      errorFieldsWithoutDescription,
+    };
+  });
+}
+
+/** The error association on a page that is showing an error, without a screenshot. */
+async function measureErrorState(page: Page): Promise<{ alerts: number; fields: number; withoutDescription: number }> {
+  return page.evaluate(() => {
+    const invalid = Array.from(document.querySelectorAll('[aria-invalid="true"]'));
+    const withoutDescription = invalid.filter((field) => {
+      const target = (field.getAttribute('aria-describedby') ?? '').split(/\s+/).filter((id) => id !== '');
+      return target.length === 0 || target.some((id) => document.getElementById(id) === null);
+    }).length;
+    return {
+      alerts: document.querySelectorAll('[role="alert"]').length,
+      fields: invalid.length,
+      withoutDescription,
     };
   });
 }
@@ -196,7 +319,7 @@ async function capture(
     // from this line and from report.json, never from a guess.
     // eslint-disable-next-line no-console
     console.log(
-      `GALLERY ${file} | title=${metrics.title} | overflow=${String(metrics.horizontalOverflow)} | tap=${String(metrics.smallestTap?.width ?? 0)}x${String(metrics.smallestTap?.height ?? 0)} "${metrics.smallestTap?.label ?? ''}" | alt=${String(metrics.imagesWithoutAlt)} | labels=${String(metrics.inputsWithoutLabel)} | errors=${String(row.consoleErrors.length)}: ${row.consoleErrors.map((entry) => entry.replace(/\s+/g, ' ').slice(0, 140)).join(' || ')}`,
+      `GALLERY ${file} | title=${metrics.title} | overflow=${String(metrics.horizontalOverflow)} | tap=${String(metrics.smallestTap?.width ?? 0)}x${String(metrics.smallestTap?.height ?? 0)} "${metrics.smallestTap?.label ?? ''}" | alt=${String(metrics.imagesWithoutAlt)} | labels=${String(metrics.inputsWithoutLabel)} | below44=${String(metrics.below44)}(+${String(metrics.inlineExempt)} inline) [${metrics.below44Labels.join('; ')}] | h1=${String(metrics.h1Count)} main=${String(metrics.mainCount)} | focus-gaps=${String(metrics.focusWithoutStyle)}/${String(metrics.focusChecked)}+${String(metrics.focusUnfocusable)}unfocused | errors=${String(row.consoleErrors.length)}: ${row.consoleErrors.map((entry) => entry.replace(/\s+/g, ' ').slice(0, 140)).join(' || ')}`,
     );
   }
 }
@@ -259,6 +382,22 @@ test('captures every screen the fixtures can reach', async ({ browser }) => {
     await test.step('public: 404', async () => {
       await visitor.page.goto('/this-page-does-not-exist');
       await capture(visitor.page, visitor.logs, '01-public', 'not-found', 'h1');
+    });
+
+    // The error state of each auth form, reached without a screenshot: these pages read `?error=`
+    // and render it, so the tour can see what the association looks like without inventing a
+    // different screen or a new picture. Observation only, like everything else here.
+    await test.step('public: the auth forms say what went wrong, and say it to a screen reader', async () => {
+      const states = [
+        { where: '/login', url: '/login?error=Wrong+email+or+password.' },
+        { where: '/register', url: '/register?error=Choose+a+longer+password.' },
+        { where: '/forgot-password', url: '/forgot-password?error=That+request+could+not+be+accepted.' },
+      ];
+      for (const state of states) {
+        await visitor.page.goto(state.url);
+        await visitor.page.locator('[role="alert"]').first().waitFor({ state: 'visible', timeout: 15_000 });
+        errorStates.push({ where: state.where, ...(await measureErrorState(visitor.page)) });
+      }
     });
 
     // ----------------------------------------------------------------------
@@ -521,13 +660,14 @@ test('captures every screen the fixtures can reach', async ({ browser }) => {
 /** The report and the job summary, written once after the tour. */
 test.afterAll(() => {
   mkdirSync(OUT, { recursive: true });
-  writeFileSync(join(OUT, 'report.json'), `${JSON.stringify({ rows, skipped }, null, 2)}\n`);
+  writeFileSync(join(OUT, 'report.json'), `${JSON.stringify({ rows, skipped, errorStates }, null, 2)}\n`);
 
-  const header = '| # | screen | viewport | overflow | smallest tap | no alt | unlabeled inputs | console errors |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n';
+  const header =
+    '| # | screen | viewport | overflow | smallest tap | below 44 | no alt | unlabeled inputs | h1/main | focus gaps | console errors |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n';
   const body = rows
     .map(
       (row) =>
-        `| ${String(row.index)} | ${row.area}/${row.screen} | ${row.viewport} | ${row.horizontalOverflow ? '**yes**' : 'no'} | ${String(row.smallestTap?.width ?? 0)}×${String(row.smallestTap?.height ?? 0)} | ${String(row.imagesWithoutAlt)} | ${String(row.inputsWithoutLabel)} | ${String(row.consoleErrors.length)} |`,
+        `| ${String(row.index)} | ${row.area}/${row.screen} | ${row.viewport} | ${row.horizontalOverflow ? '**yes**' : 'no'} | ${String(row.smallestTap?.width ?? 0)}×${String(row.smallestTap?.height ?? 0)} | ${String(row.below44)} (+${String(row.inlineExempt)} inline) | ${String(row.imagesWithoutAlt)} | ${String(row.inputsWithoutLabel)} | ${String(row.h1Count)}/${String(row.mainCount)} | ${String(row.focusWithoutStyle)}/${String(row.focusChecked)} | ${String(row.consoleErrors.length)} |`,
     )
     .join('\n');
   const missing = skipped.map((entry) => `- ${entry.screen}: ${entry.reason}`).join('\n');
@@ -561,6 +701,61 @@ test.afterAll(() => {
         `\nUnder 44x44 on the phone: ${smallTaps.map((row) => `${row.area}/${row.screen}`).join(', ')}\n`,
       );
     }
+  }
+
+  // F2's numbers: every stand-alone control on the phone, its focus style, the error association
+  // and one h1/one main per page. Still observation — a count of zero here never fails the job.
+  const below44 = phone.reduce((sum, row) => sum + row.below44, 0);
+  const inlineExempt = phone.reduce((sum, row) => sum + row.inlineExempt, 0);
+  const focusChecked = phone.reduce((sum, row) => sum + row.focusChecked, 0);
+  const focusUnfocusable = phone.reduce((sum, row) => sum + row.focusUnfocusable, 0);
+  const focusWithout = phone.reduce((sum, row) => sum + row.focusWithoutStyle, 0);
+  const h1Pages = rows.filter((row) => row.h1Count !== 1);
+  const mainPages = rows.filter((row) => row.mainCount !== 1);
+  const errorTotals = errorStates.reduce(
+    (totals, entry) => ({ fields: totals.fields + entry.fields, without: totals.without + entry.withoutDescription }),
+    { fields: 0, without: 0 },
+  );
+  const below44List = phone.filter((row) => row.below44 > 0);
+  const focusList = phone.filter((row) => row.focusWithoutStyle > 0);
+  const a11y2 = `GALLERY-A11Y2 phone: stand-alone below 44x44=${String(below44)}, inline exempt=${String(inlineExempt)}, controls without a focus style=${String(focusWithout)} of ${String(focusChecked)} that took focus (${String(focusUnfocusable)} could not be focused), error fields without aria-describedby=${String(errorTotals.without)} of ${String(errorTotals.fields)}; pages: not exactly one h1=${String(h1Pages.length)}, not exactly one main=${String(mainPages.length)}`;
+  // eslint-disable-next-line no-console
+  console.log(a11y2);
+  if (summaryFile !== undefined && summaryFile !== '') {
+    appendFileSync(summaryFile, `\n${a11y2}\n`);
+    if (below44List.length > 0) {
+      appendFileSync(
+        summaryFile,
+        `\nStand-alone controls under 44x44 (phone): ${below44List
+          .map((row) => `${row.area}/${row.screen}: ${row.below44Labels.join('; ')}`)
+          .join(' | ')}\n`,
+      );
+    }
+    if (focusList.length > 0) {
+      appendFileSync(
+        summaryFile,
+        `\nControls with no visible focus style (phone): ${focusList
+          .map((row) => `${row.area}/${row.screen}: ${row.focusSample.join('; ')}`)
+          .join(' | ')}\n`,
+      );
+    }
+    if (h1Pages.length > 0 || mainPages.length > 0) {
+      appendFileSync(
+        summaryFile,
+        `\nPages without exactly one h1 or one main: ${[...h1Pages, ...mainPages]
+          .map((row) => `${row.area}/${row.screen} (${row.viewport})`)
+          .join(', ')}\n`,
+      );
+    }
+    appendFileSync(
+      summaryFile,
+      `\nError states reached: ${errorStates
+        .map(
+          (entry) =>
+            `${entry.where} alerts=${String(entry.alerts)} fields=${String(entry.fields)} without aria-describedby=${String(entry.withoutDescription)}`,
+        )
+        .join('; ')}\n`,
+    );
   }
   for (const entry of skipped) {
     // eslint-disable-next-line no-console

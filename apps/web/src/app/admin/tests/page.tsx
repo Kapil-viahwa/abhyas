@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { csrfFromCookies, loadPermissionSession } from '../../../lib/session';
 import { listTests, statusTone } from '../../../lib/tests-api';
 
@@ -45,7 +46,10 @@ export default async function AdminTestsPage(): Promise<ReactElement> {
               <span data-testid="admin-test-status" className={`rounded-full px-2 py-0.5 text-xs ring-1 ${statusTone(test.status)}`}>
                 {test.status.toLowerCase()}
               </span>
-              <Link href={`/editor/tests/${test.id}`} className="text-sm text-sky-400 hover:text-sky-300">
+              <Link
+                href={`/editor/tests/${test.id}`}
+                className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}
+              >
                 Review
               </Link>
             </div>

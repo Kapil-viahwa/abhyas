@@ -2,6 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
+import { tapTargetClass, controlTapTargetClass } from '../../../components/tap-target';
 import { listQuestions } from '../../../lib/questions-api';
 import { questionPreview } from '../../../lib/question-preview';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
@@ -45,13 +46,13 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
             defaultValue={filters.search}
             placeholder="Search text"
             aria-label="Search questions"
-            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm text-slate-100"
+            className="min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 sm:min-h-0"
           />
           <select
             name="status"
             defaultValue={filters.status}
             aria-label="Filter by status"
-            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+            className="min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm sm:min-h-0"
           >
             <option value="">Any status</option>
             <option value="DRAFT">Draft</option>
@@ -61,7 +62,7 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
             name="difficulty"
             defaultValue={filters.difficulty}
             aria-label="Filter by difficulty"
-            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+            className="min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm sm:min-h-0"
           >
             <option value="">Any difficulty</option>
             <option value="EASY">Easy</option>
@@ -72,22 +73,22 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
             name="language"
             defaultValue={filters.language}
             aria-label="Filter by language"
-            className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+            className="min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm sm:min-h-0"
           >
             <option value="">Any language</option>
             <option value="EN">English</option>
             <option value="HI">Hindi</option>
           </select>
-          <button type="submit" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200">
+          <button className="min-h-11 rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200 sm:min-h-0" type="submit">
             Filter
           </button>
         </form>
 
         <div className="flex gap-2 text-sm">
-          <Link href="/editor/questions/new" className="rounded-xl bg-sky-600 px-3 py-2 font-medium text-white">
+          <Link href="/editor/questions/new" className={`${controlTapTargetClass} rounded-xl bg-sky-600 px-3 py-2 font-medium text-white`}>
             New question
           </Link>
-          <a href="/api/questions/export" className="rounded-xl border border-slate-700 px-3 py-2 text-slate-200">
+          <a href="/api/questions/export" className={`${controlTapTargetClass} rounded-xl border border-slate-700 px-3 py-2 text-slate-200`}>
             Export CSV
           </a>
         </div>
@@ -106,7 +107,10 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
                 {item.version.questionType} · {item.version.language} · {item.version.difficulty} · v{item.currentVersion} · {item.status}
               </p>
             </div>
-            <Link href={`/editor/questions/${item.id}`} className="text-sm text-sky-400 hover:text-sky-300">
+            <Link
+              href={`/editor/questions/${item.id}`}
+              className={`${tapTargetClass} text-sm text-sky-400 hover:text-sky-300`}
+            >
               Open
             </Link>
           </li>
@@ -114,9 +118,13 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
       </ul>
 
       {result !== null && result.pages > 1 ? (
-        <nav className="flex gap-2 text-sm text-slate-300">
+        <nav aria-label="Question pages" className="flex flex-wrap gap-1 text-sm text-slate-300">
           {Array.from({ length: result.pages }, (_, index) => index + 1).map((page) => (
-            <Link key={page} href={`/editor/questions?page=${String(page)}`} className={page === result.page ? 'font-semibold text-sky-400' : ''}>
+            <Link
+              key={page}
+              href={`/editor/questions?page=${String(page)}`}
+              className={`${tapTargetClass} ${page === result.page ? 'font-semibold text-sky-400' : ''}`}
+            >
               {page}
             </Link>
           ))}

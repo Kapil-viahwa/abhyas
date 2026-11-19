@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import type { CatalogTree } from '../lib/catalog';
 import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from './auth-shell';
+import { tapTargetClass } from './tap-target';
 
 /**
  * The catalog tree and the forms that change it, shared by the Administrator and editor
@@ -481,7 +482,7 @@ export function CatalogManager({
 
       <p className="text-xs text-slate-500">
         Public pages:{' '}
-        <Link href="/exams" className="text-sky-400 hover:text-sky-300">
+        <Link href="/exams" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           /exams
         </Link>
       </p>

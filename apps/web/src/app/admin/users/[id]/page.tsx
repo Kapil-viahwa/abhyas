@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage, StatusBadge } from '../../../../components/admin-shell';
 import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../../../components/auth-shell';
+import { tapTargetClass } from '../../../../components/tap-target';
 import { flagLabels, getUser } from '../../../../lib/admin-api';
 import { csrfFromCookies, loadRoleSession } from '../../../../lib/session';
 
@@ -147,7 +148,7 @@ export default async function AdminUserDetailPage({ params, searchParams }: Page
       </section>
 
       <div className="text-sm">
-        <Link href="/admin/users" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/users" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Back to accounts
         </Link>
       </div>

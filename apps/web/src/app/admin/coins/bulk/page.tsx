@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../../components/admin-shell';
 import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../../../components/auth-shell';
+import { tapTargetClass } from '../../../../components/tap-target';
 import { BULK_DRAFT_MAX_AGE_SECONDS, BULK_DRAFT_MAX_BYTES, readBulkDraft } from '../../../../lib/coin-bulk';
 import { isUuid } from '../../../../lib/coins-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../../lib/session';
@@ -183,10 +184,10 @@ export default async function BulkCoinsPage({ searchParams }: PageProps): Promis
       ) : null}
 
       <div className="flex flex-wrap gap-3 text-sm">
-        <Link href="/admin/coins" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/coins" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Search an account
         </Link>
-        <Link href="/admin" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Back to administration
         </Link>
       </div>

@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 
 import { AttemptRunner } from '../../../components/attempt-runner';
 import { StudentNav } from '../../../components/student-shell';
+import { controlTapTargetClass } from '../../../components/tap-target';
 import { attemptForEnrollment } from '../../../lib/attempts-api';
 import { csrfFromCookies, loadSession } from '../../../lib/session';
 import { listMyEnrollments } from '../../../lib/student-tests-api';
@@ -40,13 +41,14 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
 
   if (enrollment === null || envelope.kind === 'missing') {
     return (
-      <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
+      <main id="main" className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
         <section
           data-testid="attempt-missing"
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
+          <h1 className="text-lg font-semibold text-white">Attempt</h1>
           <p>That attempt is not available. It may belong to another account, or the enrollment may not exist.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>
@@ -61,13 +63,14 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
 
   if (envelope.kind === 'unavailable') {
     return (
-      <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
+      <main id="main" className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
         <section
           data-testid="attempt-unavailable"
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
+          <h1 className="text-lg font-semibold text-white">Attempt</h1>
           <p>That attempt could not be loaded. Please try again.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>
@@ -83,13 +86,14 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
 
   if (enrollment.status !== 'OPEN') {
     return (
-      <main className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
+      <main id="main" className="mx-auto w-full max-w-3xl px-4 py-10 sm:px-6">
         <section
           data-testid="attempt-missing"
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
+          <h1 className="text-lg font-semibold text-white">Attempt</h1>
           <p>That enrollment is no longer open, so it cannot be taken.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>
@@ -98,7 +102,7 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
+    <main id="main" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-10 sm:px-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>

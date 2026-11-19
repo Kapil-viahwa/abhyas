@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
 import { FieldError, inputClass, labelClass, secondaryButtonClass } from '../../../components/auth-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { searchCoinRecipients } from '../../../lib/coins-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../lib/session';
 
@@ -55,7 +56,7 @@ export default async function AdminCoinsPage({ searchParams }: PageProps): Promi
           </label>
 
           <div className="flex items-end">
-            <button className="w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:w-auto">
+            <button className="min-h-11 w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:min-h-0 sm:w-auto">
               Search
             </button>
           </div>
@@ -85,10 +86,10 @@ export default async function AdminCoinsPage({ searchParams }: PageProps): Promi
       </ul>
 
       <div className="flex flex-wrap gap-3 text-sm">
-        <Link href="/admin/coins/bulk" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin/coins/bulk" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Bulk assignment from a CSV
         </Link>
-        <Link href="/admin" className="text-sky-400 hover:text-sky-300">
+        <Link href="/admin" className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
           Back to administration
         </Link>
       </div>

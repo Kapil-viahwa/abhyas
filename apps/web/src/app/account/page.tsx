@@ -1,8 +1,9 @@
 import Link from 'next/link';
 import type { ReactElement } from 'react';
 
-import { FieldError, Notice, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../components/auth-shell';
+import { FieldError, Notice, authLinkClass, buttonClass, inputClass, labelClass, secondaryButtonClass } from '../../components/auth-shell';
 import { StudentNav } from '../../components/student-shell';
+import { controlTapTargetClass } from '../../components/tap-target';
 import { TurnstileField } from '../../components/turnstile-field';
 import { webConfig } from '../../lib/config';
 import { csrfFromCookies, loadSession, loadSessions } from '../../lib/session';
@@ -32,7 +33,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
   const config = webConfig();
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-12">
+    <main id="main" className="mx-auto flex min-h-screen w-full max-w-2xl flex-col gap-8 px-6 py-12">
       <header className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <p className="text-xs font-semibold uppercase tracking-[0.3em] text-sky-400">Abhyas</p>
@@ -285,7 +286,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
           </label>
 
           <button
-            className="rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-rose-400"
+            className={`${controlTapTargetClass} rounded-lg bg-rose-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-rose-400`}
             type="submit"
           >
             Deactivate
@@ -295,7 +296,7 @@ export default async function AccountPage({ searchParams }: PageProps): Promise<
 
       <p className="text-sm text-slate-500">
         Signed in as {session.profile.roleCode}.{' '}
-        <Link href="/" className="text-sky-400 hover:text-sky-300">
+        <Link href="/" className={authLinkClass}>
           Back to the home page
         </Link>
       </p>

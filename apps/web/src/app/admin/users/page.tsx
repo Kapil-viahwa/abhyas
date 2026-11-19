@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage, StatusBadge } from '../../../components/admin-shell';
 import { FieldError, inputClass, labelClass, secondaryButtonClass } from '../../../components/auth-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { USER_ROLES, USER_STATUSES, flagLabels, listUsers, type UserListQuery } from '../../../lib/admin-api';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
 
@@ -103,7 +104,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
           </label>
 
           <div className="flex items-end">
-            <button className="w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:w-auto">
+            <button className="min-h-11 w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:min-h-0 sm:w-auto">
               Filter
             </button>
           </div>
@@ -117,7 +118,10 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
           return (
             <li key={user.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div className="min-w-0 space-y-1">
-                <Link href={`/admin/users/${user.id}`} className="block truncate text-sm text-sky-300 hover:text-sky-200">
+                <Link
+                  href={`/admin/users/${user.id}`}
+                  className="block min-h-11 truncate text-sm text-sky-300 hover:text-sky-200 sm:min-h-0"
+                >
                   {user.email ?? 'No email linked'}
                 </Link>
                 <p className="truncate text-xs text-slate-500">
@@ -139,9 +143,9 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
         {list.items.length === 0 ? <li className="p-4 text-sm text-slate-400">No accounts match that filter.</li> : null}
       </ul>
 
-      <nav className="flex items-center justify-between text-sm text-slate-400">
+      <nav aria-label="User pages" className="flex items-center justify-between text-sm text-slate-400">
         {list.page > 1 ? (
-          <Link href={pageHref(query, list.page - 1)} className="text-sky-400 hover:text-sky-300">
+          <Link href={pageHref(query, list.page - 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Previous
           </Link>
         ) : (
@@ -153,7 +157,7 @@ export default async function AdminUsersPage({ searchParams }: PageProps): Promi
         </span>
 
         {list.page < list.pages ? (
-          <Link href={pageHref(query, list.page + 1)} className="text-sky-400 hover:text-sky-300">
+          <Link href={pageHref(query, list.page + 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Next
           </Link>
         ) : (

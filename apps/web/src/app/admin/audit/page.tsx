@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
 import { FieldError, inputClass, labelClass, secondaryButtonClass } from '../../../components/auth-shell';
+import { tapTargetClass } from '../../../components/tap-target';
 import { auditExportPath, searchAudit } from '../../../lib/operations-api';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
 
@@ -94,7 +95,10 @@ export default async function AuditPage({ searchParams }: PageProps): Promise<Re
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <button className="rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400" type="submit">
+          <button
+            className="min-h-11 rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-sky-400 sm:min-h-0"
+            type="submit"
+          >
             Filter
           </button>
           <Link className={secondaryButtonClass} href={exportHref}>
@@ -139,9 +143,9 @@ export default async function AuditPage({ searchParams }: PageProps): Promise<Re
         </table>
       </div>
 
-      <nav className="flex items-center justify-between text-sm text-slate-400">
+      <nav aria-label="Audit pages" className="flex items-center justify-between text-sm text-slate-400">
         {audit.page > 1 ? (
-          <Link href={pageHref(filters, audit.page - 1)} className="text-sky-400 hover:text-sky-300">
+          <Link href={pageHref(filters, audit.page - 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Previous
           </Link>
         ) : (
@@ -151,7 +155,7 @@ export default async function AuditPage({ searchParams }: PageProps): Promise<Re
           Page {audit.page} of {audit.pages}
         </span>
         {audit.page < audit.pages ? (
-          <Link href={pageHref(filters, audit.page + 1)} className="text-sky-400 hover:text-sky-300">
+          <Link href={pageHref(filters, audit.page + 1)} className={`${tapTargetClass} text-sky-400 hover:text-sky-300`}>
             Next
           </Link>
         ) : (
