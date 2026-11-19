@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
-import { tapTargetClass } from '../../../components/tap-target';
+import { tapTargetClass, controlTapTargetClass } from '../../../components/tap-target';
 import { csrfFromCookies, loadPermissionSession } from '../../../lib/session';
 import { listTests, statusTone, TEST_STATUSES, type TestView } from '../../../lib/tests-api';
 
@@ -77,14 +77,14 @@ export default async function TestsPage({ searchParams }: PageProps): Promise<Re
           {canWrite ? (
             <Link
               href="/editor/tests/new"
-              className="rounded-xl bg-sky-600 px-3 py-2 font-medium text-white"
+              className={`${controlTapTargetClass} rounded-xl bg-sky-600 px-3 py-2 font-medium text-white`}
               data-testid="new-test"
             >
               New test
             </Link>
           ) : null}
           {canPublish ? (
-            <Link href="/admin/tests" className="rounded-xl border border-slate-700 px-3 py-2 text-slate-200">
+            <Link href="/admin/tests" className={`${controlTapTargetClass} rounded-xl border border-slate-700 px-3 py-2 text-slate-200`}>
               Review queue
             </Link>
           ) : null}

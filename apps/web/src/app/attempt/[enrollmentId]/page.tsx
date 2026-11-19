@@ -4,6 +4,7 @@ import type { ReactElement } from 'react';
 
 import { AttemptRunner } from '../../../components/attempt-runner';
 import { StudentNav } from '../../../components/student-shell';
+import { controlTapTargetClass } from '../../../components/tap-target';
 import { attemptForEnrollment } from '../../../lib/attempts-api';
 import { csrfFromCookies, loadSession } from '../../../lib/session';
 import { listMyEnrollments } from '../../../lib/student-tests-api';
@@ -45,8 +46,9 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
           data-testid="attempt-missing"
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
+          <h1 className="text-lg font-semibold text-white">Attempt</h1>
           <p>That attempt is not available. It may belong to another account, or the enrollment may not exist.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>
@@ -66,8 +68,9 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
           data-testid="attempt-unavailable"
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
+          <h1 className="text-lg font-semibold text-white">Attempt</h1>
           <p>That attempt could not be loaded. Please try again.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>
@@ -88,8 +91,9 @@ export default async function AttemptEntryPage({ params }: PageProps): Promise<R
           data-testid="attempt-missing"
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
+          <h1 className="text-lg font-semibold text-white">Attempt</h1>
           <p>That enrollment is no longer open, so it cannot be taken.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>

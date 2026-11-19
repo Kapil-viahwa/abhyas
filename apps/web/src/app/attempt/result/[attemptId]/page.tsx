@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AttemptCountdown } from '../../../../components/attempt-countdown';
 import { StudentNav } from '../../../../components/student-shell';
-import { tapTargetClass } from '../../../../components/tap-target';
+import { controlTapTargetClass, tapTargetClass } from '../../../../components/tap-target';
 import { accuracyPercent, attemptResult, attemptState, type ReviewQuestion } from '../../../../lib/attempts-api';
 import { renderLatex } from '../../../../lib/latex';
 import { loadSession } from '../../../../lib/session';
@@ -223,7 +223,7 @@ export default async function AttemptResultPage({ params, searchParams }: PagePr
           className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-sm text-slate-300"
         >
           <p>That result is not available. It may belong to another account, or the attempt may not exist.</p>
-          <Link href="/tests" className="mt-3 inline-block text-sky-400 hover:text-sky-300">
+          <Link href="/tests" className={`${controlTapTargetClass} mt-3 text-sky-400 hover:text-sky-300`}>
             Back to your tests
           </Link>
         </section>

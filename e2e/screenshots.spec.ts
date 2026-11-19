@@ -53,6 +53,7 @@ interface Metrics {
   readonly below44Labels: readonly string[];
   readonly inlineExempt: number;
   readonly focusChecked: number;
+  readonly focusUnfocusable: number;
   readonly focusWithoutStyle: number;
   readonly focusSample: readonly string[];
   readonly alerts: number;
@@ -164,10 +165,20 @@ async function measure(page: Page): Promise<Metrics> {
       return `${computed.outlineStyle}|${computed.outlineWidth}|${computed.outlineColor}|${computed.boxShadow}`;
     };
     const focusSample: string[] = [];
+    let focusChecked = 0;
+    let focusUnfocusable = 0;
     let focusWithoutStyle = 0;
     for (const element of focusable) {
       const before = styleOf(element);
       (element as HTMLElement).focus({ focusVisible: true } as unknown as FocusOptions);
+      // A control inside a closed `<details>` cannot take focus at all; counting it as "no focus
+      // style" would report a rendering choice as an accessibility defect. Only what really took
+      // focus is measured, and the rest is counted apart.
+      if (document.activeElement !== element) {
+        focusUnfocusable += 1;
+        continue;
+      }
+      focusChecked += 1;
       const after = styleOf(element);
       if (before === after) {
         focusWithoutStyle += 1;
@@ -210,7 +221,8 @@ async function measure(page: Page): Promise<Metrics> {
       below44: standalone.length,
       below44Labels: standalone.slice(0, 10).map(describe),
       inlineExempt: inline.length,
-      focusChecked: focusable.length,
+      focusChecked,
+      focusUnfocusable,
       focusWithoutStyle,
       focusSample,
       alerts: document.querySelectorAll('[role="alert"]').length,
@@ -307,7 +319,7 @@ async function capture(
     // from this line and from report.json, never from a guess.
     // eslint-disable-next-line no-console
     console.log(
-      `GALLERY ${file} | title=${metrics.title} | overflow=${String(metrics.horizontalOverflow)} | tap=${String(metrics.smallestTap?.width ?? 0)}x${String(metrics.smallestTap?.height ?? 0)} "${metrics.smallestTap?.label ?? ''}" | alt=${String(metrics.imagesWithoutAlt)} | labels=${String(metrics.inputsWithoutLabel)} | below44=${String(metrics.below44)}(+${String(metrics.inlineExempt)} inline) | h1=${String(metrics.h1Count)} main=${String(metrics.mainCount)} | focus-gaps=${String(metrics.focusWithoutStyle)}/${String(metrics.focusChecked)} | errors=${String(row.consoleErrors.length)}: ${row.consoleErrors.map((entry) => entry.replace(/\s+/g, ' ').slice(0, 140)).join(' || ')}`,
+      `GALLERY ${file} | title=${metrics.title} | overflow=${String(metrics.horizontalOverflow)} | tap=${String(metrics.smallestTap?.width ?? 0)}x${String(metrics.smallestTap?.height ?? 0)} "${metrics.smallestTap?.label ?? ''}" | alt=${String(metrics.imagesWithoutAlt)} | labels=${String(metrics.inputsWithoutLabel)} | below44=${String(metrics.below44)}(+${String(metrics.inlineExempt)} inline) [${metrics.below44Labels.join('; ')}] | h1=${String(metrics.h1Count)} main=${String(metrics.mainCount)} | focus-gaps=${String(metrics.focusWithoutStyle)}/${String(metrics.focusChecked)}+${String(metrics.focusUnfocusable)}unfocused | errors=${String(row.consoleErrors.length)}: ${row.consoleErrors.map((entry) => entry.replace(/\s+/g, ' ').slice(0, 140)).join(' || ')}`,
     );
   }
 }
@@ -696,6 +708,7 @@ test.afterAll(() => {
   const below44 = phone.reduce((sum, row) => sum + row.below44, 0);
   const inlineExempt = phone.reduce((sum, row) => sum + row.inlineExempt, 0);
   const focusChecked = phone.reduce((sum, row) => sum + row.focusChecked, 0);
+  const focusUnfocusable = phone.reduce((sum, row) => sum + row.focusUnfocusable, 0);
   const focusWithout = phone.reduce((sum, row) => sum + row.focusWithoutStyle, 0);
   const h1Pages = rows.filter((row) => row.h1Count !== 1);
   const mainPages = rows.filter((row) => row.mainCount !== 1);
@@ -705,7 +718,7 @@ test.afterAll(() => {
   );
   const below44List = phone.filter((row) => row.below44 > 0);
   const focusList = phone.filter((row) => row.focusWithoutStyle > 0);
-  const a11y2 = `GALLERY-A11Y2 phone: stand-alone below 44x44=${String(below44)}, inline exempt=${String(inlineExempt)}, controls without a focus style=${String(focusWithout)} of ${String(focusChecked)}, error fields without aria-describedby=${String(errorTotals.without)} of ${String(errorTotals.fields)}; pages: not exactly one h1=${String(h1Pages.length)}, not exactly one main=${String(mainPages.length)}`;
+  const a11y2 = `GALLERY-A11Y2 phone: stand-alone below 44x44=${String(below44)}, inline exempt=${String(inlineExempt)}, controls without a focus style=${String(focusWithout)} of ${String(focusChecked)} that took focus (${String(focusUnfocusable)} could not be focused), error fields without aria-describedby=${String(errorTotals.without)} of ${String(errorTotals.fields)}; pages: not exactly one h1=${String(h1Pages.length)}, not exactly one main=${String(mainPages.length)}`;
   // eslint-disable-next-line no-console
   console.log(a11y2);
   if (summaryFile !== undefined && summaryFile !== '') {

@@ -11,3 +11,11 @@
  */
 export const tapTargetClass =
   'inline-flex min-h-11 min-w-11 items-center justify-center sm:min-h-0 sm:min-w-0';
+
+/**
+ * The same 44px height for a control that brings its own padding and width — a plain "Back to…"
+ * link, a `px-3 py-2` form button, a `<select>` in a filter row. Only the height is forced, so the
+ * control keeps the shape it was designed with on a desktop (`sm:min-h-0` puts it back).
+ */
+export const controlTapTargetClass = 'inline-flex min-h-11 items-center justify-center sm:min-h-0';
+

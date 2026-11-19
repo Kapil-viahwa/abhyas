@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../components/admin-shell';
-import { tapTargetClass } from '../../../components/tap-target';
+import { tapTargetClass, controlTapTargetClass } from '../../../components/tap-target';
 import { listQuestions } from '../../../lib/questions-api';
 import { questionPreview } from '../../../lib/question-preview';
 import { csrfFromCookies, loadRoleSession } from '../../../lib/session';
@@ -85,10 +85,10 @@ export default async function QuestionsPage({ searchParams }: PageProps): Promis
         </form>
 
         <div className="flex gap-2 text-sm">
-          <Link href="/editor/questions/new" className="rounded-xl bg-sky-600 px-3 py-2 font-medium text-white">
+          <Link href="/editor/questions/new" className={`${controlTapTargetClass} rounded-xl bg-sky-600 px-3 py-2 font-medium text-white`}>
             New question
           </Link>
-          <a href="/api/questions/export" className="rounded-xl border border-slate-700 px-3 py-2 text-slate-200">
+          <a href="/api/questions/export" className={`${controlTapTargetClass} rounded-xl border border-slate-700 px-3 py-2 text-slate-200`}>
             Export CSV
           </a>
         </div>

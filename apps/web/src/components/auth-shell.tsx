@@ -71,9 +71,10 @@ export function Notice({ message }: { readonly message?: string }): ReactElement
 }
 
 // No `outline-none` here: keyboard focus has to stay visible, and `app/globals.css` draws the ring
-// every control shares. The border colour is the second, quieter cue on top of it.
+// every control shares. The border colour is the second, quieter cue on top of it. A 44px minimum
+// on the phone keeps every text field and select a real tap target; the desktop keeps 38px.
 export const inputClass =
-  'mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-500';
+  'mt-1 min-h-11 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-500 sm:min-h-0';
 
 export const labelClass = 'block text-sm font-medium text-slate-300';
 

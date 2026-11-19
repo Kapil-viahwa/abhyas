@@ -3,7 +3,7 @@ import type { ReactElement } from 'react';
 
 import { AdminPage } from '../../../../components/admin-shell';
 import { inputClass, labelClass, Notice } from '../../../../components/auth-shell';
-import { tapTargetClass } from '../../../../components/tap-target';
+import { tapTargetClass, controlTapTargetClass } from '../../../../components/tap-target';
 import { questionPreview } from '../../../../lib/question-preview';
 import { listQuestions } from '../../../../lib/questions-api';
 import { csrfFromCookies, loadPermissionSession } from '../../../../lib/session';
@@ -274,7 +274,7 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
         <span data-testid="test-status" className={`rounded-full px-2 py-0.5 text-xs ring-1 ${statusTone(test.status)}`}>
           {test.status.toLowerCase()}
         </span>
-        <Link href="/editor/tests" className="text-sm text-slate-400 hover:text-slate-200">
+        <Link href="/editor/tests" className={`${controlTapTargetClass} text-sm text-slate-400 hover:text-slate-200`}>
           Back to the list
         </Link>
       </div>
@@ -402,11 +402,11 @@ export default async function TestBuilderPage({ params, searchParams }: PageProp
                 <input
                   name="search"
                   defaultValue={search}
-                  className="ml-2 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm"
+                  className="ml-2 min-h-11 rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm sm:min-h-0"
                   placeholder="Search text"
                 />
               </label>
-              <button type="submit" className="rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200">
+              <button type="submit" className={`${controlTapTargetClass} rounded-xl border border-slate-700 px-3 py-2 text-sm text-slate-200`}>
                 Search
               </button>
             </form>
