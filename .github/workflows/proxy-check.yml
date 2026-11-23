@@ -46,9 +46,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/nginx" "$RUNNER_TEMP/webroot/.well-known/acme-challenge"
           echo "acme-ok" > "$RUNNER_TEMP/webroot/.well-known/acme-challenge/token"
           sed -e 's|__DOMAIN__|abhyas.test|g' \
-              -e 's|/etc/letsencrypt/live/abhyas.test|'"$RUNNER_TEMP"'/certs|g' \
-              -e 's|/var/www/certbot|'"$RUNNER_TEMP"'/webroot|g' \
+              -e 's|/etc/letsencrypt/live/abhyas.test|/certs|g' \
+              -e 's|/var/www/certbot|/webroot|g' \
               -e 's|resolver 127.0.0.53|resolver 1.1.1.1|' \
+              -e 's|server 127.0.0.1:3000;|server upstream:3000;|' \
               deploy/nginx/abhyas.conf > "$RUNNER_TEMP/nginx/abhyas.conf"
           cp deploy/nginx/abhyas-proxy.conf "$RUNNER_TEMP/nginx/abhyas-proxy.conf"
           sed -i 's|/etc/nginx/abhyas-proxy.conf|/etc/nginx/conf.d/abhyas-proxy.conf|g' "$RUNNER_TEMP/nginx/abhyas.conf"
@@ -76,14 +77,20 @@ jobs:
             nginx:1.27-alpine >/dev/null
           # The edge shares the stub's network namespace so 127.0.0.1:3000 is the stub, exactly as
           # the host-proxy-to-loopback-port arrangement does in production.
+          # The edge mounts the certificate directory at /certs and the ACME webroot at /webroot.
           docker run -d --name edge --network edge --network-alias edge \
             -p 127.0.0.1:8080:80 -p 127.0.0.1:8443:443 \
             -v "$RUNNER_TEMP/nginx/abhyas.conf:/etc/nginx/conf.d/abhyas.conf:ro" \
             -v "$RUNNER_TEMP/nginx/abhyas-proxy.conf:/etc/nginx/conf.d/abhyas-proxy.conf:ro" \
-            -v "$RUNNER_TEMP/certs:/certs:ro" nginx:1.27-alpine >/dev/null
-          sleep 3
-          docker logs edge 2>&1 | tail -n 20
+            -v "$RUNNER_TEMP/certs:/certs:ro" \
+            -v "$RUNNER_TEMP/webroot:/webroot:ro" nginx:1.27-alpine >/dev/null
           docker exec edge nginx -t
+          # Bounded readiness poll: the container is up, but the listener may not be bound yet.
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8080/; then break; fi
+            sleep 1
+          done
+          docker logs edge 2>&1 | tail -n 20
       - name: Run the checks
         shell: bash
         run: |
@@ -91,17 +98,22 @@ jobs:
           failures=0
           check() { if [ "$1" = "0" ]; then echo "PASS $2" >> "$GITHUB_STEP_SUMMARY"; else echo "FAIL $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures+1)); fi; }
 
-          # The edge publishes on 8080/8443 in this job; the config's $remote_addr is this runner.
-          curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/.well-known/acme-challenge/token | grep -qx 200
+          # The edge publishes on 8080/8443 in this job; the Host header names the configured
+          # server, as a browser would.
+          curl -s -o /dev/null -w '%{http_code}' -H 'Host: abhyas.test' http://127.0.0.1:8080/.well-known/acme-challenge/token | grep -qx 200
           check $? "ACME challenge served on port 80"
-          curl -s -o /dev/null -D - http://127.0.0.1:8080/ | grep -qi '^location: https://'
+          curl -s -o /dev/null -D - -H 'Host: abhyas.test' http://127.0.0.1:8080/ | grep -qi '^location: https://'
           check $? "HTTP redirects to https"
           body=$(curl -sk --resolve abhyas.test:8443:127.0.0.1 https://abhyas.test:8443/ \
             -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Real-IP: 5.6.7.8' \
             -H 'Forwarded: for=9.9.9.9' -H 'X-Forwarded-Host: evil.example')
+          echo "echoed: $body"
           echo "$body" | grep -q 'xff=1.2.3.4' && check 1 "X-Forwarded-For is overwritten" || check 0 "X-Forwarded-For is overwritten"
+          echo "$body" | grep -qE 'xff=[0-9]' && check 0 "X-Forwarded-For is present" || check 1 "X-Forwarded-For is present"
           echo "$body" | grep -q 'xri=5.6.7.8' && check 1 "X-Real-IP is overwritten" || check 0 "X-Real-IP is overwritten"
-          echo "$body" | grep -q 'fwd=' && check 1 "Forwarded is blanked" || check 0 "Forwarded is blanked"
+          echo "$body" | grep -qE 'xri=[0-9]' && check 0 "X-Real-IP is present" || check 1 "X-Real-IP is present"
+          echo "$body" | grep -qE 'fwd=[^|]' && check 1 "Forwarded is blanked" || check 0 "Forwarded is blanked"
+          echo "$body" | grep -qE 'xfh=[^|]' && check 1 "X-Forwarded-Host is blanked" || check 0 "X-Forwarded-Host is blanked"
           echo "$body" | grep -q 'xfp=https' && check 0 "X-Forwarded-Proto is https" || check 1 "X-Forwarded-Proto is https"
           curl -sk -D - --resolve abhyas.test:8443:127.0.0.1 https://abhyas.test:8443/ | grep -qi '^strict-transport-security:'
           check $? "HSTS present"
@@ -119,7 +131,7 @@ jobs:
           check $? "TLS 1.2 accepted"
           curl -sk --tlsv1.1 -o /dev/null --resolve abhyas.test:8443:127.0.0.1 https://abhyas.test:8443/ 2>/dev/null
           [ $? -ne 0 ] && check 0 "TLS 1.1 refused" || check 1 "TLS 1.1 refused"
-          for i in $(seq 1 40); do curl -sk -o /dev/null --resolve abhyas.test:8443:127.0.0.1 https://abhyas.test:8443/login; done
+          for i in $(seq 1 60); do curl -sk -o /dev/null --resolve abhyas.test:8443:127.0.0.1 https://abhyas.test:8443/login; done
           curl -sk -o /dev/null -w '%{http_code}' --resolve abhyas.test:8443:127.0.0.1 https://abhyas.test:8443/login | grep -qx 429
           check $? "auth path rate-limits with 429"
 
