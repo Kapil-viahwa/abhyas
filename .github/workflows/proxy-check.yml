@@ -52,14 +52,6 @@ jobs:
               deploy/nginx/abhyas.conf > "$RUNNER_TEMP/nginx/abhyas.conf"
           cp deploy/nginx/abhyas-proxy.conf "$RUNNER_TEMP/nginx/abhyas-proxy.conf"
           sed -i 's|/etc/nginx/abhyas-proxy.conf|/etc/nginx/conf.d/abhyas-proxy.conf|g' "$RUNNER_TEMP/nginx/abhyas.conf"
-      - name: Bring up a stub upstream and the edge
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker network create edge >/dev/null
-          docker run -d --name upstream --network edge \
-            -v "$RUNNER_TEMP/nginx/upstream.conf:/etc/nginx/conf.d/default.conf:ro" \
-            nginx:1.27-alpine >/dev/null || true
       - name: Write the stub upstream configuration
         shell: bash
         run: |
