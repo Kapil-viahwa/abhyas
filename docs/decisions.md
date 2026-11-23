@@ -2831,3 +2831,50 @@ growing. This replaces that treadmill with one rule.
   `@nestjs/swagger` 12 and the Node 26 image keep the reasons written in 0083, 0084 and 0085.
 - **The rule, restated.** A major is a planned unit with tests, never a bot merge; the wildcard makes
   the queue silent between quarterly reviews, and a security advisory still comes through.
+
+
+
+## 0087 — The edge is Nginx on the host, in front of a loopback-only web port
+
+**Status:** implemented, owner to confirm.
+
+The roadmap and `docker-compose.prod.yml` already assumed this, and nothing in the code argues
+against it: only the web tier publishes a port, and it publishes it on `127.0.0.1`
+(`127.0.0.1:${WEB_PORT:-3000}:3000`), because Docker writes its own iptables rules and a port bound
+on `0.0.0.0` is reachable even when `ufw` says otherwise. The API, Postgres, Redis and the worker
+publish nothing; the web tier reaches the API at `http://api:3001` on the compose network, and the
+worker reaches it at the same address. So Nginx runs **on the host**, terminates TLS, and proxies to
+`127.0.0.1:3000`. It is in `deploy/nginx/`.
+
+**The trust implication, worked out.** From the web container's point of view, a request that
+arrived through host Nginx comes from the Docker bridge gateway, not from the browser. The web tier
+therefore keeps `TRUST_PROXY='1'` — one hop — and `TRUST_CLIENT_IP_HEADER='x-real-ip'`: it reads the
+one header the hop writes, and Nginx overwrites that header with `$remote_addr`, never with
+`$proxy_add_x_forwarded_for`. The API keeps `TRUST_PROXY='172.31.0.10/32'` — the web container's
+fixed address on the compose network, exactly one address, never a block — and reads the same single
+header, because the web tier forwards it under the same name. Both validators refuse a block wider
+than /16 (IPv4) or /64 (IPv6), `true`/`*`, and a production boot that names a proxy without naming
+the header, so this cannot be widened by accident.
+
+If the operator changes the compose subnet, the gateway address changes with it and the API's
+`TRUST_PROXY` must be checked against it: `docker network inspect abhyas-prod_default` (or the
+project's own network name) prints the `Gateway` under `IPAM.Config`. The web tier's value never
+changes with a subnet: it is a hop count.
+
+**What the edge owns, and what it must not touch.** The edge owns TLS, the ACME HTTP-01 path, the
+301 redirect, HSTS, the forwarding headers, the body limit, the request timeouts and the coarse
+rate limits. The application owns `Content-Security-Policy`, `X-Frame-Options`,
+`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` and `Cache-Control`
+(`apps/web/src/lib/security-headers.ts` sends all of them on every route), so the edge must not
+copy or override them: a duplicate is either ignored or conflicts, and overriding the CSP is a
+security regression. HSTS is the one header the application does not send, because it belongs to
+the origin that terminates TLS.
+
+**Numbers.** `client_max_body_size 2m`: the API's own JSON limit is 1 MB
+(`apps/api/src/bootstrap.ts:24`), media uploads go to S3 through presigned URLs and never through
+this proxy, and the largest form post (bulk CSV, question HTML, attempt answers) is well under
+1 MB. Edge rate limits: 30 requests a minute per address with a burst of 20 on the auth and OTP
+paths, 120 a minute with a burst of 60 elsewhere — deliberately generous, because a school
+computer lab behind one NAT address shares one bucket; the application's own per-account and
+per-address limits remain the real control. Edge proxy timeouts are 35 s against the API's 30 s
+request timeout (decision 0059) so a submit is never cut at the edge before the API answers.

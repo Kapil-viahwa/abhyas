@@ -258,3 +258,78 @@ That is also why the variables below must be removed afterwards: they are a one-
 - The worker's boot line names each repeatable job and its interval.
 - `packages/shared/src/env-file.spec.ts` checks a candidate `.env.prod` with the real validators,
   printing names and messages only.
+
+
+
+## 11. The edge: Nginx on the host, TLS and the notes the compose file leaves out
+
+Nginx runs on the host and proxies to the loopback-only web port (`127.0.0.1:3000` by default).
+The configuration is `deploy/nginx/abhyas.conf` plus its included `abhyas-proxy.conf`; the
+decision and its trust reasoning are 0087.
+
+### DNS and firewall
+
+- An `A` record for the host name pointing at the host, and an `AAAA` record only if the host has
+  working IPv6 (a broken AAAA record makes some clients hang).
+- Allow 22 (SSH), 80 and 443; deny everything else. **Docker-published ports bypass ufw**, so the
+  firewall is not what keeps the web tier private: the loopback binding is. Never publish a
+  compose port on `0.0.0.0`.
+
+### Install and the first certificate
+
+```
+apt install nginx certbot
+mkdir -p /var/www/certbot
+```
+
+Install `deploy/nginx/abhyas-proxy.conf` as `/etc/nginx/abhyas-proxy.conf` and `abhyas.conf` as
+`/etc/nginx/conf.d/abhyas.conf`, replacing `__DOMAIN__` with the real name everywhere. Then:
+
+```
+certbot certonly --webroot -w /var/www/certbot -d <host> --deploy-hook "systemctl reload nginx"
+nginx -t && systemctl reload nginx
+```
+
+Renewal is certbot's systemd timer (`systemctl list-timers | grep certbot`); the deploy hook reloads
+Nginx. Test it with `certbot renew --dry-run`.
+
+### The values this needs
+
+| Setting | Value |
+| --- | --- |
+| `WEB_URL` | `https://<host>` |
+| `TRUST_PROXY` (web) | `1` — one hop, the host Nginx |
+| `TRUST_CLIENT_IP_HEADER` (web and api) | `x-real-ip` |
+| `TRUST_PROXY` (api) | `172.31.0.10/32` — the web container, checked with `docker network inspect <project>_default` |
+| Web port | `127.0.0.1:${WEB_PORT:-3000}` (the compose default) |
+
+### Header ownership
+
+| Header | Owner |
+| --- | --- |
+| `Strict-Transport-Security` | **edge** (the app does not send it) |
+| `Content-Security-Policy` | app |
+| `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` | app |
+| `Cache-Control` (including the no-store result pages) | app |
+| `Server` | neither — `server_tokens off` at the edge and `poweredByHeader: false` in the app |
+
+### After the change
+
+```
+curl -sI http://<host>/ | head -n 3                       # 301 to https
+curl -sI https://<host>/ | grep -i strict-transport        # HSTS present
+curl -sI https://<host>/ | grep -i '^server:'              # no version token
+curl -s https://<host>/ -H 'X-Forwarded-For: 1.2.3.4' -H 'X-Real-IP: 5.6.7.8' >/dev/null
+docker compose logs web | tail                                 # the app saw the real address
+```
+
+`.github/workflows/proxy-check.yml` proves the configuration with a stub upstream and a throwaway
+certificate: the ACME path, the 301, the overwritten `X-Real-IP`/`X-Forwarded-For`, the blanked
+`Forwarded`, `X-Forwarded-Proto`, HSTS, no `Server` version, the 404s for `/internal/` and
+`/api/docs`, unknown Host closed with 444, the 413 above 2 MB, the TLS floor and the 429 on the
+auth path.
+
+### Launch blocker update
+
+"Nginx overwriting forwarding headers" is now **done in configuration**, and open until the
+staging test in D4 proves it on a real host (real DNS, real certificate, real renewal).
