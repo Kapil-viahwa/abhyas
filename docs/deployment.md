@@ -219,7 +219,9 @@ That is also why the variables below must be removed afterwards: they are a one-
   image against a newer schema is not supported and can fail at runtime.
 - Before every deploy, and before every migrations run, take a backup:
   `docker compose exec -T postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > backup-$(date +%Y%m%dT%H%M).dump`
-  (run it as the owner role; keep it off the host). D3 automates this and adds a restore test.
+  (run it as the owner role; keep it off the host). On a host with `deploy/backup/` installed,
+  run `deploy/backup/backup.sh` instead (§12.3): it encrypts, checksums, verifies and applies
+  retention, and a restore from it is proven by the `backup-check` workflow.
 - If a deploy fails **before** migrations: `docker compose ... up -d --force-recreate` with the
   previous image tag.
 - If it fails **after** migrations: restore the dump into a fresh database and start the previous
@@ -234,8 +236,10 @@ That is also why the variables below must be removed afterwards: they are a one-
 - **D2 (edge):** Nginx in front of the web port, TLS termination, and the header rewrite this
   document assumes (`X-Real-IP` set to `$remote_addr`, never appended). The web port is already
   loopback-only so only that proxy can reach it.
-- **D3 (data):** scheduled `pg_dump` to off-host storage, retention, a restore test in a scratch
-  database, and the same for the Redis append-only file.
+- **D3 (data):** `deploy/backup/` — an encrypted nightly `pg_dump`, retention, a freshness check
+  and a restore that proves itself against a scratch database in CI. The Redis append-only file
+  is deliberately *not* backed up: every key in it is rebuilt from Postgres or is a short-lived
+  counter (§12.2).
 - **D4 (launch):** real SMTP delivery, the S3 presigned-URL integration test against the real
   provider, the OTP staging test with a real number and DLT template, monitoring and alerting,
   and making the repository private again.
@@ -249,6 +253,7 @@ That is also why the variables below must be removed afterwards: they are a one-
 | Web port loopback-only | **Done** — `127.0.0.1:${WEB_PORT:-3000}:3000` in `docker-compose.prod.yml` |
 | Real SMTP delivery | **Open** — the SMTP sender validates `SMTP_URL` and then refuses to deliver (decision 0027); `SMTP_URL` is now passed by the prod compose |
 | S3 presigned URL integration test against the real provider | **Open** — no integration test against a real bucket |
+| Backups and restore tested | **Done in tooling and CI** — `deploy/backup/` and the `backup-check` workflow; **open** until a real host drill (§12.7) on staging in D4 |
 
 ## 10. What D1 changed
 
@@ -336,3 +341,196 @@ auth path.
 
 "Nginx overwriting forwarding headers" is now **done in configuration**, and open until the
 staging test in D4 proves it on a real host (real DNS, real certificate, real renewal).
+
+## 12. Backups and restore
+
+`deploy/backup/` holds the backup script, the restore script, the verification it runs, the
+freshness check and the timer examples. `.github/workflows/backup-check.yml` proves the whole
+cycle in CI: two throwaway Postgres containers, the repository's own migrations, a fixture that
+exercises the ledger and the attempt triggers, a real encrypted dump, a real restore into the
+other container, and the verification that judges it. Decision **0088** records why it is built
+this way.
+
+### 12.1 What is backed up, and what is not
+
+| Data | Backed up here? | Where the truth lives |
+| --- | --- | --- |
+| Postgres: users, catalog, questions, tests, enrollments, attempts, results, the coin ledger, settings, the audit trail | **Yes** — an encrypted `pg_dump --format=custom` of the whole database, ownership and grants included | Postgres |
+| Uploaded media (question images, logos) | **No** — the bucket | The object store; the database only holds `media_assets.object_key` |
+| Redis | **No**, deliberately | Rebuilt from Postgres at the next worker boot, or short-lived by design |
+
+The **source of truth is Postgres plus the object store**. A database restore brings back every
+fact — the ledger, results, frozen papers — but **not a deleted image**: a question whose
+`media_assets` row says the key exists will render a broken picture if the object is gone. Turn
+on **versioning** and a **lifecycle rule** in the bucket, and treat the bucket as a second
+system of record that needs its own restore drill.
+
+### 12.2 What a Redis loss costs
+
+Checked against the code, not assumed:
+
+| Redis state | Rebuilt from Postgres? | Cost of losing it |
+| --- | --- | --- |
+| Rate-limit windows (`ratelimit:*`) (`apps/api/src/infra/rate-limiter.ts`) | n/a — they are counters with a TTL | Counters reset; a guesser gets a fresh budget until the window refills |
+| Re-authentication "fresh" markers (`reauthFreshKey`, ~minutes) | n/a | A user is asked to verify again sooner |
+| Internal-route failure counters (`internalFailureKey`, 15 min) | n/a | The per-address lockout restarts |
+| BullMQ queue and the four repeatable declarations (`apps/worker/src/queues/schedule.ts`) | **Yes** — the worker re-declares them on boot | Queued *instances* are lost, but each tick is a poll over Postgres (`otp_requests`, `coin_bulk_jobs`, `attempts`, the reconciliation comparison), so the next tick does the work |
+| Coin-bulk failure counts and the daily alert counter (`coins:bulk_failures:*`, `coins:bulk_alerts:*`) | **Partly** — the job status and its per-person rows are in Postgres | A failing job's consecutive-failure count restarts, so it may retry five more times before being marked FAILED |
+
+**No exception found:** nothing that is the *only* copy of a fact lives in Redis. Sessions,
+verification and reset tokens, and OTP codes are all Postgres tables, hashed.
+
+### 12.3 The nightly backup
+
+Install and configure:
+
+```
+apt install age
+install -m 755 deploy/backup/*.sh /opt/abhyas/deploy/backup/
+install -m 644 deploy/backup/*.service deploy/backup/*.timer /etc/systemd/system/
+install -d -m 700 -o abhyas -g abhyas /var/backups/abhyas
+install -d -m 750 /etc/abhyas && install -m 600 /dev/null /etc/abhyas/backup.env
+systemctl daemon-reload && systemctl enable --now abhyas-backup.timer abhyas-backup-freshness.timer
+```
+
+`/etc/abhyas/backup.env` is read by both units. It names paths, never values:
+
+```
+BACKUP_DIR=/var/backups/abhyas
+BACKUP_ENCRYPTION_KEY_FILE=/etc/abhyas/backup-key.txt
+BACKUP_COMPOSE_FILE=/opt/abhyas/docker-compose.prod.yml
+BACKUP_COMPOSE_ENV_FILE=/opt/abhyas/.env.prod
+BACKUP_KEEP_DAILY=7
+BACKUP_KEEP_WEEKLY=4
+BACKUP_KEEP_MONTHLY=6
+# BACKUP_OFFSITE_HOOK=/usr/local/bin/abhyas-backup-offsite
+```
+
+The key is an **age identity file**: `age-keygen -o /etc/abhyas/backup-key.txt && chmod 600
+/etc/abhyas/backup-key.txt`. The script refuses a key that group or others can read, refuses to
+run without `age`, and takes its database credentials from the Postgres container's own
+environment — never from its own command line, so nothing secret reaches the process table.
+
+Each run writes three files, mode 600, into `BACKUP_DIR`:
+
+| File | What it is |
+| --- | --- |
+| `backup-YYYYmmddTHHMMSSZ.dump.age` | The encrypted custom-format dump (schema, data, triggers, functions, constraints, sequences, comments, ownership, grants) |
+| `…sha256` | The SHA-256 of the **encrypted** file, in `sha256sum -c` format |
+| `…manifest.txt` | Timestamp, git commit, Postgres image, tool versions, migrations applied, row count of every table, the role names and their attributes, the owner of `test_questions`, the constraint count, and the dump's digest. No rows, no secrets |
+
+Before the file is given its real name the script decrypts it and runs `pg_restore --list`, so a
+dump that cannot be restored is never called a backup. A failed run leaves no partial file behind
+and exits non-zero.
+
+**Roles are not dumped.** A `pg_dumpall --globals-only` file carries every role's password hash,
+which is a secret of its own. The manifest records the role *names* and attributes; before a
+restore, create them (the runbook's `docker/postgres-init/01-app-role.sql` for the application
+role, and the owner role the compose file's `POSTGRES_USER` names, with the operator's own
+password). `pg_restore` then re-owns everything exactly as the dump says.
+
+**Retention.** 7 daily, 4 weekly and 6 monthly copies by default (`BACKUP_KEEP_DAILY`,
+`BACKUP_KEEP_WEEKLY`, `BACKUP_KEEP_MONTHLY`), computed from the timestamps in the file names.
+Only files matching `backup-*.dump.age` and their two sidecars are ever deleted. `backup.sh
+--prune-only --dry-run` prints exactly what would be removed.
+
+**Off-host copy.** A backup that exists only on the host it protects is not one. Set
+`BACKUP_OFFSITE_HOOK` to an executable; the script calls it with the **encrypted** file's path and
+nothing else, and a failed copy makes the run exit non-zero (the local files are kept). A hook
+that uses rclone is one line:
+
+```
+#!/bin/sh
+exec rclone copy --immutable "$1" remote:abhyas-backups/
+```
+
+### 12.4 The objectives — an OWNER DECISION
+
+A nightly logical dump has an RPO of up to **24 hours**: a restore can lose a day of attempts and
+of coin ledger entries, and that includes money a student paid for a paper. The recovery time
+target for the dump as built is **under an hour** on a host of the documented size.
+
+| Option | RPO | RTO | Operational cost |
+| --- | --- | --- | --- |
+| **A. Nightly dump (shipped)** | up to 24 h | under 1 h | one timer, one encrypted file a night, this runbook |
+| **B. Hourly dumps** | up to 1 h | under 1 h | the same script at a shorter interval: 24 dumps a day, more disk and more off-host traffic; restore stays a full dump |
+| **C. WAL archiving + base backups** | minutes (point-in-time) | 1–3 h (a base restore plus replay) | a WAL archive target off the host, `archive_command`/`pgBackRest` or equivalent, monitoring of archive failures, and a restore procedure that this runbook does not yet document |
+
+**This is the owner's decision, not the tooling's.** The recommendation, given that coin balances
+are money, is to move to **B now** (it is a one-line change to the timer and costs disk) and treat
+**C as the D4-or-later upgrade** once the host has a reliable archive target. Until the owner
+decides, the RPO is 24 hours and that is what §12.9 reports as a known gap.
+
+### 12.5 Key management
+
+- The age identity lives **off the host** in the owner's password manager, plus **one offline
+  copy** on paper or an encrypted USB kept separately.
+- It is never committed, never in `backup.env`, never in a shell history, never in a chat.
+- **Losing it makes every backup unreadable.** There is no recovery without it — that is the
+  point of encrypting off-host copies.
+- Rotate it **yearly**: generate a new identity, add the new recipient to the script's
+  configuration, and **keep the old key** for as long as an old backup might need restoring.
+  Backups are read with the key that wrote them.
+
+### 12.6 Off-host storage and access control
+
+- Store copies with a **different provider or at least a different region** from the VPS.
+- Follow 3-2-1: three copies, on two kinds of media, one of them off-site. The shipped baseline
+  is the host copy plus one off-host copy; a second off-host location is the owner's call.
+- `BACKUP_DIR` is mode 700 and owned by the backup account; the files are 600 and encrypted;
+  only that account and root can read them.
+- The bucket is a separate job: versioning on, a lifecycle rule that keeps deleted and
+  overwritten objects for at least 30 days, and its own restore drill.
+
+### 12.7 The restore drill (quarterly)
+
+Restoring is the only operation that can destroy the data it protects, so the script is built to
+refuse first:
+
+```
+RESTORE_CONTAINER=abhyas-scratch \
+RESTORE_DATABASE=abhyas_restore \
+RESTORE_BACKUP_KEY_FILE=/etc/abhyas/backup-key.txt \
+  /opt/abhyas/deploy/backup/restore.sh /var/backups/abhyas/backup-<stamp>.dump.age
+```
+
+It prints the target's container and database, verifies the checksum **before decrypting**,
+creates a fresh empty database, restores with `pg_restore --exit-on-error --single-transaction`,
+and then runs `verify-restore.sql`, printing PASS/FAIL for: the migration list, every table's row
+count, the ledger (balance = sum of entries, no negative wallet, every ENROLLMENT debit naming a
+real enrollment), attempts and results (one result per ended attempt, none for a running one, no
+answer after the end, every published paper pinned), the named triggers still present and
+enabled, the constraint count, two live probes (a pinned row cannot be updated, a result cannot be
+deleted), a default-generated id, and that `test_questions` is still owned by the migration role.
+
+**It refuses the live database**: if the target container is the live one, or the database name is
+the live one, it stops unless `RESTORE_I_UNDERSTAND_THIS_REPLACES_DATA=yes` is set.
+
+Do this on a **different machine or a scratch container**, at least quarterly, and record it:
+
+| Date | Backup restored | Result | Notes |
+| --- | --- | --- | --- |
+| _(example)_ 2026-01-15 | `backup-20260114T021500Z` | PASS | drill on staging; 12 s to restore, 3 s to verify |
+
+### 12.8 Disaster recovery order
+
+1. Provision the host (Docker, the repository, `.env.prod` from the password manager, the
+   encryption key from the password manager).
+2. Create the database roles (§12.3), then `docker compose -f docker-compose.prod.yml up -d postgres`.
+3. Restore Postgres **first**: `restore.sh` into the compose's own database, with
+   `RESTORE_I_UNDERSTAND_THIS_REPLACES_DATA=yes` because this is the live name by design.
+4. Run the migration status check: `pnpm --filter @abhyas/api exec prisma migrate status` must say
+   the schema is up to date with no pending or failed migration.
+5. Start the rest of the stack; confirm the worker's `repeatable jobs registered` line names all
+   four jobs and that a sweep tick appears within 30 s.
+6. Health checks and one sign-in; then point DNS at the host (lower the TTL before a planned move).
+
+### 12.9 Known gaps
+
+- **RPO is 24 hours** until the owner chooses option B or C in §12.4.
+- **No WAL archiving**, so there is no point-in-time recovery.
+- **No automated off-host copy is configured** — the hook exists and is proved in CI to fail the
+  run when it fails, but no provider is wired here.
+- **The object store is the operator's backup job**, not this repository's.
+- **No real host drill yet**: this unit proves the tooling in CI; D4 proves it on staging with a
+  real host, a real `.env.prod` and a real bucket.

@@ -1,0 +1,17 @@
+[Unit]
+Description=Abhyas backup freshness check (the dead-man's switch)
+Documentation=file:/opt/abhyas/docs/deployment.md
+
+[Service]
+Type=oneshot
+User=abhyas
+WorkingDirectory=/opt/abhyas
+EnvironmentFile=/etc/abhyas/backup.env
+ExecStart=/opt/abhyas/deploy/backup/check-backup-freshness.sh
+# This unit is meant to FAIL when the newest backup is stale. An external monitor or a
+# journald alert on "Failed" is what turns that into a message a person reads.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

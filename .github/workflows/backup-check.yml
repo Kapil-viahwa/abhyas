@@ -1,0 +1,417 @@
+name: Backup check
+
+# Proves the backup and restore tooling in deploy/backup/ without a server: two throwaway
+# Postgres containers on a private network, the repository's own migrations applied to the
+# source, a fixture that exercises the ledger and the attempt triggers, a real encrypted dump,
+# a real restore into the other container, and the verification that judges the result.
+#
+# The Postgres image is pinned by the SAME manifest-list digest docker-compose.prod.yml uses,
+# so the backup is taken from the engine a production host would run.
+#
+# No key is committed: an age identity is generated at run time and deleted with the runner.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - deploy/backup/**
+      - docs/deployment.md
+      - .github/workflows/backup-check.yml
+  schedule:
+    # Weekly, so a break in the tooling or the schema shows up without anyone touching it.
+    - cron: '20 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backup-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PG_IMAGE: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+
+jobs:
+  backup:
+    name: backup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          run_install: false
+
+      - name: Setup node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install age, the encryption tool the runbook names
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends age
+          age --version
+
+      - name: Start the source and scratch Postgres containers
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker network create abhyas-backup-check >/dev/null 2>&1 || true
+          docker rm -f source scratch >/dev/null 2>&1 || true
+          # The passwords here are throwaway values for two containers that exist for this
+          # job only; they are never printed and nothing is restored from or to a real host.
+          docker run -d --name source --network abhyas-backup-check \
+            -p 127.0.0.1:55432:5432 \
+            -e POSTGRES_USER=abhyas -e POSTGRES_PASSWORD=backup-check-source -e POSTGRES_DB=abhyas \
+            "$PG_IMAGE" >/dev/null
+          docker run -d --name scratch --network abhyas-backup-check \
+            -p 127.0.0.1:55433:5432 \
+            -e POSTGRES_USER=abhyas -e POSTGRES_PASSWORD=backup-check-scratch -e POSTGRES_DB=abhyas \
+            "$PG_IMAGE" >/dev/null
+          for container in source scratch; do
+            up=0
+            for i in $(seq 1 60); do
+              if docker exec "$container" pg_isready -U abhyas -d abhyas >/dev/null 2>&1; then up=1; break; fi
+              sleep 1
+            done
+            if [ "$up" != "1" ]; then echo "::error::$container never became ready"; docker logs "$container"; exit 1; fi
+            echo "$container is ready"
+          done
+
+      - name: Create the application database role, as the runbook says
+        shell: bash
+        env:
+          PGPASSWORD: backup-check-source
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -p 55432 -U abhyas -d abhyas -v ON_ERROR_STOP=1 -f docker/postgres-init/01-app-role.sql
+          echo "abhyas_app created on source"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          pnpm install --frozen-lockfile 2>&1 | tee "$RUNNER_TEMP/install.log"
+
+      - name: Apply all repository migrations to the source
+        shell: bash
+        env:
+          MIGRATION_DATABASE_URL: postgresql://abhyas:backup-check-source@127.0.0.1:55432/abhyas
+        run: |
+          set -o pipefail
+          DATABASE_URL="$MIGRATION_DATABASE_URL" pnpm db:migrate 2>&1 | tee "$RUNNER_TEMP/migrate.log"
+          applied="$(PGPASSWORD=backup-check-source psql -h 127.0.0.1 -p 55432 -U abhyas -d abhyas -Atc \
+            'SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')"
+          expected="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+          echo "applied=$applied expected=$expected"
+          [ "$applied" = "$expected" ] || { echo "::error::only $applied of $expected migrations applied"; exit 1; }
+
+      - name: Load the fixture
+        shell: bash
+        env:
+          PGPASSWORD: backup-check-source
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -p 55432 -U abhyas -d abhyas -v ON_ERROR_STOP=1 -f deploy/backup/fixtures/seed.sql
+          psql -h 127.0.0.1 -p 55432 -U abhyas -d abhyas -Atc 'SELECT count(*) FROM coin_transactions'
+          echo "fixture loaded"
+
+      - name: Take a backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BACKUP_DIR="$RUNNER_TEMP/backups"
+          export BACKUP_ENCRYPTION_KEY_FILE="$RUNNER_TEMP/backup-key.txt"
+          export BACKUP_CONTAINER=source
+          mkdir -p "$BACKUP_DIR"
+          # A throwaway identity for this job only: written to the runner's temp directory,
+          # never printed, and deleted with the runner.
+          age-keygen -o "$BACKUP_ENCRYPTION_KEY_FILE" 2>/dev/null
+          chmod 600 "$BACKUP_ENCRYPTION_KEY_FILE"
+          bash deploy/backup/backup.sh
+          ls -l "$BACKUP_DIR"
+
+      - name: Check the artefacts
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          failures=0
+          pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
+          fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); }
+          BACKUP_DIR="$RUNNER_TEMP/backups"
+
+          dump="$(find "$BACKUP_DIR" -maxdepth 1 -name 'backup-*.dump.age' -printf '%p\n' | head -n1)"
+          [ -n "$dump" ] && pass "a .dump.age was written" || fail "a .dump.age was written" "none found"
+          stem="${dump%.dump.age}"
+
+          [ -f "${stem}.sha256" ] && pass "a .sha256 was written" || fail "a .sha256 was written" "missing"
+          [ -f "${stem}.manifest.txt" ] && pass "a manifest was written" || fail "a manifest was written" "missing"
+          [ "$(stat -c '%a' "$dump")" = "600" ] && pass "the dump is mode 600" || fail "the dump is mode 600" "$(stat -c '%a' "$dump")"
+
+          if (cd "$BACKUP_DIR" && sha256sum --check --quiet --status "$(basename "${stem}.sha256")"); then
+            pass "the checksum matches the encrypted dump"
+          else
+            fail "the checksum matches the encrypted dump" "mismatch"
+          fi
+
+          if age --decrypt --identity "$RUNNER_TEMP/backup-key.txt" "$dump" 2>/dev/null | head -c 5 | grep -q 'PGDMP'; then
+            pass "the encrypted dump decrypts to a pg_dump archive"
+          else
+            fail "the encrypted dump decrypts to a pg_dump archive" "no PGDMP magic"
+          fi
+
+          migrations_in_manifest="$(grep -c '^migration: ' "${stem}.manifest.txt")"
+          expected_migrations="$(find apps/api/prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+          [ "$migrations_in_manifest" = "$expected_migrations" ] \
+            && pass "the manifest lists $expected_migrations migrations" \
+            || fail "the manifest lists every migration" "has $migrations_in_manifest of $expected_migrations"
+
+          tables_in_manifest="$(grep -c '^table: ' "${stem}.manifest.txt")"
+          [ "$tables_in_manifest" -ge 30 ] && pass "the manifest lists $tables_in_manifest tables" \
+            || fail "the manifest lists the tables" "only $tables_in_manifest"
+
+          grep -q '^owner_role: abhyas$' "${stem}.manifest.txt" \
+            && pass "the manifest names the owner role" \
+            || fail "the manifest names the owner role" "$(grep '^owner_role: ' "${stem}.manifest.txt" || echo missing)"
+
+          grep -qE '^constraint_count: [0-9]+$' "${stem}.manifest.txt" \
+            && pass "the manifest records the constraint count" \
+            || fail "the manifest records the constraint count" "missing"
+
+          digest_in_manifest="$(grep '^dump_sha256: ' "${stem}.manifest.txt" | sed 's/^dump_sha256: //')"
+          [ "$digest_in_manifest" = "$(sha256sum "$dump" | awk '{print $1}')" ] \
+            && pass "the manifest's digest is the dump's digest" \
+            || fail "the manifest's digest is the dump's digest" "different"
+
+          # The manifest must never carry a secret: no password, no key, no passphrase.
+          if grep -qiE 'password|passphrase|AGE-SECRET-KEY' "${stem}.manifest.txt"; then
+            fail "the manifest holds no secret" "it mentions one"
+          else
+            pass "the manifest holds no secret"
+          fi
+
+          echo "ARTEFACT $stem" > "$RUNNER_TEMP/backup-stem.txt"
+          echo "failures=$failures" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failures"
+
+      - name: Freshness check, both ways
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          failures=0
+          pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
+          fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); }
+
+          source_dir="$(awk '{print $2}' "$RUNNER_TEMP/backup-stem.txt")"
+          backups="$RUNNER_TEMP/backups"
+
+          if BACKUP_DIR="$backups" bash deploy/backup/check-backup-freshness.sh >"$RUNNER_TEMP/fresh.log" 2>&1; then
+            pass "a fresh backup passes the freshness check"
+          else
+            fail "a fresh backup passes the freshness check" "$(tail -n2 "$RUNNER_TEMP/fresh.log")"
+          fi
+
+          # An aged copy: the same three files, renamed two days back and re-checksummed, so the
+          # only reason to fail is the age.
+          aged="$RUNNER_TEMP/aged"
+          mkdir -p "$aged"
+          aged_base="backup-20200101T000000Z"
+          cp "${source_dir}.dump.age" "$aged/${aged_base}.dump.age"
+          cp "${source_dir}.manifest.txt" "$aged/${aged_base}.manifest.txt"
+          (cd "$aged" && sha256sum "${aged_base}.dump.age" >"${aged_base}.sha256")
+
+          if BACKUP_DIR="$aged" BACKUP_MAX_AGE_HOURS=26 bash deploy/backup/check-backup-freshness.sh >"$RUNNER_TEMP/stale.log" 2>&1; then
+            fail "a stale backup fails the freshness check" "it passed"
+          else
+            pass "a stale backup fails the freshness check"
+          fi
+
+          if grep -q "$aged_base" "$RUNNER_TEMP/stale.log"; then
+            pass "the stale report names the file"
+          else
+            fail "the stale report names the file" "$(cat "$RUNNER_TEMP/stale.log")"
+          fi
+
+          echo "failures=$failures" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failures"
+
+      - name: The restore refuses the live database
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          failures=0
+          pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
+          fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); }
+
+          dump="$(awk '{print $2}' "$RUNNER_TEMP/backup-stem.txt").dump.age"
+
+          RESTORE_CONTAINER=source \
+          RESTORE_DATABASE=abhyas \
+          RESTORE_LIVE_CONTAINER=source \
+          RESTORE_BACKUP_KEY_FILE="$RUNNER_TEMP/backup-key.txt" \
+            bash deploy/backup/restore.sh "$dump" >"$RUNNER_TEMP/refuse.log" 2>&1
+          rc=$?
+
+          [ "$rc" != "0" ] && pass "restoring into the live database is refused" \
+            || fail "restoring into the live database is refused" "it ran (exit 0)"
+
+          if grep -qi 'live' "$RUNNER_TEMP/refuse.log"; then
+            pass "the refusal says why"
+          else
+            fail "the refusal says why" "$(tail -n3 "$RUNNER_TEMP/refuse.log")"
+          fi
+
+          if grep -qi 'target database' "$RUNNER_TEMP/refuse.log"; then
+            pass "the target is printed before anything happens"
+          else
+            fail "the target is printed before anything happens" "no target line"
+          fi
+
+          echo "failures=$failures" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failures"
+
+      - name: Restore into the scratch container and verify
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          failures=0
+          pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
+          fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); }
+
+          dump="$(awk '{print $2}' "$RUNNER_TEMP/backup-stem.txt").dump.age"
+
+          RESTORE_CONTAINER=scratch \
+          RESTORE_DATABASE=abhyas_restore \
+          RESTORE_LIVE_CONTAINER=source \
+          RESTORE_BACKUP_KEY_FILE="$RUNNER_TEMP/backup-key.txt" \
+            bash deploy/backup/restore.sh "$dump" >"$RUNNER_TEMP/restore.log" 2>&1
+          rc=$?
+
+          grep -E '^(PASS|FAIL|SKIP) ' "$RUNNER_TEMP/restore.log" | tee "$RUNNER_TEMP/verify.log"
+          {
+            echo '### Restore verification'
+            echo '```'
+            grep -E '^(PASS|FAIL|SKIP) ' "$RUNNER_TEMP/restore.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$rc" = "0" ] && pass "the restore and every verification item passed" \
+            || fail "the restore and every verification item passed" "restore.sh exit $rc"
+
+          if grep -q '^FAIL ' "$RUNNER_TEMP/restore.log"; then
+            fail "no verification item failed" "$(grep -c '^FAIL ' "$RUNNER_TEMP/restore.log") failed"
+          else
+            pass "no verification item failed"
+          fi
+
+          echo "failures=$failures" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failures"
+
+      - name: Prisma status assertion
+        shell: bash
+        env:
+          DATABASE_URL: postgresql://abhyas:backup-check-scratch@127.0.0.1:55433/abhyas_restore
+        run: |
+          set +e
+          set -uo pipefail
+          failures=0
+          pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
+          fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); }
+
+          pnpm --filter @abhyas/api exec prisma migrate status --schema prisma/schema.prisma \
+            >"$RUNNER_TEMP/status.log" 2>&1 < /dev/null
+          rc=$?
+          sed -n '1,40p' "$RUNNER_TEMP/status.log"
+
+          [ "$rc" = "0" ] && pass "prisma migrate status exits 0 against the restored database" \
+            || fail "prisma migrate status exits 0 against the restored database" "exit $rc"
+
+          if grep -qi 'up to date' "$RUNNER_TEMP/status.log"; then
+            pass "the restored database reports up to date"
+          else
+            fail "the restored database reports up to date" "$(tail -n3 "$RUNNER_TEMP/status.log")"
+          fi
+
+          if grep -qiE 'not yet been applied|failed' "$RUNNER_TEMP/status.log"; then
+            fail "the restored database has no pending or failed migration" "$(grep -iE 'not yet been applied|failed' "$RUNNER_TEMP/status.log" | head -n2)"
+          else
+            pass "the restored database has no pending or failed migration"
+          fi
+
+          echo "failures=$failures" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failures"
+
+      - name: A corrupted dump is refused at the checksum
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          failures=0
+          pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
+          fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures + 1)); }
+
+          source_dir="$(awk '{print $2}' "$RUNNER_TEMP/backup-stem.txt")"
+          corrupt="$RUNNER_TEMP/corrupt"
+          mkdir -p "$corrupt"
+          base="backup-20200202T000000Z"
+          cp "${source_dir}.dump.age" "$corrupt/${base}.dump.age"
+          cp "${source_dir}.manifest.txt" "$corrupt/${base}.manifest.txt"
+          (cd "$corrupt" && sha256sum "${base}.dump.age" >"${base}.sha256")
+          # Flip one byte in the middle of the ciphertext.
+          printf 'X' | dd of="$corrupt/${base}.dump.age" bs=1 seek=64 conv=notrunc status=none
+
+          RESTORE_CONTAINER=scratch \
+          RESTORE_DATABASE=abhyas_restore \
+          RESTORE_BACKUP_KEY_FILE="$RUNNER_TEMP/backup-key.txt" \
+            bash deploy/backup/restore.sh "$corrupt/${base}.dump.age" >"$RUNNER_TEMP/corrupt.log" 2>&1
+          rc=$?
+
+          [ "$rc" != "0" ] && pass "a corrupted dump is refused" || fail "a corrupted dump is refused" "restore.sh exited 0"
+
+          if grep -qi 'checksum' "$RUNNER_TEMP/corrupt.log"; then
+            pass "the refusal happens at the checksum"
+          else
+            fail "the refusal happens at the checksum" "$(tail -n3 "$RUNNER_TEMP/corrupt.log")"
+          fi
+
+          if grep -qi 'refusing to touch the target' "$RUNNER_TEMP/corrupt.log"; then
+            pass "the target was not touched"
+          else
+            fail "the target was not touched" "$(tail -n3 "$RUNNER_TEMP/corrupt.log")"
+          fi
+
+          echo "failures=$failures" >> "$GITHUB_STEP_SUMMARY"
+          exit "$failures"
+
+      - name: Diagnose a failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          set +o pipefail
+          echo "== docker ps =="; docker ps -a
+          echo "== source logs =="; docker logs source 2>&1 | tail -n 30
+          echo "== scratch logs =="; docker logs scratch 2>&1 | tail -n 30
+          echo "== last log files =="
+          for f in migrate install fresh stale refuse restore status corrupt; do
+            if [ -f "$RUNNER_TEMP/$f.log" ]; then echo "--- $f.log ---"; tail -n 40 "$RUNNER_TEMP/$f.log"; fi
+          done
+
+      - name: Tear down
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f source scratch >/dev/null 2>&1 || true
+          docker network rm abhyas-backup-check >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/backup-key.txt" 2>/dev/null || true

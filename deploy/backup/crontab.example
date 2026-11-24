@@ -1,0 +1,12 @@
+# The backup in cron, for a host that does not run systemd (or an operator who prefers cron).
+#
+# Install with `crontab -u abhyas -e`. The environment comes from the same file the systemd
+# units use, so there is one place to name the key.
+#
+# Nightly backup at 02:15, freshness check at 05:15. The freshness job exits non-zero when
+# the newest backup is stale or its checksum does not match; `MAILTO` is the dead-man's
+# switch, so it must be an address a person reads.
+MAILTO=ops@example.test
+
+15 2 * * * . /etc/abhyas/backup.env; /opt/abhyas/deploy/backup/backup.sh
+15 5 * * * . /etc/abhyas/backup.env; /opt/abhyas/deploy/backup/check-backup-freshness.sh

@@ -2886,3 +2886,64 @@ include and no `proxy_pass` is valid to `nginx -t` and answers from Nginx's own 
 missed line is a 404 that looks like an application routing bug. `proxy-check.yml` therefore counts
 the two lines in the rendered configuration and fails before it starts a container when they differ,
 and the check that a request to `/` reaches the upstream is what proves the proxying end to end.
+
+## 0088 — Backups are an encrypted dump plus a restore that has to prove itself
+
+**Status:** implemented, owner decision open on the RPO.
+
+**What is a system of record.** Postgres and the object store. Redis is not: checked against the
+code rather than assumed, every key in it is either a TTL'd counter (rate-limit windows, the
+re-authentication "fresh" marker, internal-route failure counts, coin-bulk failure counts and the
+daily alert counter) or a BullMQ declaration whose work is a poll over Postgres
+(`otp_requests`, `coin_bulk_jobs`, `attempts`, the reconciliation comparison). The worker
+re-declares its four repeatable jobs on boot. So losing the volume costs a little time and some
+observability, never a fact. Sessions, verification tokens and OTP codes are Postgres tables.
+
+**The dump.** `pg_dump --format=custom` of the whole database with ownership and privileges, run
+inside the Postgres container so the password comes from that container's environment and never
+from a command line. `--no-owner` is refused on purpose: `20270301000000_test_question_pinning`
+disables and re-creates a trigger on `test_questions`, which needs the table's owner, and the coin
+triggers compare `current_user` with `relowner`. A dump without ownership restores into a database
+whose protections cannot be rebuilt.
+
+**Roles are not dumped.** A `pg_dumpall --globals-only` file carries every role's password hash —
+a secret of its own, and a second thing to protect. The manifest records the role names and their
+attributes; the runbook creates the two roles before a restore and `pg_restore` re-owns everything
+from the dump. Two roles, created once, is a smaller secret to keep than a globals file for ever.
+
+**Encryption: `age`.** Authenticated encryption (ChaCha20-Poly1305, so a modified ciphertext is
+refused rather than silently mangled), an identity file rather than a passphrase, nothing secret
+in `argv`, and `age -d -i` to read it back. It is in Debian 12 and Ubuntu 24.04 (`apt install
+age`), which is the "installable from the distro" condition the runbook set. `openssl enc` was
+rejected because the usual incantation is unauthenticated; `gpg` because a symmetric passphrase
+file is one more way to leak a passphrase into a process table.
+
+**What the script refuses.** A key group or others can read. A missing `age`. A second concurrent
+run (flock). A dump that does not pass `pg_restore --list` before it is renamed into place. A
+failed off-host hook — a copy that did not happen is a failed backup, not a warning.
+
+**The restore is a proof, not a command.** It prints its target, verifies the checksum before it
+decrypts anything, refuses the live database without
+`RESTORE_I_UNDERSTAND_THIS_REPLACES_DATA=yes`, restores into a fresh empty database in one
+transaction, and then judges the result: the migration list, every table's row count, the ledger
+(balance = sum of entries, no negative wallet, every ENROLLMENT debit naming a real enrollment),
+attempts and results (one result per ended attempt, none while running, no answer written after
+the end, every published paper pinned), the named triggers still present and enabled, the
+constraint count, two live probes (a pinned row cannot be updated, a result cannot be deleted), a
+default-generated id, and `test_questions` still owned by the migration role. A trigger lost in a
+restore is a database that looks right and is not, which is why the probes exist rather than a
+list of names alone.
+
+**CI proves it without a server.** `backup-check.yml` starts two Postgres containers pinned by the
+same digest the production compose uses, applies the repository's own migrations, loads a fixture
+that exercises the ledger and the attempt triggers, dumps, checksums, manifests, restores into the
+second container, verifies, asks Prisma whether the restored database is up to date, and then
+proves the negative cases: a stale backup fails the freshness check, the live database is refused,
+and one flipped byte is refused at the checksum. No key is committed; the identity is generated
+and deleted inside the job.
+
+**The owner decision.** A nightly dump has an RPO of up to 24 hours, which for a platform holding
+paid coin balances means possibly losing a day of transactions. `docs/deployment.md` §12.4 puts
+three options in front of the owner — stay nightly, go hourly (cheap), or add WAL archiving and
+point-in-time recovery (a real project) — with their costs. The tooling does not decide it; the
+default stays nightly and the gap is written down.

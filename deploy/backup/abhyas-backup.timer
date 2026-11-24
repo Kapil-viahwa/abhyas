@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Abhyas database backup nightly
+
+[Timer]
+# Nightly, off the hour, so it does not compete with the certificate renewals or the
+# reconciliation tick. Persistent=true runs a missed timer after a reboot.
+OnCalendar=*-*-* 02:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
