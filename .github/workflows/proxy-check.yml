@@ -58,7 +58,7 @@ jobs:
             '  server {' \
             '    listen 127.0.0.1:3000;' \
             '    location / {' \
-            '      add_header Content-Type text/plain always;' \
+            '      default_type text/plain;' \
             '      return 200 "xri=$http_x_real_ip|xff=$http_x_forwarded_for|xfp=$http_x_forwarded_proto|host=$http_host|fwd=$http_forwarded|xfh=$http_x_forwarded_host";' \
             '    }' \
             '  }' \
@@ -76,9 +76,20 @@ jobs:
               -e 's|/var/www/certbot|/webroot|g' \
               -e 's|resolver 127.0.0.53|resolver 1.1.1.1|' \
               deploy/nginx/abhyas.conf > "$RUNNER_TEMP/edge/conf.d/abhyas.conf"
-          cp deploy/nginx/abhyas-proxy.conf "$RUNNER_TEMP/edge/conf.d/abhyas-proxy.conf"
-          sed -i 's|/etc/nginx/abhyas-proxy.conf|/etc/nginx/conf.d/abhyas-proxy.conf|g' "$RUNNER_TEMP/edge/conf.d/abhyas.conf"
+          # abhyas-proxy.conf is mounted at its real path, so the include needs no rewriting:
+          # this job loads the file exactly where /etc/nginx/ has it on the host.
           test -f "$RUNNER_TEMP/edge/conf.d/abhyas.conf"
+
+          # Structural invariant, checked before anything starts: a location that includes the
+          # forwarding rules must also proxy somewhere. One without `proxy_pass` answers from
+          # Nginx's own document root, which no check below can call a routing success.
+          proxy_pass_lines=$(grep -c 'proxy_pass http://abhyas_web;' "$RUNNER_TEMP/edge/conf.d/abhyas.conf" || true)
+          include_lines=$(grep -c 'include /etc/nginx/abhyas-proxy.conf;' "$RUNNER_TEMP/edge/conf.d/abhyas.conf" || true)
+          echo "proxy_pass lines: $proxy_pass_lines; include lines: $include_lines"
+          if [ "${proxy_pass_lines:-0}" -lt 1 ] || [ "$proxy_pass_lines" != "$include_lines" ]; then
+            echo "::error::every location that includes abhyas-proxy.conf must proxy_pass http://abhyas_web (proxy_pass=$proxy_pass_lines include=$include_lines)"
+            exit 1
+          fi
 
       - name: Start the stub and the edge on the host network
         shell: bash
@@ -88,39 +99,44 @@ jobs:
           docker run -d --name stub --network host \
             -v "$RUNNER_TEMP/stub:/stub:ro" nginx:1.27-alpine nginx -c /stub/nginx.conf -g 'daemon off;' >/dev/null
           docker exec stub sh -c 'test -f /stub/nginx.conf && echo stub-config-present'
-          # The image's own conf.d is replaced by the directory mount, so default.conf cannot answer.
+          # The image's own conf.d is replaced by the directory mount, so default.conf cannot
+          # answer; abhyas-proxy.conf is mounted where abhyas.conf includes it.
           docker run -d --name edge --network host \
             -v "$RUNNER_TEMP/edge/conf.d:/etc/nginx/conf.d:ro" \
+            -v "$GITHUB_WORKSPACE/deploy/nginx/abhyas-proxy.conf:/etc/nginx/abhyas-proxy.conf:ro" \
             -v "$RUNNER_TEMP/certs:/certs:ro" \
             -v "$RUNNER_TEMP/webroot:/webroot:ro" nginx:1.27-alpine >/dev/null
+          docker exec edge sh -c 'test -f /etc/nginx/abhyas-proxy.conf && echo proxy-include-present'
           docker exec edge nginx -t
-          # Bounded readiness: the stub first, then the edge. No fixed sleeps.
+          # Bounded readiness: the stub first, then the edge. No fixed sleeps, no unbounded curl.
           stub_up=0
           for i in $(seq 1 30); do
-            if curl -s -o /dev/null http://127.0.0.1:3000/; then stub_up=1; break; fi
+            if curl -s --max-time 3 -o /dev/null http://127.0.0.1:3000/; then stub_up=1; break; fi
             sleep 1
           done
           if [ "$stub_up" != "1" ]; then echo "::error::the stub upstream never answered on 127.0.0.1:3000"; docker logs stub; exit 1; fi
           edge_up=0
           for i in $(seq 1 30); do
-            if curl -sk -o /dev/null --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/; then edge_up=1; break; fi
+            if curl -sk --max-time 3 -o /dev/null --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/; then edge_up=1; break; fi
             sleep 1
           done
           if [ "$edge_up" != "1" ]; then echo "::error::the edge never answered on 443"; docker logs edge; exit 1; fi
 
       - name: Run the checks
+        timeout-minutes: 7
         shell: bash
         run: |
           set -uo pipefail
           failures=0
           pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
           fail() { echo "FAIL $1: $2"; echo "FAIL $1: $2" >> "$GITHUB_STEP_SUMMARY"; failures=$((failures+1)); }
-          C=(curl -sk --resolve abhyas.test:443:127.0.0.1)
+          # Every request is bounded: no single check may hold the job open.
+          C=(curl -sk --resolve abhyas.test:443:127.0.0.1 --max-time 5 --connect-timeout 3)
 
           # (1) The ACME path on 80 and the redirect.
-          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: abhyas.test' http://127.0.0.1/.well-known/acme-challenge/token)
+          code=$(curl -s -o /dev/null --max-time 5 -w '%{http_code}' -H 'Host: abhyas.test' http://127.0.0.1/.well-known/acme-challenge/token)
           [ "$code" = 200 ] && pass "1a ACME challenge served on 80" || fail "1a ACME challenge served on 80" "got $code"
-          loc=$(curl -s -o /dev/null -D - -H 'Host: abhyas.test' http://127.0.0.1/x | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')
+          loc=$(curl -s -o /dev/null --max-time 5 -D - -H 'Host: abhyas.test' http://127.0.0.1/x | tr -d '\r' | awk 'tolower($1)=="location:"{print $2; exit}')
           case "$loc" in https://*) pass "1b HTTP redirects to https";; *) fail "1b HTTP redirects to https" "location=${loc:-none}";; esac
 
           # (2) The spoofed forwarding headers arrive overwritten (this is the security check).
@@ -139,7 +155,7 @@ jobs:
           [ "$xfp" = https ] && pass "3 X-Forwarded-Proto is https" || fail "3 X-Forwarded-Proto is https" "xfp='$xfp'"
 
           # (4) An unknown Host is closed; the configured host answers.
-          curl -sk -o /dev/null -H 'Host: evil.example' --resolve evil.example:443:127.0.0.1 https://evil.example/ 2>/dev/null
+          curl -sk -o /dev/null --max-time 5 --connect-timeout 3 -H 'Host: evil.example' --resolve evil.example:443:127.0.0.1 https://evil.example/ 2>/dev/null
           rc=$?
           { [ "$rc" = 52 ] || [ "$rc" = 56 ]; } && pass "4a unknown Host gets no response body" || fail "4a unknown Host gets no response body" "curl exit $rc"
           code=$("${C[@]}" -o /dev/null -w '%{http_code}' https://abhyas.test/)
@@ -152,9 +168,9 @@ jobs:
           case "$srv" in *nginx/[0-9]*) fail "5b no Server version token" "$srv";; *) pass "5b no Server version token";; esac
 
           # (6) The TLS floor.
-          curl -sk --tls-max 1.1 -o /dev/null --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/ 2>/dev/null && fail "6a TLS 1.1 refused" "accepted" || pass "6a TLS 1.1 refused"
-          curl -sk --tlsv1.2 --tls-max 1.2 -o /dev/null --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/ && pass "6b TLS 1.2 accepted" || fail "6b TLS 1.2 accepted" "refused"
-          curl -sk --tlsv1.3 -o /dev/null --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/ && pass "6c TLS 1.3 accepted" || fail "6c TLS 1.3 accepted" "refused"
+          curl -sk --tls-max 1.1 -o /dev/null --max-time 5 --connect-timeout 3 --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/ 2>/dev/null && fail "6a TLS 1.1 refused" "accepted" || pass "6a TLS 1.1 refused"
+          curl -sk --tlsv1.2 --tls-max 1.2 -o /dev/null --max-time 5 --connect-timeout 3 --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/ && pass "6b TLS 1.2 accepted" || fail "6b TLS 1.2 accepted" "refused"
+          curl -sk --tlsv1.3 -o /dev/null --max-time 5 --connect-timeout 3 --resolve abhyas.test:443:127.0.0.1 https://abhyas.test/ && pass "6c TLS 1.3 accepted" || fail "6c TLS 1.3 accepted" "refused"
 
           # (7) The internal and docs paths.
           for p in /internal/x /api/docs; do
@@ -181,10 +197,13 @@ jobs:
           echo "== docker ps =="; docker ps -a
           echo "== stub config =="; docker exec stub cat /stub/nginx.conf 2>&1 | head -n 40
           echo "== stub logs =="; docker logs stub 2>&1 | tail -n 50
+          echo "== proxy_pass in the effective configuration =="; docker exec edge nginx -T 2>&1 | grep -n 'proxy_pass' || echo 'NO proxy_pass ANYWHERE'
+          echo "== is the include expanded =="; docker exec edge nginx -T 2>&1 | grep -n 'abhyas-proxy' | head -n 10
+          echo "== rendered abhyas.conf: locations, proxy_pass, includes =="; docker exec edge sh -c 'grep -nE "location|proxy_pass|include" /etc/nginx/conf.d/abhyas.conf' 2>&1 | head -n 60
           echo "== edge effective config (443 server) =="; docker exec edge nginx -T 2>&1 | sed -n '/listen 443 ssl;/,/^}/p' | head -n 80
           echo "== edge logs =="; docker logs edge 2>&1 | tail -n 50
           echo "== edge error log =="; docker exec edge sh -c 'tail -n 50 /var/log/nginx/error.log' 2>&1
-          echo "== curl to the stub from the runner =="; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/ 2>&1
+          echo "== curl to the stub from the runner =="; curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/ 2>&1
 
       - name: Tear down
         if: always()
