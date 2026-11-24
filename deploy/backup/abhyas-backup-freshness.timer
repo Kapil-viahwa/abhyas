@@ -1,0 +1,10 @@
+[Unit]
+Description=Check that the Abhyas backup is fresh
+
+[Timer]
+# Three hours after the backup, so a slow backup is not reported as a missing one.
+OnCalendar=*-*-* 05:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,31 @@
+[Unit]
+Description=Abhyas nightly database backup
+Documentation=file:/opt/abhyas/docs/deployment.md
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# A dedicated account that can read the encryption key and write the backup directory,
+# and is in the docker group so `docker compose exec` works. Never root.
+User=abhyas
+WorkingDirectory=/opt/abhyas
+# Everything the script reads comes from here; the key is named by PATH, never by value.
+EnvironmentFile=/etc/abhyas/backup.env
+ExecStart=/opt/abhyas/deploy/backup/backup.sh
+# A backup that hangs is a backup that never runs again; one hour is far more than a dump
+# of this database should take.
+RuntimeMaxSec=3600
+
+# The script needs the docker socket, the key file and the backup directory, and nothing else.
+ProtectSystem=strict
+ReadWritePaths=/var/backups/abhyas
+PrivateTmp=true
+NoNewPrivileges=true
+# If the backup cannot run at all, say so on the console: a silent failure here is the one
+# that matters. Wire OnFailure= to a real alert when D4 adds monitoring.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
