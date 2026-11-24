@@ -126,6 +126,10 @@ jobs:
         timeout-minutes: 7
         shell: bash
         run: |
+          # The runner starts this script with `bash -e`. Every check must run and the step
+          # must report the total, so -e is turned off here and `fail` counts instead; a bare
+          # curl that exits non-zero is a check result, not the end of the step.
+          set +e
           set -uo pipefail
           failures=0
           pass() { echo "PASS $1"; echo "PASS $1" >> "$GITHUB_STEP_SUMMARY"; }
@@ -155,7 +159,10 @@ jobs:
           [ "$xfp" = https ] && pass "3 X-Forwarded-Proto is https" || fail "3 X-Forwarded-Proto is https" "xfp='$xfp'"
 
           # (4) An unknown Host is closed; the configured host answers.
-          curl -sk -o /dev/null --max-time 5 --connect-timeout 3 -H 'Host: evil.example' --resolve evil.example:443:127.0.0.1 https://evil.example/ 2>/dev/null
+          # HTTP/1.1 is pinned here on purpose: the default server offers h2 through ALPN, and
+          # a closed h2 stream reports 92, so the check reads the empty reply (52) only when
+          # the protocol is the one that reports it. Either way the server sends no response.
+          curl -sk -o /dev/null --http1.1 --max-time 5 --connect-timeout 3 -H 'Host: evil.example' --resolve evil.example:443:127.0.0.1 https://evil.example/ 2>/dev/null
           rc=$?
           { [ "$rc" = 52 ] || [ "$rc" = 56 ]; } && pass "4a unknown Host gets no response body" || fail "4a unknown Host gets no response body" "curl exit $rc"
           code=$("${C[@]}" -o /dev/null -w '%{http_code}' https://abhyas.test/)
@@ -194,6 +201,10 @@ jobs:
         if: failure()
         shell: bash
         run: |
+          # A diagnostic must print everything it can, so it never stops at a failing command
+          # or at a `head` that closed the pipe early.
+          set +e
+          set +o pipefail
           echo "== docker ps =="; docker ps -a
           echo "== stub config =="; docker exec stub cat /stub/nginx.conf 2>&1 | head -n 40
           echo "== stub logs =="; docker logs stub 2>&1 | tail -n 50
