@@ -283,7 +283,9 @@ mkdir -p /var/www/certbot
 ```
 
 Install `deploy/nginx/abhyas-proxy.conf` as `/etc/nginx/abhyas-proxy.conf` and `abhyas.conf` as
-`/etc/nginx/conf.d/abhyas.conf`, replacing `__DOMAIN__` with the real name everywhere. Then:
+`/etc/nginx/conf.d/abhyas.conf`, replacing `__DOMAIN__` with the real name everywhere. Every
+proxying location in `abhyas.conf` carries its own `proxy_pass http://abhyas_web;`;
+`abhyas-proxy.conf` is included for the forwarding headers and holds no `proxy_pass`. Then:
 
 ```
 certbot certonly --webroot -w /var/www/certbot -d <host> --deploy-hook "systemctl reload nginx"
@@ -324,7 +326,8 @@ docker compose logs web | tail                                 # the app saw the
 ```
 
 `.github/workflows/proxy-check.yml` proves the configuration with a stub upstream and a throwaway
-certificate: the ACME path, the 301, the overwritten `X-Real-IP`/`X-Forwarded-For`, the blanked
+certificate: the ACME path, the 301, that every proxying location reaches the upstream (a request to
+`/` answers from the stub, not from Nginx's own document root), the overwritten `X-Real-IP`/`X-Forwarded-For`, the blanked
 `Forwarded`, `X-Forwarded-Proto`, HSTS, no `Server` version, the 404s for `/internal/` and
 `/api/docs`, unknown Host closed with 444, the 413 above 2 MB, the TLS floor and the 429 on the
 auth path.

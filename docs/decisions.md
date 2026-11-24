@@ -2878,3 +2878,11 @@ paths, 120 a minute with a burst of 60 elsewhere — deliberately generous, beca
 computer lab behind one NAT address shares one bucket; the application's own per-account and
 per-address limits remain the real control. Edge proxy timeouts are 35 s against the API's 30 s
 request timeout (decision 0059) so a submit is never cut at the edge before the API answers.
+
+**The proxying itself is a checked invariant.** Every proxying location in `deploy/nginx/abhyas.conf`
+carries its own `proxy_pass http://abhyas_web;` and its own `include /etc/nginx/abhyas-proxy.conf;`,
+and `abhyas-proxy.conf` holds the headers only — no `proxy_pass`. A location with the `limit_req`, the
+include and no `proxy_pass` is valid to `nginx -t` and answers from Nginx's own document root, so a
+missed line is a 404 that looks like an application routing bug. `proxy-check.yml` therefore counts
+the two lines in the rendered configuration and fails before it starts a container when they differ,
+and the check that a request to `/` reaches the upstream is what proves the proxying end to end.
